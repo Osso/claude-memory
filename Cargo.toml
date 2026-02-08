@@ -1,0 +1,31 @@
+[package]
+name = "claude-memory"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "claude-memory"
+path = "src/main.rs"
+
+[[bin]]
+name = "claude-memory-mcp"
+path = "src/bin/mcp.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+hex = "0.4"
+qdrant-client = "1.13"
+reqwest = { version = "0.12", features = ["json"] }
+rmcp = { version = "0.9", features = ["server", "transport-io"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2"
+zstd = "0.13"
