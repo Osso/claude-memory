@@ -37,7 +37,7 @@ fn log(msg: &str) {
 const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
 const COLLECTION_ANSWERS: &str = "claude-answers";
-const VECTOR_SIZE: u64 = 4096;
+const VECTOR_SIZE: u64 = 1024;
 
 /// Lazy-initialized Qdrant client.
 static QDRANT: OnceCell<Qdrant> = OnceCell::const_new();

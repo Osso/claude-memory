@@ -5,7 +5,7 @@ Semantic memory search for Claude Code sessions and knowledge base.
 ## Architecture
 
 - **Vector store**: Qdrant (localhost:6334)
-- **Embeddings**: Ollama `qwen3-embedding:8b` (localhost:11434, 4096 dimensions)
+- **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
 
 ## Usage
@@ -34,4 +34,7 @@ claude-memory stats
 
 Requires running services:
 - Qdrant: `docker run -p 6334:6334 qdrant/qdrant`
-- Ollama: `ollama serve` with `ollama pull qwen3-embedding:8b`
+- Ollama: `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
+  ```bash
+  echo -e 'FROM qwen3-embedding:0.6b\nPARAMETER num_ctx 2048' | ollama create qwen3-embedding:0.6b-ctx2048 -f -
+  ```

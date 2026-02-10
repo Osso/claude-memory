@@ -34,6 +34,10 @@ enum Command {
         /// Ignore existing index and re-index everything
         #[arg(long)]
         fresh: bool,
+
+        /// Delay in milliseconds between batches (throttle GPU usage)
+        #[arg(long, default_value = "0")]
+        delay_ms: u64,
     },
 
     /// Index a single conversation file
@@ -85,79 +89,52 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let home = dirs::home_dir().expect("no home directory");
-
     match cli.command {
-        Command::Index {
-            archive,
-            projects,
-            kb,
-            batch_size,
-            fresh,
-        } => {
-            let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
-            let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
-            let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-
-            index::run_index(&archive_dir, &projects_dir, &kb_dir, batch_size, fresh).await?;
+        Command::Index { archive, projects, kb, batch_size, fresh, delay_ms } => {
+            run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await
         }
-
-        Command::IndexFile { path, batch_size } => {
-            let count = index::index_file(&path, batch_size).await?;
-            eprintln!("Indexed {} chunks from {}", count, path.display());
+        Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
+        Command::SearchPrompts { query, limit, source } => {
+            print_results(&index::search_prompts(&query, limit, source.as_deref()).await?)
         }
-
-        Command::SearchPrompts {
-            query,
-            limit,
-            source,
-        } => {
-            let results = index::search_prompts(&query, limit, source.as_deref()).await?;
-            for (i, result) in results.iter().enumerate() {
-                println!(
-                    "{}. [{}] {} (score: {:.3})",
-                    i + 1,
-                    result.source,
-                    result.path,
-                    result.score
-                );
-                println!("   {}", truncate(&result.text, 200));
-                println!();
-            }
+        Command::SearchAnswers { query, limit, source } => {
+            print_results(&index::search_answers(&query, limit, source.as_deref()).await?)
         }
-
-        Command::SearchAnswers {
-            query,
-            limit,
-            source,
-        } => {
-            let results = index::search_answers(&query, limit, source.as_deref()).await?;
-            for (i, result) in results.iter().enumerate() {
-                println!(
-                    "{}. [{}] {} (score: {:.3})",
-                    i + 1,
-                    result.source,
-                    result.path,
-                    result.score
-                );
-                println!("   {}", truncate(&result.text, 200));
-                println!();
-            }
-        }
-
-        Command::Stats => {
-            index::show_stats().await?;
-        }
+        Command::Stats => index::show_stats().await,
     }
+}
 
+async fn run_index_cmd(
+    archive: Option<PathBuf>,
+    projects: Option<PathBuf>,
+    kb: Option<PathBuf>,
+    batch_size: usize,
+    fresh: bool,
+    delay_ms: u64,
+) -> Result<()> {
+    let home = dirs::home_dir().expect("no home directory");
+    let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
+    let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
+    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
+    index::run_index(&archive_dir, &projects_dir, &kb_dir, batch_size, fresh, delay_ms).await
+}
+
+async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
+    let count = index::index_file(path, batch_size).await?;
+    eprintln!("Indexed {} chunks from {}", count, path.display());
     Ok(())
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    let s = s.replace('\n', " ");
-    if s.len() <= max {
-        s
-    } else {
-        format!("{}...", &s[..max])
+fn print_results(results: &[index::SearchResult]) -> Result<()> {
+    for (i, result) in results.iter().enumerate() {
+        println!("{}. [{}] {} (score: {:.3})", i + 1, result.source, result.path, result.score);
+        let text = result.text.replace('\n', " ");
+        if text.len() > 200 {
+            println!("   {}...", &text[..200]);
+        } else {
+            println!("   {}", text);
+        }
+        println!();
     }
+    Ok(())
 }

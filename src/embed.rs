@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
-const MODEL: &str = "qwen3-embedding:8b";
+const MODEL: &str = "qwen3-embedding:0.6b-ctx2048";
 /// Timeout for embedding requests (allows for cold model loading)
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
