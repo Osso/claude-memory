@@ -400,20 +400,15 @@ fn score_relationships(
 
         let src_score = entity_keyword_score(src, keywords);
         let dst_score = entity_keyword_score(dst, keywords);
-        let rel_matches = words_overlap_exact(rel, keywords);
-
-        // Only add the side(s) that actually matched
+        // Only add the side(s) that actually matched by entity name
         if src_score > 0 {
             *scored.entry(src.to_string()).or_default() += src_score;
         }
         if dst_score > 0 {
             *scored.entry(dst.to_string()).or_default() += dst_score;
         }
-        // If only the relation matched, add both but with minimal score
-        if rel_matches && src_score == 0 && dst_score == 0 {
-            *scored.entry(src.to_string()).or_default() += 1;
-            *scored.entry(dst.to_string()).or_default() += 1;
-        }
+        // Relation-only matches (neither src nor dst matched) are skipped —
+        // generic relation words like "protocol", "uses" cause too much fan-out.
     }
 }
 
