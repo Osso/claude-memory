@@ -159,3 +159,90 @@ pub async fn merge_memories(existing: &str, new: &str) -> Option<String> {
     let user = format!("Existing:\n{existing}\n\nNew:\n{new}");
     call_haiku(MERGE_SYSTEM, &user, 1000, 20).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- parse_index_array ---
+
+    #[test]
+    fn parse_index_array_valid() {
+        let result = parse_index_array("[1, 3, 5]");
+        assert_eq!(result, Some(vec![1, 3, 5]));
+    }
+
+    #[test]
+    fn parse_index_array_empty() {
+        let result = parse_index_array("[]");
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn parse_index_array_malformed() {
+        let result = parse_index_array("not json");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_index_array_with_surrounding_text() {
+        let result = parse_index_array("keep these: [1, 2]");
+        assert_eq!(result, Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn parse_index_array_markdown_fence() {
+        let result = parse_index_array("```\n[2, 4]\n```");
+        assert_eq!(result, Some(vec![2, 4]));
+    }
+
+    // --- build_filter_user_message ---
+
+    #[test]
+    fn build_filter_user_message_format() {
+        let results = vec![
+            RawResult { text: "alpha".to_string(), score: 0.9 },
+            RawResult { text: "beta".to_string(), score: 0.7 },
+        ];
+        let msg = build_filter_user_message("my query", &results);
+        assert!(msg.starts_with("Query: my query\n\nResults:\n"));
+        assert!(msg.contains("1. alpha\n\n"));
+        assert!(msg.contains("2. beta\n\n"));
+    }
+
+    #[test]
+    fn build_filter_user_message_empty_results() {
+        let msg = build_filter_user_message("anything", &[]);
+        assert_eq!(msg, "Query: anything\n\nResults:\n");
+    }
+
+    // --- extract_text_content ---
+
+    #[test]
+    fn extract_text_content_simple() {
+        let json = serde_json::json!({
+            "content": [{"type": "text", "text": "hello world"}]
+        });
+        assert_eq!(extract_text_content(&json), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn extract_text_content_missing_content_key() {
+        let json = serde_json::json!({"id": "msg_123"});
+        assert_eq!(extract_text_content(&json), None);
+    }
+
+    #[test]
+    fn extract_text_content_empty_content_array() {
+        let json = serde_json::json!({"content": []});
+        assert_eq!(extract_text_content(&json), None);
+    }
+
+    #[test]
+    fn extract_text_content_missing_text_field() {
+        let json = serde_json::json!({
+            "content": [{"type": "tool_use", "id": "tool_1"}]
+        });
+        assert_eq!(extract_text_content(&json), None);
+    }
+}

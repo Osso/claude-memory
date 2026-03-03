@@ -120,4 +120,58 @@ mod tests {
             assert!(chunk.text.is_char_boundary(0));
         }
     }
+
+    #[test]
+    fn test_large_text_overlap() {
+        // Build text long enough to produce at least 2 chunks.
+        // CHUNK_SIZE=1600, CHUNK_OVERLAP=320, so we need > 1600 chars.
+        let line = "abcdefghij".repeat(20); // 200 chars per line
+        let text = (0..12).map(|_| line.as_str()).collect::<Vec<_>>().join("\n"); // ~2412 chars
+
+        let chunks = chunk_text(&text);
+        assert!(chunks.len() >= 2, "expected multiple chunks, got {}", chunks.len());
+
+        // Consecutive chunks must share some content (overlap).
+        for pair in chunks.windows(2) {
+            let first = &pair[0].text;
+            let second = &pair[1].text;
+            // Take the last 50 chars of the first chunk and verify they appear in the second.
+            let tail: String = first.chars().rev().take(50).collect::<String>().chars().rev().collect();
+            assert!(
+                second.contains(&tail),
+                "no overlap found between consecutive chunks"
+            );
+        }
+    }
+
+    #[test]
+    fn test_newline_only_break_points() {
+        // Lines with no spaces — only newlines separate content.
+        // Each line is shorter than CHUNK_SIZE but together they exceed it.
+        let line = "x".repeat(200); // 200 chars, no spaces
+        let text = (0..12).map(|_| line.as_str()).collect::<Vec<_>>().join("\n"); // ~2412 chars
+
+        let chunks = chunk_text(&text);
+        assert!(chunks.len() >= 2, "expected multiple chunks, got {}", chunks.len());
+
+        // Every chunk must be valid UTF-8 and non-empty.
+        for chunk in &chunks {
+            assert!(!chunk.text.is_empty());
+            assert!(chunk.text.is_char_boundary(0));
+        }
+    }
+
+    #[test]
+    fn test_chunk_hash_uniqueness() {
+        // Produce at least 2 chunks and verify their hashes differ.
+        let line = "abcdefghij".repeat(20);
+        let text = (0..12).map(|_| line.as_str()).collect::<Vec<_>>().join("\n");
+
+        let chunks = chunk_text(&text);
+        assert!(chunks.len() >= 2, "expected multiple chunks for hash uniqueness test");
+
+        let hashes: Vec<&str> = chunks.iter().map(|c| c.hash.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = hashes.iter().copied().collect();
+        assert_eq!(hashes.len(), unique.len(), "chunk hashes are not all unique");
+    }
 }

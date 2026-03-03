@@ -249,6 +249,112 @@ fn extract_assistant_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<Strin
     Ok(texts)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufReader, Cursor};
+
+    fn make_reader(data: &str) -> BufReader<Cursor<Vec<u8>>> {
+        BufReader::new(Cursor::new(data.as_bytes().to_vec()))
+    }
+
+    // ── extract_user_messages ──────────────────────────────────────────────
+
+    #[test]
+    fn user_messages_extracts_valid_human_turns() {
+        let data = r#"{"type":"user","message":{"content":"Hello world"}}
+{"type":"user","message":{"content":"Second message"}}
+"#;
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: Hello world", "User: Second message"]);
+    }
+
+    #[test]
+    fn user_messages_skips_malformed_json() {
+        let data = r#"{"type":"user","message":{"content":"Good line"}}
+not json at all
+{"type":"user","message":{"content":"Also good"}}
+"#;
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: Good line", "User: Also good"]);
+    }
+
+    #[test]
+    fn user_messages_empty_input_returns_empty() {
+        let result = extract_user_messages(make_reader("")).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn user_messages_skips_non_human_roles() {
+        let data = r#"{"type":"assistant","message":{"content":"[{\"type\":\"text\",\"text\":\"Hi\"}]"}}
+{"type":"system","message":{"content":"System prompt"}}
+{"type":"user","message":{"content":"User only"}}
+"#;
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: User only"]);
+    }
+
+    #[test]
+    fn user_messages_skips_whitespace_only_content() {
+        let data = "{\"type\":\"user\",\"message\":{\"content\":\"   \"}}\n\
+                    {\"type\":\"user\",\"message\":{\"content\":\"real\"}}\n";
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: real"]);
+    }
+
+    // ── extract_assistant_messages ─────────────────────────────────────────
+
+    #[test]
+    fn assistant_messages_extracts_text_blocks() {
+        let data = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Here is my answer."}]}}
+"#;
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: Here is my answer."]);
+    }
+
+    #[test]
+    fn assistant_messages_skips_tool_use_blocks() {
+        let data = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}},{"type":"text","text":"Done."}]}}
+"#;
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: Done."]);
+    }
+
+    #[test]
+    fn assistant_messages_mixed_valid_invalid_lines() {
+        let data = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First."}]}}
+{bad json
+{"type":"assistant","message":{"content":[{"type":"text","text":"Third."}]}}
+"#;
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: First.", "Assistant: Third."]);
+    }
+
+    #[test]
+    fn assistant_messages_skips_non_assistant_roles() {
+        let data = r#"{"type":"user","message":{"content":"Human text"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Assistant text."}]}}
+"#;
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: Assistant text."]);
+    }
+
+    #[test]
+    fn assistant_messages_skips_whitespace_only_text_blocks() {
+        let data = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"  \"}]}}\n\
+                    {\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Real answer.\"}]}}\n";
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: Real answer."]);
+    }
+
+    #[test]
+    fn assistant_messages_empty_input_returns_empty() {
+        let result = extract_assistant_messages(make_reader("")).unwrap();
+        assert!(result.is_empty());
+    }
+}
+
 /// Extract chunks from a markdown file.
 pub fn extract_markdown(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
     let text = std::fs::read_to_string(path).context("failed to read markdown")?;

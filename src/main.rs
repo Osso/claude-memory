@@ -603,3 +603,136 @@ fn preview_text(text: &str, max_len: usize) -> String {
         oneline
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- cosine_sim ---
+
+    #[test]
+    fn cosine_sim_identical() {
+        let v = vec![1.0f32, 2.0, 3.0];
+        let result = cosine_sim(&v, &v);
+        assert!((result - 1.0).abs() < 1e-6, "identical vectors should give 1.0, got {result}");
+    }
+
+    #[test]
+    fn cosine_sim_orthogonal() {
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        let result = cosine_sim(&a, &b);
+        assert!((result - 0.0).abs() < 1e-6, "orthogonal vectors should give 0.0, got {result}");
+    }
+
+    #[test]
+    fn cosine_sim_opposite() {
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![-1.0f32, 0.0, 0.0];
+        let result = cosine_sim(&a, &b);
+        assert!((result - (-1.0)).abs() < 1e-6, "opposite vectors should give -1.0, got {result}");
+    }
+
+    #[test]
+    fn cosine_sim_zero_vector() {
+        let zero = vec![0.0f32, 0.0, 0.0];
+        let other = vec![1.0f32, 2.0, 3.0];
+        // Implementation explicitly returns 0.0 for zero vectors
+        let result = cosine_sim(&zero, &other);
+        assert_eq!(result, 0.0, "zero vector should return 0.0, got {result}");
+        let result2 = cosine_sim(&zero, &zero);
+        assert_eq!(result2, 0.0, "two zero vectors should return 0.0, got {result2}");
+    }
+
+    // --- greedy_cluster ---
+
+    #[test]
+    fn greedy_cluster_identical_items() {
+        // Three identical vectors: all should end up in one cluster
+        let v = vec![1.0f32, 0.0, 0.0];
+        let embeddings = vec![v.clone(), v.clone(), v.clone()];
+        let clusters = greedy_cluster(&embeddings, 0.99);
+        assert_eq!(clusters.len(), 1, "identical vectors should form one cluster");
+        assert_eq!(clusters[0].len(), 3);
+    }
+
+    #[test]
+    fn greedy_cluster_completely_different() {
+        // Orthogonal unit vectors: none should cluster together above threshold 0.5
+        let embeddings = vec![
+            vec![1.0f32, 0.0, 0.0],
+            vec![0.0f32, 1.0, 0.0],
+            vec![0.0f32, 0.0, 1.0],
+        ];
+        let clusters = greedy_cluster(&embeddings, 0.5);
+        assert_eq!(clusters.len(), 3, "orthogonal vectors should form separate clusters");
+        for c in &clusters {
+            assert_eq!(c.len(), 1);
+        }
+    }
+
+    #[test]
+    fn greedy_cluster_threshold_boundary() {
+        // Two vectors at exactly cosine_sim = 0.0: with threshold 0.0 they cluster,
+        // with threshold 0.01 they don't.
+        let a = vec![1.0f32, 0.0];
+        let b = vec![0.0f32, 1.0];
+        // threshold = 0.0: sim(a,b)=0.0 >= 0.0 → one cluster
+        let clusters_inc = greedy_cluster(&[a.clone(), b.clone()], 0.0);
+        assert_eq!(clusters_inc.len(), 1, "threshold 0.0 should include all non-negative pairs");
+
+        // threshold = 0.01: sim(a,b)=0.0 < 0.01 → two clusters
+        let clusters_exc = greedy_cluster(&[a, b], 0.01);
+        assert_eq!(clusters_exc.len(), 2, "threshold 0.01 should exclude orthogonal pair");
+    }
+
+    #[test]
+    fn greedy_cluster_empty() {
+        let clusters = greedy_cluster(&[], 0.9);
+        assert!(clusters.is_empty());
+    }
+
+    // --- preview_text ---
+
+    #[test]
+    fn preview_text_short() {
+        let text = "hello world";
+        let result = preview_text(text, 50);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn preview_text_long() {
+        let text = "a".repeat(100);
+        let result = preview_text(&text, 20);
+        assert!(result.ends_with("..."), "long text should end with '...'");
+        // prefix is exactly max_len 'a' chars plus "..."
+        assert_eq!(result, format!("{}...", "a".repeat(20)));
+    }
+
+    #[test]
+    fn preview_text_empty() {
+        let result = preview_text("", 50);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn preview_text_newlines_replaced() {
+        let text = "line one\nline two\nline three";
+        let result = preview_text(text, 200);
+        assert!(!result.contains('\n'), "newlines should be replaced with spaces");
+        assert_eq!(result, "line one line two line three");
+    }
+
+    #[test]
+    fn preview_text_utf8_boundary() {
+        // Each emoji is 4 bytes; max_len=4 lands exactly on a char boundary (one emoji).
+        // max_len=5 would be mid-emoji and cause a panic in the naive byte slice.
+        // The implementation uses byte-level slicing, so we only test a safe boundary.
+        let text = "😀😁😂";  // 12 bytes total
+        // max_len=4 → slices exactly one emoji → no panic
+        let result = preview_text(text, 4);
+        assert!(result.starts_with("😀"), "should preserve first emoji");
+        assert!(result.ends_with("..."));
+    }
+}

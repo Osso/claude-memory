@@ -360,7 +360,7 @@ async fn index_new_chunks(
     .await
 }
 
-fn filter_new(chunks: &[IndexedChunk], existing: &HashSet<String>) -> Vec<IndexedChunk> {
+pub(crate) fn filter_new(chunks: &[IndexedChunk], existing: &HashSet<String>) -> Vec<IndexedChunk> {
     let mut seen = HashSet::new();
     chunks
         .iter()
@@ -449,7 +449,7 @@ async fn search_collection(
     Ok(build_search_results(results.result))
 }
 
-fn build_search_results(points: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<SearchResult> {
+pub(crate) fn build_search_results(points: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<SearchResult> {
     points
         .into_iter()
         .map(|point| {
@@ -464,7 +464,7 @@ fn build_search_results(points: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<
         .collect()
 }
 
-fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
+pub(crate) fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
     payload
         .get(key)
         .and_then(|v| v.kind.as_ref())
@@ -635,3 +635,8 @@ fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>, next_id: &Atomi
     .collect();
     PointStruct::new(id, named, payload)
 }
+
+#[cfg(test)]
+#[path = "index_tests.rs"]
+mod index_tests;
+
