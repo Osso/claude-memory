@@ -233,38 +233,37 @@ fn looks_like_number_or_hash(name: &str) -> bool {
         || "KMGBikb".contains(c))
 }
 
+/// Maximum triplets returned from graph enrichment.
+const MAX_RELATED_TRIPLETS: usize = 50;
+
 pub fn query_related(entities: &[String]) -> Result<Vec<String>> {
     let db = get_graph()?;
     let mut related = Vec::new();
 
     for entity in entities {
-        let outgoing = query_outgoing(db, entity);
-        let incoming = query_incoming(db, entity);
-
-        match outgoing {
-            Ok(rows) => {
-                for row in rows.rows {
-                    if let (Some(dst), Some(rel)) = (row.first(), row.get(1)) {
-                        related.push(format!("{entity} {} {}", str_val(rel), str_val(dst)));
-                    }
-                }
-            }
-            Err(e) => tracing::warn!("graph outgoing query failed for {entity}: {e}"),
+        if related.len() >= MAX_RELATED_TRIPLETS {
+            break;
         }
 
-        match incoming {
-            Ok(rows) => {
-                for row in rows.rows {
-                    if let (Some(src), Some(rel)) = (row.first(), row.get(1)) {
-                        related.push(format!("{} {} {entity}", str_val(src), str_val(rel)));
-                    }
+        if let Ok(rows) = query_outgoing(db, entity) {
+            for row in rows.rows {
+                if let (Some(dst), Some(rel)) = (row.first(), row.get(1)) {
+                    related.push(format!("{entity} {} {}", str_val(rel), str_val(dst)));
                 }
             }
-            Err(e) => tracing::warn!("graph incoming query failed for {entity}: {e}"),
+        }
+
+        if let Ok(rows) = query_incoming(db, entity) {
+            for row in rows.rows {
+                if let (Some(src), Some(rel)) = (row.first(), row.get(1)) {
+                    related.push(format!("{} {} {entity}", str_val(src), str_val(rel)));
+                }
+            }
         }
     }
 
     related.dedup();
+    related.truncate(MAX_RELATED_TRIPLETS);
     Ok(related)
 }
 
@@ -292,7 +291,11 @@ fn str_val(v: &DataValue) -> &str {
     v.get_str().unwrap_or("")
 }
 
+/// Maximum entities returned from concept matching.
+const MAX_MATCHED_ENTITIES: usize = 15;
+
 /// Find entities related to a query via word overlap on entities and relationships.
+/// Returns up to MAX_MATCHED_ENTITIES entities, ranked by keyword match count.
 pub async fn find_concepts(query: &str) -> Vec<String> {
     let db = match get_graph() {
         Ok(db) => db,
@@ -304,16 +307,20 @@ pub async fn find_concepts(query: &str) -> Vec<String> {
         return vec![];
     }
 
-    let mut matched = std::collections::HashSet::new();
-    match_entity_names(db, &keywords, &mut matched);
-    match_relationships(db, &keywords, &mut matched);
-    matched.into_iter().collect()
+    let mut scored: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    score_entity_names(db, &keywords, &mut scored);
+    score_relationships(db, &keywords, &mut scored);
+
+    let mut ranked: Vec<(String, usize)> = scored.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked.truncate(MAX_MATCHED_ENTITIES);
+    ranked.into_iter().map(|(name, _)| name).collect()
 }
 
-fn match_entity_names(
+fn score_entity_names(
     db: &DbInstance,
     keywords: &[String],
-    matched: &mut std::collections::HashSet<String>,
+    scored: &mut std::collections::HashMap<String, usize>,
 ) {
     let Ok(r) = db.run_script(
         "?[name] := *entities{name, entity_type, source_text}",
@@ -323,17 +330,18 @@ fn match_entity_names(
 
     for row in &r.rows {
         if let Some(name) = row.first().and_then(|v| v.get_str()) {
-            if entity_matches_keywords(name, keywords) {
-                matched.insert(name.to_string());
+            let score = entity_keyword_score(name, keywords);
+            if score > 0 {
+                *scored.entry(name.to_string()).or_default() += score;
             }
         }
     }
 }
 
-fn match_relationships(
+fn score_relationships(
     db: &DbInstance,
     keywords: &[String],
-    matched: &mut std::collections::HashSet<String>,
+    scored: &mut std::collections::HashMap<String, usize>,
 ) {
     let Ok(r) = db.run_script(
         "?[src, rel, dst] := *relationships{src, relation: rel, dst}",
@@ -345,17 +353,31 @@ fn match_relationships(
         let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
         let rel = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
         let dst = row.get(2).and_then(|v| v.get_str()).unwrap_or("");
-        if triplet_matches_keywords(src, rel, dst, keywords) {
-            matched.insert(src.to_string());
-            matched.insert(dst.to_string());
+
+        let src_score = entity_keyword_score(src, keywords);
+        let dst_score = entity_keyword_score(dst, keywords);
+        let rel_matches = words_overlap_exact(rel, keywords);
+
+        // Only add the side(s) that actually matched
+        if src_score > 0 {
+            *scored.entry(src.to_string()).or_default() += src_score;
+        }
+        if dst_score > 0 {
+            *scored.entry(dst.to_string()).or_default() += dst_score;
+        }
+        // If only the relation matched, add both but with minimal score
+        if rel_matches && src_score == 0 && dst_score == 0 {
+            *scored.entry(src.to_string()).or_default() += 1;
+            *scored.entry(dst.to_string()).or_default() += 1;
         }
     }
 }
 
+#[cfg(test)]
 fn triplet_matches_keywords(src: &str, rel: &str, dst: &str, keywords: &[String]) -> bool {
-    entity_matches_keywords(src, keywords)
-        || entity_matches_keywords(dst, keywords)
-        || words_overlap(rel, keywords)
+    entity_keyword_score(src, keywords) > 0
+        || entity_keyword_score(dst, keywords) > 0
+        || words_overlap_exact(rel, keywords)
 }
 
 fn extract_keywords(query: &str) -> Vec<String> {
@@ -387,18 +409,35 @@ fn stop_words() -> std::collections::HashSet<&'static str> {
     ].iter().copied().collect()
 }
 
-fn entity_matches_keywords(entity: &str, keywords: &[String]) -> bool {
+/// Count how many keywords match entity words (exact word match only).
+fn entity_keyword_score(entity: &str, keywords: &[String]) -> usize {
     let entity_lower = entity.to_lowercase();
     let entity_words: Vec<&str> = entity_lower
         .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
         .filter(|w| w.len() >= 2)
         .collect();
-    keywords.iter().any(|kw| entity_words.iter().any(|ew| ew == kw || ew.contains(kw.as_str())))
+    keywords.iter().filter(|kw| entity_words.iter().any(|ew| ew == kw)).count()
 }
 
-fn words_overlap(text: &str, keywords: &[String]) -> bool {
+#[cfg(test)]
+fn entity_matches_keywords(entity: &str, keywords: &[String]) -> bool {
+    entity_keyword_score(entity, keywords) > 0
+}
+
+/// Exact word match on relationship text (not substring).
+/// Splits on non-alphanumeric including underscores (common in relation names like written_in).
+fn words_overlap_exact(text: &str, keywords: &[String]) -> bool {
     let lower = text.to_lowercase();
-    keywords.iter().any(|kw| lower.contains(kw.as_str()))
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|w| w.len() >= 2)
+        .collect();
+    keywords.iter().any(|kw| words.iter().any(|w| w == kw))
+}
+
+#[cfg(test)]
+fn words_overlap(text: &str, keywords: &[String]) -> bool {
+    words_overlap_exact(text, keywords)
 }
 
 #[cfg(test)]
