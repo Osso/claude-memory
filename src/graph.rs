@@ -9,9 +9,12 @@ static GRAPH: OnceLock<DbInstance> = OnceLock::new();
 
 const EXTRACT_SYSTEM: &str = "Extract entity-relationship triplets from the text. \
 Return a JSON array of [subject, relation, object] arrays. \
-Focus on: project names, technologies, preferences, people, tools, patterns, decisions. \
-Only extract clear, factual relationships. Be concise with entity names. \
-Example: [[\"user\", \"prefers\", \"Rust\"], [\"globalcomix\", \"uses\", \"PHP backend\"]] \
+Focus on: project names, technologies, people, tools, architectural decisions, preferences. \
+Entity names should be proper nouns or short noun phrases (1-3 words). \
+NEVER use as entities: file paths, CLI flags, code snippets, numbers, coordinates, regex patterns, variable names. \
+Good entities: \"authd\", \"Rust\", \"Retribution Paladin\", \"Qdrant\", \"GlobalComix\" \
+Bad entities: \"/etc/authd/policies.d/\", \"--json\", \"0.9998\", \"$parent substitution\" \
+Example: [[\"authd\", \"written_in\", \"Rust\"], [\"authd\", \"replaces\", \"polkit\"]] \
 If no clear relationships exist, return: []";
 
 pub fn get_graph() -> Result<&'static DbInstance> {
@@ -242,33 +245,111 @@ fn str_val(v: &DataValue) -> &str {
     v.get_str().unwrap_or("")
 }
 
-pub async fn extract_entities(query: &str) -> Vec<String> {
+/// Find entities related to a query via word overlap on entities and relationships.
+pub async fn find_concepts(query: &str) -> Vec<String> {
     let db = match get_graph() {
         Ok(db) => db,
         Err(_) => return vec![],
     };
 
-    let result = db.run_script(
+    let keywords = extract_keywords(query);
+    if keywords.is_empty() {
+        return vec![];
+    }
+
+    let mut matched = std::collections::HashSet::new();
+    match_entity_names(db, &keywords, &mut matched);
+    match_relationships(db, &keywords, &mut matched);
+    matched.into_iter().collect()
+}
+
+fn match_entity_names(
+    db: &DbInstance,
+    keywords: &[String],
+    matched: &mut std::collections::HashSet<String>,
+) {
+    let Ok(r) = db.run_script(
         "?[name] := *entities{name, entity_type, source_text}",
         BTreeMap::new(),
         ScriptMutability::Immutable,
-    );
+    ) else { return };
 
-    let all_entities: Vec<String> = match result {
-        Ok(r) => r
-            .rows
-            .iter()
-            .filter_map(|row| {
-                row.first()
-                    .and_then(|v| v.get_str().map(|s| s.to_string()))
-            })
-            .collect(),
-        Err(_) => return vec![],
-    };
+    for row in &r.rows {
+        if let Some(name) = row.first().and_then(|v| v.get_str()) {
+            if entity_matches_keywords(name, keywords) {
+                matched.insert(name.to_string());
+            }
+        }
+    }
+}
 
-    let query_lower = query.to_lowercase();
-    all_entities
-        .into_iter()
-        .filter(|e| query_lower.contains(&e.to_lowercase()))
+fn match_relationships(
+    db: &DbInstance,
+    keywords: &[String],
+    matched: &mut std::collections::HashSet<String>,
+) {
+    let Ok(r) = db.run_script(
+        "?[src, rel, dst] := *relationships{src, relation: rel, dst}",
+        BTreeMap::new(),
+        ScriptMutability::Immutable,
+    ) else { return };
+
+    for row in &r.rows {
+        let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
+        let rel = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
+        let dst = row.get(2).and_then(|v| v.get_str()).unwrap_or("");
+        if triplet_matches_keywords(src, rel, dst, keywords) {
+            matched.insert(src.to_string());
+            matched.insert(dst.to_string());
+        }
+    }
+}
+
+fn triplet_matches_keywords(src: &str, rel: &str, dst: &str, keywords: &[String]) -> bool {
+    entity_matches_keywords(src, keywords)
+        || entity_matches_keywords(dst, keywords)
+        || words_overlap(rel, keywords)
+}
+
+fn extract_keywords(query: &str) -> Vec<String> {
+    let stops = stop_words();
+    query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|w| w.len() >= 2 && !stops.contains(w))
+        .map(|w| w.to_string())
         .collect()
+}
+
+fn stop_words() -> std::collections::HashSet<&'static str> {
+    [
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+        "on", "with", "at", "by", "from", "as", "into", "about", "between",
+        "through", "after", "before", "and", "but", "or", "not", "no", "if",
+        "then", "so", "than", "that", "this", "these", "those", "it", "its",
+        "my", "your", "his", "her", "our", "their", "what", "which", "who",
+        "when", "where", "how", "why", "all", "each", "every", "any", "some",
+        "i", "me", "we", "you", "he", "she", "they", "them", "let", "us",
+        "yes", "no", "just", "also", "very", "much", "more", "most", "well",
+        "now", "here", "there", "still", "already", "yet", "too", "only",
+        "work", "use", "make", "get", "set", "run", "fix", "add", "try",
+        "want", "need", "know", "think", "look", "find", "give", "tell",
+        "first", "new", "old", "last", "next", "same", "other", "like",
+    ].iter().copied().collect()
+}
+
+fn entity_matches_keywords(entity: &str, keywords: &[String]) -> bool {
+    let entity_lower = entity.to_lowercase();
+    let entity_words: Vec<&str> = entity_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+        .filter(|w| w.len() >= 2)
+        .collect();
+    keywords.iter().any(|kw| entity_words.iter().any(|ew| ew == kw || ew.contains(kw.as_str())))
+}
+
+fn words_overlap(text: &str, keywords: &[String]) -> bool {
+    let lower = text.to_lowercase();
+    keywords.iter().any(|kw| lower.contains(kw.as_str()))
 }

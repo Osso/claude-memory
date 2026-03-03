@@ -408,7 +408,7 @@ async fn filter_with_llm<'a>(
 
 /// Query graph for related entities to enrich search results.
 async fn enrich_with_graph(query: &str) -> Vec<String> {
-    let entities = graph::extract_entities(query).await;
+    let entities = graph::find_concepts(query).await;
     if entities.is_empty() {
         return vec![];
     }

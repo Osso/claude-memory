@@ -99,6 +99,13 @@ enum Command {
         limit: usize,
     },
 
+    /// Dump graph entities and relationships
+    GraphDump {
+        /// Maximum entries to show
+        #[arg(short, long, default_value = "50")]
+        limit: usize,
+    },
+
     /// Show collection statistics
     Stats,
 }
@@ -124,6 +131,7 @@ async fn main() -> Result<()> {
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
         Command::BuildGraph => run_build_graph().await,
         Command::Enrich { limit } => run_enrich(limit).await,
+        Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
     }
 }
@@ -204,6 +212,37 @@ async fn run_build_graph() -> Result<()> {
     Ok(())
 }
 
+// --- Graph dump command ---
+
+fn run_graph_dump(limit: usize) -> Result<()> {
+    let db = graph::get_graph()?;
+    let entities = db.run_script(
+        &format!("?[name, type] := *entities{{name, entity_type: type}} :limit {limit}"),
+        std::collections::BTreeMap::new(),
+        cozo::ScriptMutability::Immutable,
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("=== Entities ({} shown) ===", entities.rows.len());
+    for row in &entities.rows {
+        let name = row.first().and_then(|v| v.get_str()).unwrap_or("");
+        let etype = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
+        println!("  {name} [{etype}]");
+    }
+
+    let rels = db.run_script(
+        &format!("?[src, rel, dst] := *relationships{{src, relation: rel, dst}} :limit {limit}"),
+        std::collections::BTreeMap::new(),
+        cozo::ScriptMutability::Immutable,
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!("\n=== Relationships ({} shown) ===", rels.rows.len());
+    for row in &rels.rows {
+        let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
+        let rel = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
+        let dst = row.get(2).and_then(|v| v.get_str()).unwrap_or("");
+        println!("  {src} --[{rel}]--> {dst}");
+    }
+    Ok(())
+}
+
 // --- Enrich command (UserPromptSubmit hook) ---
 
 async fn run_enrich(limit: usize) -> Result<()> {
@@ -228,7 +267,7 @@ async fn run_enrich(limit: usize) -> Result<()> {
     }
 
     // Graph: extract entities from prompt, query relationships
-    let entities = graph::extract_entities(prompt).await;
+    let entities = graph::find_concepts(prompt).await;
     if !entities.is_empty() {
         if let Ok(related) = graph::query_related(&entities) {
             if !related.is_empty() {
