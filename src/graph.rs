@@ -148,6 +148,9 @@ fn store_triplet(
     object: &str,
     source_text: &str,
 ) -> Result<()> {
+    if !is_valid_entity(subject) || !is_valid_entity(object) {
+        return Ok(());
+    }
     store_entity(db, subject, source_text)?;
     store_entity(db, object, source_text)?;
 
@@ -184,6 +187,42 @@ fn store_entity(db: &DbInstance, name: &str, source_text: &str) -> Result<()> {
     .map_err(|e| anyhow::anyhow!("graph store entity failed: {e}"))?;
 
     Ok(())
+}
+
+/// Reject entities that are code artifacts, not real concepts.
+fn is_valid_entity(name: &str) -> bool {
+    if name.len() < 2 || name.len() > 60 {
+        return false;
+    }
+    if name.starts_with('/') || name.starts_with('.') || name.contains("/.") {
+        return false;
+    }
+    if name.starts_with('-') || name.starts_with('+') || name.starts_with('@')
+        || name.starts_with('$') || name.starts_with('#')
+    {
+        return false;
+    }
+    // Reject descriptive phrases (more than 4 words = probably not a named entity)
+    if name.split_whitespace().count() > 4 {
+        return false;
+    }
+    if looks_like_number_or_hash(name) {
+        return false;
+    }
+    if name.contains(".*") || name.contains("$(") || name.contains("=>") {
+        return false;
+    }
+    true
+}
+
+fn looks_like_number_or_hash(name: &str) -> bool {
+    let stripped = name.replace(['.', ',', ' ', '-', '_', '%', '+'], "");
+    if stripped.is_empty() {
+        return true;
+    }
+    // Pure digits/hex (commit hashes, numbers, percentages, sizes like 22KB/38MB)
+    stripped.chars().all(|c| c.is_ascii_digit() || c.is_ascii_hexdigit()
+        || "KMGBikb".contains(c))
 }
 
 pub fn query_related(entities: &[String]) -> Result<Vec<String>> {
