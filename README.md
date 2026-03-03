@@ -104,7 +104,28 @@ Add to your MCP config:
 }
 ```
 
-For prompt enrichment, add a `UserPromptSubmit` hook that calls `claude-memory enrich`.
+For prompt enrichment, add a `UserPromptSubmit` hook in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-memory enrich",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+This injects relevant memory context into every prompt automatically.
 
 ## How search works
 
