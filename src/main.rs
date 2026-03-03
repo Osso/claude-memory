@@ -90,7 +90,11 @@ enum Command {
     },
 
     /// Build graph from existing memory entries (extract entities/relationships)
-    BuildGraph,
+    BuildGraph {
+        /// Also scan KB files for graph extraction
+        #[arg(long)]
+        kb: bool,
+    },
 
     /// Enrich a prompt with memory context (for UserPromptSubmit hook)
     Enrich {
@@ -129,7 +133,7 @@ async fn main() -> Result<()> {
             print_results(&index::search_answers(&query, limit, source.as_deref()).await?)
         }
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
-        Command::BuildGraph => run_build_graph().await,
+        Command::BuildGraph { kb } => run_build_graph(kb).await,
         Command::Enrich { limit } => run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
@@ -194,22 +198,55 @@ async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
 
 // --- Build graph command ---
 
-async fn run_build_graph() -> Result<()> {
+async fn run_build_graph(kb: bool) -> Result<()> {
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
         anyhow::bail!("ANTHROPIC_API_KEY must be set for graph building (needs LLM to extract)");
     }
     let entries = load_all_memories().await?;
-    eprintln!("Processing {} memory entries for graph extraction", entries.len());
+    let mut extracted = extract_texts_to_graph(&entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), "memory").await?;
+    if kb {
+        let kb_texts = load_kb_texts()?;
+        extracted += extract_texts_to_graph(&kb_texts.iter().map(|s| s.as_str()).collect::<Vec<_>>(), "KB").await?;
+    }
+    eprintln!("Total: {extracted} triplets");
+    Ok(())
+}
+
+async fn extract_texts_to_graph(texts: &[&str], label: &str) -> Result<usize> {
+    eprintln!("Processing {} {label} entries for graph extraction", texts.len());
     let mut extracted = 0;
-    for (i, entry) in entries.iter().enumerate() {
-        match graph::extract_and_store(&entry.text).await {
+    for (i, text) in texts.iter().enumerate() {
+        match graph::extract_and_store(text).await {
             Ok(n) => extracted += n,
             Err(e) => eprintln!("  entry {}: {e}", i + 1),
         }
-        eprint!("\r  {}/{} ({} triplets)", i + 1, entries.len(), extracted);
+        eprint!("\r  {}/{} ({} triplets)", i + 1, texts.len(), extracted);
     }
-    eprintln!("\nDone: extracted {} triplets from {} entries", extracted, entries.len());
-    Ok(())
+    eprintln!();
+    Ok(extracted)
+}
+
+fn load_kb_texts() -> Result<Vec<String>> {
+    use claude_memory::chunk::chunk_text;
+    let kb_dir = PathBuf::from("/syncthing/Sync/KB");
+    let include_dirs = ["dev", "guides", "research", "state", "memory"];
+    let mut texts = Vec::new();
+    for dir_name in &include_dirs {
+        let dir = kb_dir.join(dir_name);
+        if !dir.exists() { continue; }
+        for entry in walkdir::WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().map(|e| e == "md").unwrap_or(false) {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    for chunk in chunk_text(&content) {
+                        texts.push(chunk.text);
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Loaded {} KB chunks from {:?}", texts.len(), include_dirs);
+    Ok(texts)
 }
 
 // --- Graph dump command ---
