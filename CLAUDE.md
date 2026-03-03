@@ -30,6 +30,16 @@ claude-memory stats
 - Project summaries: `~/.claude/projects/**/summary.md`
 - Knowledge base: `/syncthing/Sync/KB/**/*.md`
 
+## Build & Install
+
+```bash
+cargo build --release
+```
+
+Binaries are symlinked from `~/.local/bin/` to `target/release/`. Never use `cargo install` — it copies to `~/.cargo/bin/` instead.
+
+No systemd service — the MCP server runs as a stdio child process of Claude Code. After rebuilding, restart Claude Code to reload it.
+
 ## Dependencies
 
 Requires running services:

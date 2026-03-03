@@ -10,10 +10,12 @@ static GRAPH: OnceLock<DbInstance> = OnceLock::new();
 const EXTRACT_SYSTEM: &str = "Extract entity-relationship triplets from the text. \
 Return a JSON array of [subject, relation, object] arrays. \
 Focus on: project names, technologies, people, tools, architectural decisions, preferences. \
-Entity names should be proper nouns or short noun phrases (1-3 words). \
-NEVER use as entities: file paths, CLI flags, code snippets, numbers, coordinates, regex patterns, variable names. \
-Good entities: \"authd\", \"Rust\", \"Retribution Paladin\", \"Qdrant\", \"GlobalComix\" \
-Bad entities: \"/etc/authd/policies.d/\", \"--json\", \"0.9998\", \"$parent substitution\" \
+Entity names MUST be proper nouns or short noun phrases (1-3 words). \
+NEVER use as entities: file paths, CLI flags, code snippets, numbers, measurements, \
+quantities, percentages, filenames, version numbers, coordinates, regex, variable names. \
+Good: \"authd\", \"Rust\", \"Qdrant\", \"AMD RDNA 4\", \"GlobalComix\", \"YNAB\" \
+Bad: \"/etc/authd/\", \"--json\", \"120 FPS\", \"575 Watts\", \"04-external-services.md\", \
+\"23000+ organizations\", \"0.8.x\", \"1Gi memory limit\", \"49 rotation keyframes\" \
 Example: [[\"authd\", \"written_in\", \"Rust\"], [\"authd\", \"replaces\", \"polkit\"]] \
 If no clear relationships exist, return: []";
 
@@ -197,16 +199,14 @@ fn is_valid_entity(name: &str) -> bool {
     if name.starts_with('/') || name.starts_with('.') || name.contains("/.") {
         return false;
     }
-    // Reject path-like strings containing a slash (e.g. src/main.rs)
     if name.contains('/') {
         return false;
     }
     if name.starts_with('-') || name.starts_with('+') || name.starts_with('@')
-        || name.starts_with('$') || name.starts_with('#')
+        || name.starts_with('$') || name.starts_with('#') || name.starts_with('&')
     {
         return false;
     }
-    // Reject descriptive phrases (more than 4 words = probably not a named entity)
     if name.split_whitespace().count() > 4 {
         return false;
     }
@@ -216,11 +216,56 @@ fn is_valid_entity(name: &str) -> bool {
     if name.contains(".*") || name.contains("$(") || name.contains("=>") {
         return false;
     }
-    // Reject strings containing parentheses or angle brackets (code expressions like fn(), Vec<T>)
     if name.contains('(') || name.contains(')') || name.contains('<') || name.contains('>') {
         return false;
     }
+    if name.contains('%') || name.contains('\'') || name.contains('"') {
+        return false;
+    }
+    if has_file_extension(name) {
+        return false;
+    }
+    if first_word_is_numeric(name) {
+        return false;
+    }
     true
+}
+
+/// Known-good numeric prefixes: 2D, 3D, 2FA, 4K, etc.
+const GOOD_NUM_PREFIXES: &[&str] = &["2d", "3d", "2fa", "4k"];
+
+/// Reject entities whose first word is a bare number or number+unit.
+/// Allows well-known prefixes like 2D, 3D, 2FA, 4K.
+fn first_word_is_numeric(name: &str) -> bool {
+    let first = match name.split_whitespace().next() {
+        Some(w) => w,
+        None => return true,
+    };
+    if GOOD_NUM_PREFIXES.iter().any(|p| first.eq_ignore_ascii_case(p)) {
+        return false;
+    }
+    if !first.starts_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+    // Pure digits
+    if first.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // Digits followed by short suffix (units): 1Gi, 10c, 0.8.x, 23000+
+    let digit_prefix: String = first
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
+        .collect();
+    let rest = &first[digit_prefix.len()..];
+    !digit_prefix.is_empty() && rest.len() <= 3
+}
+
+fn has_file_extension(name: &str) -> bool {
+    const EXTS: &[&str] = &[
+        ".md", ".rs", ".js", ".ts", ".tsx", ".php", ".py", ".toml",
+        ".yaml", ".yml", ".json", ".html", ".css", ".go", ".sh",
+    ];
+    EXTS.iter().any(|ext| name.ends_with(ext))
 }
 
 fn looks_like_number_or_hash(name: &str) -> bool {
@@ -228,7 +273,6 @@ fn looks_like_number_or_hash(name: &str) -> bool {
     if stripped.is_empty() {
         return true;
     }
-    // Pure digits/hex (commit hashes, numbers, percentages, sizes like 22KB/38MB)
     stripped.chars().all(|c| c.is_ascii_digit() || c.is_ascii_hexdigit()
         || "KMGBikb".contains(c))
 }
@@ -492,6 +536,47 @@ mod tests {
     fn valid_entity_rejects_empty_and_single_char() {
         assert!(!is_valid_entity(""));
         assert!(!is_valid_entity("x"));
+    }
+
+    #[test]
+    fn valid_entity_rejects_numeric_first_word() {
+        assert!(!is_valid_entity("120 FPS"));
+        assert!(!is_valid_entity("575 Watts"));
+        assert!(!is_valid_entity("1000000 lumens"));
+        assert!(!is_valid_entity("49 rotation keyframes"));
+        assert!(!is_valid_entity("10 Million downloads"));
+        assert!(!is_valid_entity("1Gi memory limit"));
+        assert!(!is_valid_entity("10c battery"));
+        assert!(!is_valid_entity("0.8.x"));
+    }
+
+    #[test]
+    fn valid_entity_allows_known_numeric_prefixes() {
+        assert!(is_valid_entity("2D rendering"));
+        assert!(is_valid_entity("3D Models"));
+        assert!(is_valid_entity("2FA app"));
+        assert!(is_valid_entity("4K display"));
+    }
+
+    #[test]
+    fn valid_entity_rejects_file_extensions() {
+        assert!(!is_valid_entity("04-external-services.md"));
+        assert!(!is_valid_entity("main.rs"));
+        assert!(!is_valid_entity("config.toml"));
+        assert!(!is_valid_entity("index.ts"));
+    }
+
+    #[test]
+    fn valid_entity_rejects_percent_and_quotes() {
+        assert!(!is_valid_entity("11% to 1%"));
+        assert!(!is_valid_entity("30% smaller"));
+        assert!(!is_valid_entity("5'11\""));
+    }
+
+    #[test]
+    fn valid_entity_rejects_ampersand_prefix() {
+        assert!(!is_valid_entity("&& chaining"));
+        assert!(!is_valid_entity("&mut reference"));
     }
 
     // --- looks_like_number_or_hash ---
