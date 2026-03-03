@@ -388,15 +388,14 @@ fn score_relationships(
     scored: &mut std::collections::HashMap<String, usize>,
 ) {
     let Ok(r) = db.run_script(
-        "?[src, rel, dst] := *relationships{src, relation: rel, dst}",
+        "?[src, dst] := *relationships{src, dst}",
         BTreeMap::new(),
         ScriptMutability::Immutable,
     ) else { return };
 
     for row in &r.rows {
         let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
-        let rel = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
-        let dst = row.get(2).and_then(|v| v.get_str()).unwrap_or("");
+        let dst = row.get(1).and_then(|v| v.get_str()).unwrap_or("");
 
         let src_score = entity_keyword_score(src, keywords);
         let dst_score = entity_keyword_score(dst, keywords);
@@ -463,8 +462,7 @@ fn entity_matches_keywords(entity: &str, keywords: &[String]) -> bool {
     entity_keyword_score(entity, keywords) > 0
 }
 
-/// Exact word match on relationship text (not substring).
-/// Splits on non-alphanumeric including underscores (common in relation names like written_in).
+#[cfg(test)]
 fn words_overlap_exact(text: &str, keywords: &[String]) -> bool {
     let lower = text.to_lowercase();
     let words: Vec<&str> = lower
