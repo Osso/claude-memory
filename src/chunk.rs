@@ -85,7 +85,7 @@ pub fn chunk_text(text: &str) -> Vec<Chunk> {
     chunks
 }
 
-fn hash_text(text: &str) -> String {
+pub fn hash_text(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     let result = hasher.finalize();

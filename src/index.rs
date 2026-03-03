@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 use qdrant_client::qdrant::{
-    Condition, CreateCollectionBuilder, Distance, Filter, PointStruct, ScrollPointsBuilder,
-    SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder, Value,
+    Condition, Filter, PointStruct, ScrollPointsBuilder, SearchPointsBuilder,
+    UpsertPointsBuilder, Value,
 };
 use qdrant_client::Qdrant;
 use std::collections::{HashMap, HashSet};
@@ -16,11 +16,11 @@ use crate::extract::{
     extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary, extract_zst,
     extract_zst_answers, IndexedChunk,
 };
+use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
 const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
 const COLLECTION_ANSWERS: &str = "claude-answers";
-const VECTOR_SIZE: u64 = 1024;
 
 pub struct SearchResult {
     pub text: String,
@@ -79,28 +79,44 @@ async fn init_index_state(
         .build()
         .context("failed to connect to Qdrant")?;
 
-    ensure_collection(&client, COLLECTION_PROMPTS).await?;
-    ensure_collection(&client, COLLECTION_ANSWERS).await?;
-
-    let (prompt_hashes, answer_hashes) = if fresh {
-        eprintln!("Fresh index requested, ignoring existing data");
-        (HashSet::new(), HashSet::new())
-    } else {
-        eprintln!("Loading existing hashes for resume...");
-        let p = get_existing_hashes(&client, COLLECTION_PROMPTS).await?;
-        let a = get_existing_hashes(&client, COLLECTION_ANSWERS).await?;
-        (p, a)
-    };
+    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
+    ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
+    let (prompt_hashes, answer_hashes) = load_hashes(&client, fresh).await?;
     eprintln!(
         "Found {} prompt chunks, {} answer chunks",
         prompt_hashes.len(),
         answer_hashes.len()
     );
+    Ok(build_index_state(
+        client,
+        prompt_hashes,
+        answer_hashes,
+        batch_size,
+        delay_ms,
+    ))
+}
 
+async fn load_hashes(client: &Qdrant, fresh: bool) -> Result<(HashSet<String>, HashSet<String>)> {
+    if fresh {
+        eprintln!("Fresh index requested, ignoring existing data");
+        return Ok((HashSet::new(), HashSet::new()));
+    }
+    eprintln!("Loading existing hashes for resume...");
+    let prompt_hashes = get_existing_hashes(client, COLLECTION_PROMPTS).await?;
+    let answer_hashes = get_existing_hashes(client, COLLECTION_ANSWERS).await?;
+    Ok((prompt_hashes, answer_hashes))
+}
+
+fn build_index_state(
+    client: Qdrant,
+    prompt_hashes: HashSet<String>,
+    answer_hashes: HashSet<String>,
+    batch_size: usize,
+    delay_ms: u64,
+) -> IndexState {
     let prompt_next_id = AtomicU64::new(prompt_hashes.len() as u64);
     let answer_next_id = AtomicU64::new(answer_hashes.len() as u64);
-
-    Ok(IndexState {
+    IndexState {
         client,
         embedder: Embedder::new(),
         prompt_next_id,
@@ -109,7 +125,7 @@ async fn init_index_state(
         answer_hashes,
         batch_size,
         delay_ms,
-    })
+    }
 }
 
 fn collect_jsonl_files(projects_dir: &Path) -> Vec<walkdir::DirEntry> {
@@ -413,12 +429,14 @@ async fn search_collection(
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
+    ensure_hybrid_collection(&client, collection).await?;
 
     let embedder = Embedder::new();
     let query_vec = embedder.embed(query).await?;
 
-    let mut search =
-        SearchPointsBuilder::new(collection, query_vec, limit as u64).with_payload(true);
+    let mut search = SearchPointsBuilder::new(collection, query_vec, limit as u64)
+        .vector_name("dense")
+        .with_payload(true);
 
     if let Some(src) = source {
         search = search.filter(Filter::must([Condition::matches("source", src.to_string())]));
@@ -428,9 +446,11 @@ async fn search_collection(
         .search_points(search)
         .await
         .context("search failed")?;
+    Ok(build_search_results(results.result))
+}
 
-    Ok(results
-        .result
+fn build_search_results(points: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<SearchResult> {
+    points
         .into_iter()
         .map(|point| {
             let payload = point.payload;
@@ -441,7 +461,7 @@ async fn search_collection(
                 score: point.score,
             }
         })
-        .collect())
+        .collect()
 }
 
 fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
@@ -461,8 +481,8 @@ pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
         .build()
         .context("failed to connect to Qdrant")?;
 
-    ensure_collection(&client, COLLECTION_PROMPTS).await?;
-    ensure_collection(&client, COLLECTION_ANSWERS).await?;
+    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
+    ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
 
     let prompt_hashes = get_existing_hashes(&client, COLLECTION_PROMPTS).await?;
     let answer_hashes = get_existing_hashes(&client, COLLECTION_ANSWERS).await?;
@@ -548,23 +568,6 @@ pub async fn show_stats() -> Result<()> {
     Ok(())
 }
 
-async fn ensure_collection(client: &Qdrant, name: &str) -> Result<()> {
-    let collections = client.list_collections().await?;
-
-    if !collections.collections.iter().any(|c| c.name == name) {
-        client
-            .create_collection(
-                CreateCollectionBuilder::new(name)
-                    .vectors_config(VectorParamsBuilder::new(VECTOR_SIZE, Distance::Cosine)),
-            )
-            .await
-            .context("failed to create collection")?;
-        eprintln!("Created collection: {}", name);
-    }
-
-    Ok(())
-}
-
 async fn index_chunks(
     client: &Qdrant,
     embedder: &Embedder,
@@ -613,19 +616,22 @@ fn build_points(
     batch
         .iter()
         .zip(embeddings)
-        .map(|(chunk, embedding)| {
-            let id = next_id.fetch_add(1, Ordering::SeqCst);
-            PointStruct::new(
-                id,
-                embedding,
-                [
-                    ("text", chunk.chunk.text.clone().into()),
-                    ("source", chunk.source.clone().into()),
-                    ("path", chunk.path.clone().into()),
-                    ("session_id", chunk.session_id.clone().unwrap_or_default().into()),
-                    ("hash", chunk.chunk.hash.clone().into()),
-                ],
-            )
-        })
+        .map(|(chunk, embedding)| build_single_point(chunk, embedding, next_id))
         .collect()
+}
+
+fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>, next_id: &AtomicU64) -> PointStruct {
+    let id = next_id.fetch_add(1, Ordering::SeqCst);
+    let named = build_named_vectors(embedding, &chunk.chunk.text);
+    let payload: HashMap<String, Value> = [
+        ("text", chunk.chunk.text.clone().into()),
+        ("source", chunk.source.clone().into()),
+        ("path", chunk.path.clone().into()),
+        ("session_id", chunk.session_id.clone().unwrap_or_default().into()),
+        ("hash", chunk.chunk.hash.clone().into()),
+    ]
+    .into_iter()
+    .map(|(k, v): (&str, Value)| (k.to_string(), v))
+    .collect();
+    PointStruct::new(id, named, payload)
 }

@@ -258,11 +258,14 @@ pub fn extract_markdown(path: &Path, base_path: &Path) -> Result<Vec<IndexedChun
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
+    // Files under memory/ subdir are tagged as source=memory
+    let source = if rel_path.starts_with("memory/") { "memory" } else { "kb" };
+
     Ok(chunk_text(&text)
         .into_iter()
         .map(|chunk| IndexedChunk {
             chunk,
-            source: "kb".to_string(),
+            source: source.to_string(),
             path: rel_path.clone(),
             session_id: None,
         })

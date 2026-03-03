@@ -13,6 +13,11 @@ pub fn memory_dir() -> PathBuf {
         .join(".claude/memory")
 }
 
+/// Get the KB memory directory (durable, synced).
+pub fn kb_memory_dir() -> PathBuf {
+    PathBuf::from("/syncthing/Sync/KB/memory")
+}
+
 /// Get today's daily log path.
 pub fn daily_log_path() -> PathBuf {
     let date = Local::now().format("%Y-%m-%d");
@@ -82,5 +87,38 @@ pub fn append_project(project: &str, content: &str) -> Result<()> {
     file.write_all(entry.as_bytes())
         .context("failed to write to project memory")?;
 
+    Ok(())
+}
+
+/// Append a memory entry to KB for durable storage.
+/// Writes to /syncthing/Sync/KB/memory/{category}.md (grouped by category).
+/// Falls back silently if KB dir doesn't exist (non-syncthing machines).
+pub fn append_kb_memory(content: &str, category: Option<&str>, project: Option<&str>) -> Result<()> {
+    let kb_dir = kb_memory_dir();
+    if !kb_dir.parent().map(|p| p.exists()).unwrap_or(false) {
+        return Ok(()); // KB not mounted
+    }
+    fs::create_dir_all(&kb_dir).context("failed to create KB memory dir")?;
+
+    let filename = category.unwrap_or("uncategorized");
+    let path = kb_dir.join(format!("{filename}.md"));
+    let time = Local::now().format("%Y-%m-%d %H:%M");
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .context("failed to open KB memory file")?;
+
+    let mut entry = format!("\n## {time}");
+    if let Some(proj) = project {
+        entry.push_str(&format!(" ({proj})"));
+    }
+    entry.push('\n');
+    entry.push_str(content);
+    entry.push('\n');
+
+    file.write_all(entry.as_bytes())
+        .context("failed to write KB memory")?;
     Ok(())
 }
