@@ -330,7 +330,12 @@ impl MemoryService {
         if points.is_empty() {
             return Ok("No results found.".to_string());
         }
+        const MIN_SCORE: f32 = 0.70;
         let filtered = filter_with_llm(&params.query, &points, limit).await;
+        let filtered: Vec<_> = filtered.into_iter().filter(|p| p.score >= MIN_SCORE).collect();
+        if filtered.is_empty() {
+            return Ok("No results found.".to_string());
+        }
         let graph_context = enrich_with_graph(&params.query).await;
         let mut output: String = filtered.iter().enumerate().map(|(i, p)| format_scored_point(i, p)).collect();
         if !graph_context.is_empty() {
