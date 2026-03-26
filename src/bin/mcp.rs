@@ -326,13 +326,14 @@ impl MemoryService {
         let limit = params.limit.unwrap_or(5);
         let query_vec = self.embedder.embed(&params.query).await?;
         let points = self.run_hybrid_search(client, collection, query_vec, &params.query, 20, params.source.as_deref()).await?;
-        log(&format!("do_search: {} raw results", points.len()));
+        log(&format!("do_search: {} raw results, scores: {:?}", points.len(), points.iter().map(|p| p.score).collect::<Vec<_>>()));
         if points.is_empty() {
             return Ok("No results found.".to_string());
         }
-        const MIN_SCORE: f32 = 0.70;
+        const MIN_SCORE: f32 = 0.65;
         let filtered = filter_with_llm(&params.query, &points, limit).await;
         let filtered: Vec<_> = filtered.into_iter().filter(|p| p.score >= MIN_SCORE).collect();
+        log(&format!("do_search: {} after filter, scores: {:?}", filtered.len(), filtered.iter().map(|p| p.score).collect::<Vec<_>>()));
         if filtered.is_empty() {
             return Ok("No results found.".to_string());
         }
