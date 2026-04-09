@@ -1,11 +1,11 @@
 //! Shared helpers for hybrid (dense + BM25 sparse) Qdrant collection management.
 
 use anyhow::{Context, Result};
+use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, Distance, Document, SparseVectorParamsBuilder,
-    SparseVectorsConfigBuilder, VectorParamsBuilder, Vector, VectorsConfigBuilder,
+    SparseVectorsConfigBuilder, Vector, VectorParamsBuilder, VectorsConfigBuilder,
 };
-use qdrant_client::Qdrant;
 use std::collections::HashMap;
 
 pub const VECTOR_SIZE: u64 = 1024;

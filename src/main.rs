@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use claude_memory::{graph, index, llm};
 use clap::{Parser, Subcommand};
+use claude_memory::{graph, index, llm};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -94,8 +94,19 @@ enum Command {
         /// Also scan KB files for graph extraction
         #[arg(long)]
         kb: bool,
+        /// Clear the existing graph before rebuilding
+        #[arg(long)]
+        fresh: bool,
     },
-
+    /// Clean the existing graph in-place using current validation rules
+    GraphClean {
+        /// Maximum cleanup passes before stopping
+        #[arg(long, default_value = "5")]
+        max_passes: usize,
+        /// Dry run: report what would change without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Enrich a prompt with memory context (for UserPromptSubmit hook)
     Enrich {
         /// Maximum memory results
@@ -122,18 +133,43 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Index { archive, projects, kb, batch_size, fresh, delay_ms } => {
-            run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await
-        }
+        Command::Index {
+            archive,
+            projects,
+            kb,
+            batch_size,
+            fresh,
+            delay_ms,
+        } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
-        Command::SearchPrompts { query, limit, source } => {
-            print_results(&index::search_prompts(&query, limit, source.as_deref()).await?)
-        }
-        Command::SearchAnswers { query, limit, source } => {
-            print_results(&index::search_answers(&query, limit, source.as_deref()).await?)
-        }
+        Command::SearchPrompts {
+            query,
+            limit,
+            source,
+        } => print_results(&index::search_prompts(&query, limit, source.as_deref()).await?),
+        Command::SearchAnswers {
+            query,
+            limit,
+            source,
+        } => print_results(&index::search_answers(&query, limit, source.as_deref()).await?),
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
-        Command::BuildGraph { kb } => run_build_graph(kb).await,
+        Command::BuildGraph { kb, fresh } => run_build_graph(kb, fresh).await,
+        Command::GraphClean {
+            max_passes,
+            dry_run,
+        } => {
+            let stats = graph::clean_graph(max_passes, dry_run)?;
+            eprintln!(
+                "Graph clean: {} pass(es), {} relationships seen, {} kept, {} removed, {} rewritten, {} entities removed",
+                stats.passes,
+                stats.relationships_seen,
+                stats.relationships_kept,
+                stats.relationships_removed,
+                stats.relationships_rewritten,
+                stats.entities_removed
+            );
+            Ok(())
+        }
         Command::Enrich { limit } => run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
@@ -152,7 +188,15 @@ async fn run_index_cmd(
     let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
     let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
     let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-    index::run_index(&archive_dir, &projects_dir, &kb_dir, batch_size, fresh, delay_ms).await
+    index::run_index(
+        &archive_dir,
+        &projects_dir,
+        &kb_dir,
+        batch_size,
+        fresh,
+        delay_ms,
+    )
+    .await
 }
 
 async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
@@ -163,7 +207,13 @@ async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
 
 fn print_results(results: &[index::SearchResult]) -> Result<()> {
     for (i, result) in results.iter().enumerate() {
-        println!("{}. [{}] {} (score: {:.3})", i + 1, result.source, result.path, result.score);
+        println!(
+            "{}. [{}] {} (score: {:.3})",
+            i + 1,
+            result.source,
+            result.path,
+            result.score
+        );
         let text = result.text.replace('\n', " ");
         if text.len() > 200 {
             println!("   {}...", &text[..200]);
@@ -174,8 +224,6 @@ fn print_results(results: &[index::SearchResult]) -> Result<()> {
     }
     Ok(())
 }
-
-// --- Deduplicate command ---
 
 async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
@@ -196,24 +244,36 @@ async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
     merge_clusters(&entries, &clusters).await
 }
 
-// --- Build graph command ---
-
-async fn run_build_graph(kb: bool) -> Result<()> {
+async fn run_build_graph(kb: bool, fresh: bool) -> Result<()> {
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
         anyhow::bail!("ANTHROPIC_API_KEY must be set for graph building (needs LLM to extract)");
     }
+    if fresh {
+        graph::clear_graph()?;
+    }
     let entries = load_all_memories().await?;
-    let mut extracted = extract_texts_to_graph(&entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), "memory").await?;
+    let mut extracted = extract_texts_to_graph(
+        &entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+        "memory",
+    )
+    .await?;
     if kb {
         let kb_texts = load_kb_texts()?;
-        extracted += extract_texts_to_graph(&kb_texts.iter().map(|s| s.as_str()).collect::<Vec<_>>(), "KB").await?;
+        extracted += extract_texts_to_graph(
+            &kb_texts.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            "KB",
+        )
+        .await?;
     }
     eprintln!("Total: {extracted} triplets");
     Ok(())
 }
 
 async fn extract_texts_to_graph(texts: &[&str], label: &str) -> Result<usize> {
-    eprintln!("Processing {} {label} entries for graph extraction", texts.len());
+    eprintln!(
+        "Processing {} {label} entries for graph extraction",
+        texts.len()
+    );
     let mut extracted = 0;
     for (i, text) in texts.iter().enumerate() {
         match graph::extract_and_store(text).await {
@@ -233,8 +293,13 @@ fn load_kb_texts() -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for dir_name in &include_dirs {
         let dir = kb_dir.join(dir_name);
-        if !dir.exists() { continue; }
-        for entry in walkdir::WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.extension().map(|e| e == "md").unwrap_or(false) {
                 if let Ok(content) = std::fs::read_to_string(path) {
@@ -249,15 +314,15 @@ fn load_kb_texts() -> Result<Vec<String>> {
     Ok(texts)
 }
 
-// --- Graph dump command ---
-
 fn run_graph_dump(limit: usize) -> Result<()> {
     let db = graph::get_graph()?;
-    let entities = db.run_script(
-        &format!("?[name, type] := *entities{{name, entity_type: type}} :limit {limit}"),
-        std::collections::BTreeMap::new(),
-        cozo::ScriptMutability::Immutable,
-    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let entities = db
+        .run_script(
+            &format!("?[name, type] := *entities{{name, entity_type: type}} :limit {limit}"),
+            std::collections::BTreeMap::new(),
+            cozo::ScriptMutability::Immutable,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("=== Entities ({} shown) ===", entities.rows.len());
     for row in &entities.rows {
         let name = row.first().and_then(|v| v.get_str()).unwrap_or("");
@@ -265,11 +330,15 @@ fn run_graph_dump(limit: usize) -> Result<()> {
         println!("  {name} [{etype}]");
     }
 
-    let rels = db.run_script(
-        &format!("?[src, rel, dst] := *relationships{{src, relation: rel, dst}} :limit {limit}"),
-        std::collections::BTreeMap::new(),
-        cozo::ScriptMutability::Immutable,
-    ).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let rels = db
+        .run_script(
+            &format!(
+                "?[src, rel, dst] := *relationships{{src, relation: rel, dst}} :limit {limit}"
+            ),
+            std::collections::BTreeMap::new(),
+            cozo::ScriptMutability::Immutable,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("\n=== Relationships ({} shown) ===", rels.rows.len());
     for row in &rels.rows {
         let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
@@ -332,7 +401,11 @@ fn format_memory_results(results: &[&index::SearchResult]) -> String {
     let mut out = String::from("Relevant memories:");
     for r in results {
         let text = r.text.replace('\n', " ");
-        let text = if text.len() > 300 { format!("{}...", &text[..300]) } else { text };
+        let text = if text.len() > 300 {
+            format!("{}...", &text[..300])
+        } else {
+            text
+        };
         out.push_str(&format!("\n- ({:.2}) {}", r.score, text));
     }
     out
@@ -406,16 +479,22 @@ async fn scroll_memory_entries(
             entries.push(point_to_entry(point));
         }
         offset = result.next_page_offset;
-        if offset.is_none() { break; }
+        if offset.is_none() {
+            break;
+        }
     }
     Ok(entries)
 }
 
 fn point_to_entry(point: &qdrant_client::qdrant::RetrievedPoint) -> MemoryEntry {
-    let id = point.id.as_ref().and_then(|p| match &p.point_id_options {
-        Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => Some(*n),
-        _ => None,
-    }).unwrap_or(0);
+    let id = point
+        .id
+        .as_ref()
+        .and_then(|p| match &p.point_id_options {
+            Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0);
     MemoryEntry {
         id,
         text: get_payload(&point.payload, "text"),
@@ -428,7 +507,8 @@ fn get_payload(
     payload: &std::collections::HashMap<String, qdrant_client::qdrant::Value>,
     key: &str,
 ) -> String {
-    payload.get(key)
+    payload
+        .get(key)
         .and_then(|v| v.kind.as_ref())
         .and_then(|k| match k {
             qdrant_client::qdrant::value::Kind::StringValue(s) => Some(s.clone()),
@@ -453,11 +533,15 @@ fn greedy_cluster(embeddings: &[Vec<f32>], threshold: f32) -> Vec<Vec<usize>> {
     let mut assigned = vec![false; n];
     let mut clusters: Vec<Vec<usize>> = Vec::new();
     for i in 0..n {
-        if assigned[i] { continue; }
+        if assigned[i] {
+            continue;
+        }
         let mut cluster = vec![i];
         assigned[i] = true;
         for j in (i + 1)..n {
-            if assigned[j] { continue; }
+            if assigned[j] {
+                continue;
+            }
             if cosine_sim(&embeddings[i], &embeddings[j]) >= threshold {
                 cluster.push(j);
                 assigned[j] = true;
@@ -476,18 +560,26 @@ fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
     dot / (norm_a * norm_b)
 }
 
 fn print_clusters(entries: &[MemoryEntry], clusters: &[Vec<usize>]) {
     for cluster in clusters {
-        if cluster.len() < 2 { continue; }
+        if cluster.len() < 2 {
+            continue;
+        }
         println!("--- Cluster ({} entries) ---", cluster.len());
         for &idx in cluster {
             let e = &entries[idx];
             let preview = e.text.replace('\n', " ");
-            let preview = if preview.len() > 100 { format!("{}...", &preview[..100]) } else { preview };
+            let preview = if preview.len() > 100 {
+                format!("{}...", &preview[..100])
+            } else {
+                preview
+            };
             println!("  [id={}] {}", e.id, preview);
         }
         println!();
@@ -507,9 +599,17 @@ async fn merge_clusters(entries: &[MemoryEntry], clusters: &[Vec<usize>]) -> Res
     let mut deleted_count = 0u32;
 
     for cluster in clusters {
-        if cluster.len() < 2 { continue; }
+        if cluster.len() < 2 {
+            continue;
+        }
         let preview = preview_text(&entries[cluster[0]].text, 60);
-        eprintln!("\n  Cluster {}/{} ({} entries): {}", merged_count + failed_count + 1, merge_total, cluster.len(), preview);
+        eprintln!(
+            "\n  Cluster {}/{} ({} entries): {}",
+            merged_count + failed_count + 1,
+            merge_total,
+            cluster.len(),
+            preview
+        );
         for &idx in &cluster[1..] {
             eprintln!("    + {}", preview_text(&entries[idx].text, 60));
         }
@@ -521,9 +621,15 @@ async fn merge_clusters(entries: &[MemoryEntry], clusters: &[Vec<usize>]) -> Res
         upsert_merged(&client, &embedder, &entries[cluster[0]], &text).await?;
         deleted_count += delete_cluster_extras(&client, entries, cluster).await?;
         merged_count += 1;
-        eprintln!("    OK: merged into {} chars, deleted {} dupes", text.len(), cluster.len() - 1);
+        eprintln!(
+            "    OK: merged into {} chars, deleted {} dupes",
+            text.len(),
+            cluster.len() - 1
+        );
     }
-    eprintln!("\nDone: {merged_count} merged, {failed_count} failed, {deleted_count} duplicates removed");
+    eprintln!(
+        "\nDone: {merged_count} merged, {failed_count} failed, {deleted_count} duplicates removed"
+    );
     Ok(())
 }
 
@@ -540,8 +646,10 @@ async fn upsert_merged(
     let named = build_named_vectors(embedding, text);
     let payload = build_merged_payload(text, &keep.category, &keep.project);
     let point = PointStruct::new(keep.id, named, payload);
-    client.upsert_points(UpsertPointsBuilder::new("claude-memory", vec![point]))
-        .await.context("upsert failed")?;
+    client
+        .upsert_points(UpsertPointsBuilder::new("claude-memory", vec![point]))
+        .await
+        .context("upsert failed")?;
     Ok(())
 }
 
@@ -553,11 +661,17 @@ fn build_merged_payload(
     [
         ("text", text.to_string().into()),
         ("source", "memory".to_string().into()),
-        ("path", format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md")).into()),
+        (
+            "path",
+            format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md")).into(),
+        ),
         ("category", category.to_string().into()),
         ("project", project.to_string().into()),
         ("hash", claude_memory::chunk::hash_text(text).into()),
-    ].into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect()
 }
 
 async fn delete_cluster_extras(
@@ -568,11 +682,15 @@ async fn delete_cluster_extras(
     use qdrant_client::qdrant::DeletePointsBuilder;
 
     let ids: Vec<u64> = cluster[1..].iter().map(|&idx| entries[idx].id).collect();
-    if ids.is_empty() { return Ok(0); }
+    if ids.is_empty() {
+        return Ok(0);
+    }
     let count = ids.len() as u32;
     let point_ids: Vec<qdrant_client::qdrant::PointId> = ids.iter().map(|&id| id.into()).collect();
-    client.delete_points(DeletePointsBuilder::new("claude-memory").points(point_ids))
-        .await.context("delete failed")?;
+    client
+        .delete_points(DeletePointsBuilder::new("claude-memory").points(point_ids))
+        .await
+        .context("delete failed")?;
     Ok(count)
 }
 
@@ -614,7 +732,10 @@ mod tests {
     fn cosine_sim_identical() {
         let v = vec![1.0f32, 2.0, 3.0];
         let result = cosine_sim(&v, &v);
-        assert!((result - 1.0).abs() < 1e-6, "identical vectors should give 1.0, got {result}");
+        assert!(
+            (result - 1.0).abs() < 1e-6,
+            "identical vectors should give 1.0, got {result}"
+        );
     }
 
     #[test]
@@ -622,7 +743,10 @@ mod tests {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![0.0f32, 1.0, 0.0];
         let result = cosine_sim(&a, &b);
-        assert!((result - 0.0).abs() < 1e-6, "orthogonal vectors should give 0.0, got {result}");
+        assert!(
+            (result - 0.0).abs() < 1e-6,
+            "orthogonal vectors should give 0.0, got {result}"
+        );
     }
 
     #[test]
@@ -630,7 +754,10 @@ mod tests {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![-1.0f32, 0.0, 0.0];
         let result = cosine_sim(&a, &b);
-        assert!((result - (-1.0)).abs() < 1e-6, "opposite vectors should give -1.0, got {result}");
+        assert!(
+            (result - (-1.0)).abs() < 1e-6,
+            "opposite vectors should give -1.0, got {result}"
+        );
     }
 
     #[test]
@@ -641,7 +768,10 @@ mod tests {
         let result = cosine_sim(&zero, &other);
         assert_eq!(result, 0.0, "zero vector should return 0.0, got {result}");
         let result2 = cosine_sim(&zero, &zero);
-        assert_eq!(result2, 0.0, "two zero vectors should return 0.0, got {result2}");
+        assert_eq!(
+            result2, 0.0,
+            "two zero vectors should return 0.0, got {result2}"
+        );
     }
 
     // --- greedy_cluster ---
@@ -652,7 +782,11 @@ mod tests {
         let v = vec![1.0f32, 0.0, 0.0];
         let embeddings = vec![v.clone(), v.clone(), v.clone()];
         let clusters = greedy_cluster(&embeddings, 0.99);
-        assert_eq!(clusters.len(), 1, "identical vectors should form one cluster");
+        assert_eq!(
+            clusters.len(),
+            1,
+            "identical vectors should form one cluster"
+        );
         assert_eq!(clusters[0].len(), 3);
     }
 
@@ -665,7 +799,11 @@ mod tests {
             vec![0.0f32, 0.0, 1.0],
         ];
         let clusters = greedy_cluster(&embeddings, 0.5);
-        assert_eq!(clusters.len(), 3, "orthogonal vectors should form separate clusters");
+        assert_eq!(
+            clusters.len(),
+            3,
+            "orthogonal vectors should form separate clusters"
+        );
         for c in &clusters {
             assert_eq!(c.len(), 1);
         }
@@ -679,11 +817,19 @@ mod tests {
         let b = vec![0.0f32, 1.0];
         // threshold = 0.0: sim(a,b)=0.0 >= 0.0 → one cluster
         let clusters_inc = greedy_cluster(&[a.clone(), b.clone()], 0.0);
-        assert_eq!(clusters_inc.len(), 1, "threshold 0.0 should include all non-negative pairs");
+        assert_eq!(
+            clusters_inc.len(),
+            1,
+            "threshold 0.0 should include all non-negative pairs"
+        );
 
         // threshold = 0.01: sim(a,b)=0.0 < 0.01 → two clusters
         let clusters_exc = greedy_cluster(&[a, b], 0.01);
-        assert_eq!(clusters_exc.len(), 2, "threshold 0.01 should exclude orthogonal pair");
+        assert_eq!(
+            clusters_exc.len(),
+            2,
+            "threshold 0.01 should exclude orthogonal pair"
+        );
     }
 
     #[test]
@@ -720,7 +866,10 @@ mod tests {
     fn preview_text_newlines_replaced() {
         let text = "line one\nline two\nline three";
         let result = preview_text(text, 200);
-        assert!(!result.contains('\n'), "newlines should be replaced with spaces");
+        assert!(
+            !result.contains('\n'),
+            "newlines should be replaced with spaces"
+        );
         assert_eq!(result, "line one line two line three");
     }
 
@@ -729,7 +878,7 @@ mod tests {
         // Each emoji is 4 bytes; max_len=4 lands exactly on a char boundary (one emoji).
         // max_len=5 would be mid-emoji and cause a panic in the naive byte slice.
         // The implementation uses byte-level slicing, so we only test a safe boundary.
-        let text = "😀😁😂";  // 12 bytes total
+        let text = "😀😁😂"; // 12 bytes total
         // max_len=4 → slices exactly one emoji → no panic
         let result = preview_text(text, 4);
         assert!(result.starts_with("😀"), "should preserve first emoji");

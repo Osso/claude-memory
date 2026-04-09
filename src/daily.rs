@@ -67,7 +67,9 @@ pub fn append_daily(content: &str, category: Option<&str>, project: Option<&str>
 
 /// Get the project memory file path.
 pub fn project_path(project: &str) -> PathBuf {
-    memory_dir().join("projects").join(format!("{}.md", project))
+    memory_dir()
+        .join("projects")
+        .join(format!("{}.md", project))
 }
 
 /// Append to a project's memory file.
@@ -93,7 +95,11 @@ pub fn append_project(project: &str, content: &str) -> Result<()> {
 /// Append a memory entry to KB for durable storage.
 /// Writes to /syncthing/Sync/KB/memory/{category}.md (grouped by category).
 /// Falls back silently if KB dir doesn't exist (non-syncthing machines).
-pub fn append_kb_memory(content: &str, category: Option<&str>, project: Option<&str>) -> Result<()> {
+pub fn append_kb_memory(
+    content: &str,
+    category: Option<&str>,
+    project: Option<&str>,
+) -> Result<()> {
     let kb_dir = kb_memory_dir();
     if !kb_dir.parent().map(|p| p.exists()).unwrap_or(false) {
         return Ok(()); // KB not mounted

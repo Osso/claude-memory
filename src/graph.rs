@@ -1,5 +1,8 @@
 //! CozoDB embedded graph database for entity-relationship storage.
 
+mod clean;
+mod sanitize;
+
 use anyhow::{Context, Result};
 use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 use std::collections::BTreeMap;
@@ -18,6 +21,8 @@ Bad: \"/etc/authd/\", \"--json\", \"120 FPS\", \"575 Watts\", \"04-external-serv
 \"23000+ organizations\", \"0.8.x\", \"1Gi memory limit\", \"49 rotation keyframes\" \
 Example: [[\"authd\", \"written_in\", \"Rust\"], [\"authd\", \"replaces\", \"polkit\"]] \
 If no clear relationships exist, return: []";
+
+pub use clean::GraphCleanStats;
 
 pub fn get_graph() -> Result<&'static DbInstance> {
     if let Some(db) = GRAPH.get() {
@@ -39,6 +44,14 @@ pub fn get_graph() -> Result<&'static DbInstance> {
         .set(db)
         .map_err(|_| anyhow::anyhow!("graph already initialized"))?;
     Ok(GRAPH.get().unwrap())
+}
+
+pub fn clean_graph(max_passes: usize, dry_run: bool) -> Result<GraphCleanStats> {
+    clean::clean_graph(max_passes, dry_run)
+}
+
+pub fn clear_graph() -> Result<()> {
+    clean::clear_graph()
 }
 
 fn ensure_schema(db: &DbInstance) -> Result<()> {
@@ -133,7 +146,9 @@ fn parse_triplets(text: &str) -> Result<Vec<(String, String, String)>> {
                     let r = inner[1].as_str().unwrap_or("").to_string();
                     let o = inner[2].as_str().unwrap_or("").to_string();
                     if !s.is_empty() && !r.is_empty() && !o.is_empty() {
-                        triplets.push((s, r, o));
+                        if let Some(triplet) = sanitize::sanitize_triplet(&s, &r, &o) {
+                            triplets.push(triplet);
+                        }
                     }
                 }
             }
@@ -150,11 +165,12 @@ fn store_triplet(
     object: &str,
     source_text: &str,
 ) -> Result<()> {
-    if !is_valid_entity(subject) || !is_valid_entity(object) {
+    let Some((subject, relation, object)) = sanitize::sanitize_triplet(subject, relation, object)
+    else {
         return Ok(());
-    }
-    store_entity(db, subject, source_text)?;
-    store_entity(db, object, source_text)?;
+    };
+    store_entity(db, &subject, source_text)?;
+    store_entity(db, &object, source_text)?;
 
     let params = BTreeMap::from([
         ("src".to_string(), DataValue::Str(subject.into())),
@@ -192,56 +208,27 @@ fn store_entity(db: &DbInstance, name: &str, source_text: &str) -> Result<()> {
 }
 
 /// Reject entities that are code artifacts, not real concepts.
+#[cfg(test)]
 fn is_valid_entity(name: &str) -> bool {
-    if name.len() < 2 || name.len() > 60 {
-        return false;
-    }
-    if name.starts_with('/') || name.starts_with('.') || name.contains("/.") {
-        return false;
-    }
-    if name.contains('/') {
-        return false;
-    }
-    if name.starts_with('-') || name.starts_with('+') || name.starts_with('@')
-        || name.starts_with('$') || name.starts_with('#') || name.starts_with('&')
-    {
-        return false;
-    }
-    if name.split_whitespace().count() > 4 {
-        return false;
-    }
-    if looks_like_number_or_hash(name) {
-        return false;
-    }
-    if name.contains(".*") || name.contains("$(") || name.contains("=>") {
-        return false;
-    }
-    if name.contains('(') || name.contains(')') || name.contains('<') || name.contains('>') {
-        return false;
-    }
-    if name.contains('%') || name.contains('\'') || name.contains('"') {
-        return false;
-    }
-    if has_file_extension(name) {
-        return false;
-    }
-    if first_word_is_numeric(name) {
-        return false;
-    }
-    true
+    sanitize::is_valid_entity_name(name)
 }
 
 /// Known-good numeric prefixes: 2D, 3D, 2FA, 4K, etc.
+#[cfg(test)]
 const GOOD_NUM_PREFIXES: &[&str] = &["2d", "3d", "2fa", "4k"];
 
 /// Reject entities whose first word is a bare number or number+unit.
 /// Allows well-known prefixes like 2D, 3D, 2FA, 4K.
+#[cfg(test)]
 fn first_word_is_numeric(name: &str) -> bool {
     let first = match name.split_whitespace().next() {
         Some(w) => w,
         None => return true,
     };
-    if GOOD_NUM_PREFIXES.iter().any(|p| first.eq_ignore_ascii_case(p)) {
+    if GOOD_NUM_PREFIXES
+        .iter()
+        .any(|p| first.eq_ignore_ascii_case(p))
+    {
         return false;
     }
     if !first.starts_with(|c: char| c.is_ascii_digit()) {
@@ -260,21 +247,24 @@ fn first_word_is_numeric(name: &str) -> bool {
     !digit_prefix.is_empty() && rest.len() <= 3
 }
 
+#[cfg(test)]
 fn has_file_extension(name: &str) -> bool {
     const EXTS: &[&str] = &[
-        ".md", ".rs", ".js", ".ts", ".tsx", ".php", ".py", ".toml",
-        ".yaml", ".yml", ".json", ".html", ".css", ".go", ".sh",
+        ".md", ".rs", ".js", ".ts", ".tsx", ".php", ".py", ".toml", ".yaml", ".yml", ".json",
+        ".html", ".css", ".go", ".sh",
     ];
     EXTS.iter().any(|ext| name.ends_with(ext))
 }
 
+#[cfg(test)]
 fn looks_like_number_or_hash(name: &str) -> bool {
     let stripped = name.replace(['.', ',', ' ', '-', '_', '%', '+'], "");
     if stripped.is_empty() {
         return true;
     }
-    stripped.chars().all(|c| c.is_ascii_digit() || c.is_ascii_hexdigit()
-        || "KMGBikb".contains(c))
+    stripped
+        .chars()
+        .all(|c| c.is_ascii_digit() || c.is_ascii_hexdigit() || "KMGBikb".contains(c))
 }
 
 /// Maximum triplets returned from graph enrichment.
@@ -370,7 +360,9 @@ fn score_entity_names(
         "?[name] := *entities{name, entity_type, source_text}",
         BTreeMap::new(),
         ScriptMutability::Immutable,
-    ) else { return };
+    ) else {
+        return;
+    };
 
     for row in &r.rows {
         if let Some(name) = row.first().and_then(|v| v.get_str()) {
@@ -391,7 +383,9 @@ fn score_relationships(
         "?[src, dst] := *relationships{src, dst}",
         BTreeMap::new(),
         ScriptMutability::Immutable,
-    ) else { return };
+    ) else {
+        return;
+    };
 
     for row in &r.rows {
         let src = row.first().and_then(|v| v.get_str()).unwrap_or("");
@@ -430,21 +424,21 @@ fn extract_keywords(query: &str) -> Vec<String> {
 
 fn stop_words() -> std::collections::HashSet<&'static str> {
     [
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-        "on", "with", "at", "by", "from", "as", "into", "about", "between",
-        "through", "after", "before", "and", "but", "or", "not", "no", "if",
-        "then", "so", "than", "that", "this", "these", "those", "it", "its",
-        "my", "your", "his", "her", "our", "their", "what", "which", "who",
-        "when", "where", "how", "why", "all", "each", "every", "any", "some",
-        "i", "me", "we", "you", "he", "she", "they", "them", "let", "us",
-        "yes", "no", "just", "also", "very", "much", "more", "most", "well",
-        "now", "here", "there", "still", "already", "yet", "too", "only",
-        "work", "use", "make", "get", "set", "run", "fix", "add", "try",
-        "want", "need", "know", "think", "look", "find", "give", "tell",
-        "first", "new", "old", "last", "next", "same", "other", "like",
-    ].iter().copied().collect()
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+        "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about",
+        "between", "through", "after", "before", "and", "but", "or", "not", "no", "if", "then",
+        "so", "than", "that", "this", "these", "those", "it", "its", "my", "your", "his", "her",
+        "our", "their", "what", "which", "who", "when", "where", "how", "why", "all", "each",
+        "every", "any", "some", "i", "me", "we", "you", "he", "she", "they", "them", "let", "us",
+        "yes", "no", "just", "also", "very", "much", "more", "most", "well", "now", "here",
+        "there", "still", "already", "yet", "too", "only", "work", "use", "make", "get", "set",
+        "run", "fix", "add", "try", "want", "need", "know", "think", "look", "find", "give",
+        "tell", "first", "new", "old", "last", "next", "same", "other", "like",
+    ]
+    .iter()
+    .copied()
+    .collect()
 }
 
 /// Count how many keywords match entity words (exact word match only).
@@ -454,7 +448,10 @@ fn entity_keyword_score(entity: &str, keywords: &[String]) -> usize {
         .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
         .filter(|w| w.len() >= 2)
         .collect();
-    keywords.iter().filter(|kw| entity_words.iter().any(|ew| ew == kw)).count()
+    keywords
+        .iter()
+        .filter(|kw| entity_words.iter().any(|ew| ew == kw))
+        .count()
 }
 
 #[cfg(test)]
@@ -669,8 +666,22 @@ mod tests {
         let input = r#"[["authd", "written_in", "Rust"], ["authd", "replaces", "polkit"]]"#;
         let result = parse_triplets(input).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], ("authd".to_string(), "written_in".to_string(), "Rust".to_string()));
-        assert_eq!(result[1], ("authd".to_string(), "replaces".to_string(), "polkit".to_string()));
+        assert_eq!(
+            result[0],
+            (
+                "authd".to_string(),
+                "written_in".to_string(),
+                "Rust".to_string()
+            )
+        );
+        assert_eq!(
+            result[1],
+            (
+                "authd".to_string(),
+                "replaces".to_string(),
+                "polkit".to_string()
+            )
+        );
     }
 
     #[test]
@@ -688,26 +699,35 @@ mod tests {
     #[test]
     fn parse_triplets_skips_incomplete_triplets() {
         // Inner arrays with fewer than 3 elements are skipped
-        let input = r#"[["only", "two"], ["a", "b", "c"]]"#;
+        let input = r#"[["only", "two"], ["authd", "uses", "Rust"]]"#;
         let result = parse_triplets(input).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("a".to_string(), "b".to_string(), "c".to_string()));
+        assert_eq!(
+            result[0],
+            ("authd".to_string(), "uses".to_string(), "Rust".to_string())
+        );
     }
 
     #[test]
     fn parse_triplets_skips_empty_string_fields() {
-        let input = r#"[["", "rel", "obj"], ["sub", "rel", "obj"]]"#;
+        let input = r#"[["", "rel", "obj"], ["Qdrant", "uses", "Rust"]]"#;
         let result = parse_triplets(input).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("sub".to_string(), "rel".to_string(), "obj".to_string()));
+        assert_eq!(
+            result[0],
+            ("Qdrant".to_string(), "uses".to_string(), "Rust".to_string())
+        );
     }
 
     #[test]
     fn parse_triplets_strips_prose_wrapper() {
-        let input = r#"Here are the triplets: [["Rust", "is", "fast"]] done."#;
+        let input = r#"Here are the triplets: [["Qdrant", "uses", "Rust"]] done."#;
         let result = parse_triplets(input).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ("Rust".to_string(), "is".to_string(), "fast".to_string()));
+        assert_eq!(
+            result[0],
+            ("Qdrant".to_string(), "uses".to_string(), "Rust".to_string())
+        );
     }
 
     // --- triplet_matches_keywords ---
@@ -715,24 +735,38 @@ mod tests {
     #[test]
     fn triplet_matches_keywords_on_src() {
         let kws = vec!["rust".to_string()];
-        assert!(triplet_matches_keywords("Rust", "written_in", "authd", &kws));
+        assert!(triplet_matches_keywords(
+            "Rust",
+            "written_in",
+            "authd",
+            &kws
+        ));
     }
 
     #[test]
     fn triplet_matches_keywords_on_dst() {
         let kws = vec!["polkit".to_string()];
-        assert!(triplet_matches_keywords("authd", "replaces", "polkit", &kws));
+        assert!(triplet_matches_keywords(
+            "authd", "replaces", "polkit", &kws
+        ));
     }
 
     #[test]
     fn triplet_matches_keywords_on_relation() {
         let kws = vec!["replaces".to_string()];
-        assert!(triplet_matches_keywords("authd", "replaces", "polkit", &kws));
+        assert!(triplet_matches_keywords(
+            "authd", "replaces", "polkit", &kws
+        ));
     }
 
     #[test]
     fn triplet_matches_keywords_false_on_no_match() {
         let kws = vec!["postgres".to_string()];
-        assert!(!triplet_matches_keywords("authd", "replaces", "polkit", &kws));
+        assert!(!triplet_matches_keywords(
+            "authd", "replaces", "polkit", &kws
+        ));
     }
 }
+
+#[cfg(test)]
+mod clean_tests;

@@ -90,8 +90,7 @@ fn filter_new_deduplicates_within_input() {
 
 #[test]
 fn get_string_returns_value_for_known_key() {
-    let payload: HashMap<String, Value> =
-        [("text".to_string(), str_value("hello"))].into();
+    let payload: HashMap<String, Value> = [("text".to_string(), str_value("hello"))].into();
     assert_eq!(get_string(&payload, "text"), "hello");
 }
 
@@ -114,8 +113,7 @@ fn get_string_returns_empty_for_non_string_value() {
 
 #[test]
 fn get_string_returns_empty_for_null_kind() {
-    let payload: HashMap<String, Value> =
-        [("empty".to_string(), Value { kind: None })].into();
+    let payload: HashMap<String, Value> = [("empty".to_string(), Value { kind: None })].into();
     assert_eq!(get_string(&payload, "empty"), "");
 }
 

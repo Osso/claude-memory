@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use crate::chunk::{chunk_text, Chunk};
+use crate::chunk::{Chunk, chunk_text};
 
 #[derive(Debug, Clone)]
 pub struct IndexedChunk {
@@ -365,7 +365,11 @@ pub fn extract_markdown(path: &Path, base_path: &Path) -> Result<Vec<IndexedChun
         .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
     // Files under memory/ subdir are tagged as source=memory
-    let source = if rel_path.starts_with("memory/") { "memory" } else { "kb" };
+    let source = if rel_path.starts_with("memory/") {
+        "memory"
+    } else {
+        "kb"
+    };
 
     Ok(chunk_text(&text)
         .into_iter()

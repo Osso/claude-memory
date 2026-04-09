@@ -201,8 +201,14 @@ mod tests {
     #[test]
     fn build_filter_user_message_format() {
         let results = vec![
-            RawResult { text: "alpha".to_string(), score: 0.9 },
-            RawResult { text: "beta".to_string(), score: 0.7 },
+            RawResult {
+                text: "alpha".to_string(),
+                score: 0.9,
+            },
+            RawResult {
+                text: "beta".to_string(),
+                score: 0.7,
+            },
         ];
         let msg = build_filter_user_message("my query", &results);
         assert!(msg.starts_with("Query: my query\n\nResults:\n"));

@@ -1,11 +1,11 @@
 //! Qdrant indexing and search.
 
 use anyhow::{Context, Result};
-use qdrant_client::qdrant::{
-    Condition, Filter, PointStruct, ScrollPointsBuilder, SearchPointsBuilder,
-    UpsertPointsBuilder, Value,
-};
 use qdrant_client::Qdrant;
+use qdrant_client::qdrant::{
+    Condition, Filter, PointStruct, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
+    Value,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,8 +13,8 @@ use walkdir::WalkDir;
 
 use crate::embed::Embedder;
 use crate::extract::{
-    extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary, extract_zst,
-    extract_zst_answers, IndexedChunk,
+    IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary,
+    extract_zst, extract_zst_answers,
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
@@ -60,8 +60,7 @@ pub async fn run_index(
         index_all_prompts(&state, projects_dir, &jsonls, &archives, kb_dir).await?;
 
     eprintln!("\n=== Indexing answers (assistant responses) ===");
-    let answers_indexed =
-        index_all_answers(&state, projects_dir, &jsonls, &archives).await?;
+    let answers_indexed = index_all_answers(&state, projects_dir, &jsonls, &archives).await?;
 
     eprintln!(
         "\nDone! Prompts indexed: {}, Answers indexed: {}",
@@ -70,11 +69,7 @@ pub async fn run_index(
     Ok(())
 }
 
-async fn init_index_state(
-    batch_size: usize,
-    fresh: bool,
-    delay_ms: u64,
-) -> Result<IndexState> {
+async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Result<IndexState> {
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
@@ -136,8 +131,14 @@ fn collect_jsonl_files(projects_dir: &Path) -> Vec<walkdir::DirEntry> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path().extension().map(|ext| ext == "jsonl").unwrap_or(false)
-                && e.path().file_name().map(|f| f != "sessions-index.json").unwrap_or(true)
+            e.path()
+                .extension()
+                .map(|ext| ext == "jsonl")
+                .unwrap_or(false)
+                && e.path()
+                    .file_name()
+                    .map(|f| f != "sessions-index.json")
+                    .unwrap_or(true)
         })
         .collect()
 }
@@ -201,7 +202,12 @@ async fn index_summaries(
     let summaries: Vec<_> = WalkDir::new(projects_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().file_name().map(|f| f == "summary.md").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .map(|f| f == "summary.md")
+                .unwrap_or(false)
+        })
         .collect();
 
     let mut indexed = 0;
@@ -210,11 +216,23 @@ async fn index_summaries(
         let path = entry.path();
         match extract_summary(path, projects_dir) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.prompt_hashes, &state.prompt_next_id, COLLECTION_PROMPTS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.prompt_hashes,
+                    &state.prompt_next_id,
+                    COLLECTION_PROMPTS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
         }
-        eprint!("\r  Summaries: {}/{} (indexed: {})", i + 1, summaries.len(), base_indexed + indexed);
+        eprint!(
+            "\r  Summaries: {}/{} (indexed: {})",
+            i + 1,
+            summaries.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
@@ -232,11 +250,23 @@ async fn index_session_prompts(
         let path = entry.path();
         match extract_jsonl(path, projects_dir) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.prompt_hashes, &state.prompt_next_id, COLLECTION_PROMPTS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.prompt_hashes,
+                    &state.prompt_next_id,
+                    COLLECTION_PROMPTS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
         }
-        eprint!("\r  Sessions: {}/{} (indexed: {})", i + 1, jsonls.len(), base_indexed + indexed);
+        eprint!(
+            "\r  Sessions: {}/{} (indexed: {})",
+            i + 1,
+            jsonls.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
@@ -253,21 +283,29 @@ async fn index_archive_prompts(
         let path = entry.path();
         match extract_zst(&path) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.prompt_hashes, &state.prompt_next_id, COLLECTION_PROMPTS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.prompt_hashes,
+                    &state.prompt_next_id,
+                    COLLECTION_PROMPTS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
         }
-        eprint!("\r  Archives: {}/{} (indexed: {})", i + 1, archives.len(), base_indexed + indexed);
+        eprint!(
+            "\r  Archives: {}/{} (indexed: {})",
+            i + 1,
+            archives.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
 }
 
-async fn index_kb_files(
-    state: &IndexState,
-    kb_dir: &Path,
-    base_indexed: usize,
-) -> Result<usize> {
+async fn index_kb_files(state: &IndexState, kb_dir: &Path, base_indexed: usize) -> Result<usize> {
     if !kb_dir.exists() {
         return Ok(0);
     }
@@ -283,11 +321,23 @@ async fn index_kb_files(
         let path = entry.path();
         match extract_markdown(path, kb_dir) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.prompt_hashes, &state.prompt_next_id, COLLECTION_PROMPTS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.prompt_hashes,
+                    &state.prompt_next_id,
+                    COLLECTION_PROMPTS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
         }
-        eprint!("\r  KB: {}/{} (indexed: {})", i + 1, markdowns.len(), base_indexed + indexed);
+        eprint!(
+            "\r  KB: {}/{} (indexed: {})",
+            i + 1,
+            markdowns.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
@@ -305,11 +355,23 @@ async fn index_session_answers(
         let path = entry.path();
         match extract_jsonl_answers(path, projects_dir) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.answer_hashes, &state.answer_next_id, COLLECTION_ANSWERS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.answer_hashes,
+                    &state.answer_next_id,
+                    COLLECTION_ANSWERS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract answers {}: {}", path.display(), e),
         }
-        eprint!("\r  Sessions: {}/{} (indexed: {})", i + 1, jsonls.len(), base_indexed + indexed);
+        eprint!(
+            "\r  Sessions: {}/{} (indexed: {})",
+            i + 1,
+            jsonls.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
@@ -326,11 +388,23 @@ async fn index_archive_answers(
         let path = entry.path();
         match extract_zst_answers(&path) {
             Ok(chunks) => {
-                indexed += index_new_chunks(state, &chunks, &state.answer_hashes, &state.answer_next_id, COLLECTION_ANSWERS).await?;
+                indexed += index_new_chunks(
+                    state,
+                    &chunks,
+                    &state.answer_hashes,
+                    &state.answer_next_id,
+                    COLLECTION_ANSWERS,
+                )
+                .await?;
             }
             Err(e) => tracing::warn!("Failed to extract answers {}: {}", path.display(), e),
         }
-        eprint!("\r  Archives: {}/{} (indexed: {})", i + 1, archives.len(), base_indexed + indexed);
+        eprint!(
+            "\r  Archives: {}/{} (indexed: {})",
+            i + 1,
+            archives.len(),
+            base_indexed + indexed
+        );
     }
     eprintln!();
     Ok(indexed)
@@ -439,7 +513,10 @@ async fn search_collection(
         .with_payload(true);
 
     if let Some(src) = source {
-        search = search.filter(Filter::must([Condition::matches("source", src.to_string())]));
+        search = search.filter(Filter::must([Condition::matches(
+            "source",
+            src.to_string(),
+        )]));
     }
 
     let results = client
@@ -449,7 +526,9 @@ async fn search_collection(
     Ok(build_search_results(results.result))
 }
 
-pub(crate) fn build_search_results(points: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<SearchResult> {
+pub(crate) fn build_search_results(
+    points: Vec<qdrant_client::qdrant::ScoredPoint>,
+) -> Vec<SearchResult> {
     points
         .into_iter()
         .map(|point| {
@@ -493,11 +572,23 @@ pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
     let mut total = 0;
 
     total += index_file_prompts(
-        path, &client, &embedder, batch_size, &prompt_hashes, &prompt_next_id,
-    ).await?;
+        path,
+        &client,
+        &embedder,
+        batch_size,
+        &prompt_hashes,
+        &prompt_next_id,
+    )
+    .await?;
     total += index_file_answers(
-        path, &client, &embedder, batch_size, &answer_hashes, &answer_next_id,
-    ).await?;
+        path,
+        &client,
+        &embedder,
+        batch_size,
+        &answer_hashes,
+        &answer_next_id,
+    )
+    .await?;
 
     Ok(total)
 }
@@ -523,7 +614,16 @@ async fn index_file_prompts(
     if new_chunks.is_empty() {
         return Ok(0);
     }
-    index_chunks(client, embedder, &new_chunks, batch_size, next_id, COLLECTION_PROMPTS, 0).await
+    index_chunks(
+        client,
+        embedder,
+        &new_chunks,
+        batch_size,
+        next_id,
+        COLLECTION_PROMPTS,
+        0,
+    )
+    .await
 }
 
 async fn index_file_answers(
@@ -547,7 +647,16 @@ async fn index_file_answers(
     if new_chunks.is_empty() {
         return Ok(0);
     }
-    index_chunks(client, embedder, &new_chunks, batch_size, next_id, COLLECTION_ANSWERS, 0).await
+    index_chunks(
+        client,
+        embedder,
+        &new_chunks,
+        batch_size,
+        next_id,
+        COLLECTION_ANSWERS,
+        0,
+    )
+    .await
 }
 
 /// Show collection statistics.
@@ -556,7 +665,10 @@ pub async fn show_stats() -> Result<()> {
         .build()
         .context("failed to connect to Qdrant")?;
 
-    for (label, name) in [("Prompts", COLLECTION_PROMPTS), ("Answers", COLLECTION_ANSWERS)] {
+    for (label, name) in [
+        ("Prompts", COLLECTION_PROMPTS),
+        ("Answers", COLLECTION_ANSWERS),
+    ] {
         if let Ok(info) = client.collection_info(name).await {
             let points = info.result.and_then(|r| r.points_count).unwrap_or(0);
             println!("{} ({}): {} points", label, name, points);
@@ -620,14 +732,21 @@ fn build_points(
         .collect()
 }
 
-fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>, next_id: &AtomicU64) -> PointStruct {
+fn build_single_point(
+    chunk: &IndexedChunk,
+    embedding: Vec<f32>,
+    next_id: &AtomicU64,
+) -> PointStruct {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let named = build_named_vectors(embedding, &chunk.chunk.text);
     let payload: HashMap<String, Value> = [
         ("text", chunk.chunk.text.clone().into()),
         ("source", chunk.source.clone().into()),
         ("path", chunk.path.clone().into()),
-        ("session_id", chunk.session_id.clone().unwrap_or_default().into()),
+        (
+            "session_id",
+            chunk.session_id.clone().unwrap_or_default().into(),
+        ),
         ("hash", chunk.chunk.hash.clone().into()),
     ]
     .into_iter()
@@ -639,4 +758,3 @@ fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>, next_id: &Atomi
 #[cfg(test)]
 #[path = "index_tests.rs"]
 mod index_tests;
-

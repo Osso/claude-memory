@@ -6,22 +6,22 @@ use claude_memory::daily::{append_daily, append_kb_memory};
 use claude_memory::embed::Embedder;
 use claude_memory::graph;
 use claude_memory::llm::{self, RawResult};
-use claude_memory::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection, BM25_MODEL};
+use claude_memory::qdrant_hybrid::{BM25_MODEL, build_named_vectors, ensure_hybrid_collection};
+use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     Condition, Document, Filter, Fusion, PointStruct, PrefetchQueryBuilder, Query,
     QueryPointsBuilder, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
 };
-use qdrant_client::Qdrant;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
+use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::OnceCell;
 
 fn log(msg: &str) {
@@ -117,10 +117,7 @@ fn format_scored_point(i: usize, point: &qdrant_client::qdrant::ScoredPoint) -> 
     )
 }
 
-fn get_payload_str(
-    payload: &HashMap<String, qdrant_client::qdrant::Value>,
-    key: &str,
-) -> String {
+fn get_payload_str(payload: &HashMap<String, qdrant_client::qdrant::Value>, key: &str) -> String {
     payload
         .get(key)
         .and_then(|v| v.kind.as_ref())
@@ -162,7 +159,9 @@ pub struct SearchParams {
     query: String,
     #[schemars(description = "Maximum results (default: 5)")]
     limit: Option<usize>,
-    #[schemars(description = "Filter by source type: \"memory\" (manually added), \"session\", \"archive\", \"summary\", \"kb\"")]
+    #[schemars(
+        description = "Filter by source type: \"memory\" (manually added), \"session\", \"archive\", \"summary\", \"kb\""
+    )]
     source: Option<String>,
 }
 
@@ -176,7 +175,9 @@ pub struct MemoryListParams {
 
 #[tool_router]
 impl MemoryService {
-    #[tool(description = "Store a memory entry. Use for: corrections (when user corrects a mistake), preferences (how user likes things done), learnings (new knowledge), decisions (architectural choices), context (ongoing project state).")]
+    #[tool(
+        description = "Store a memory entry. Use for: corrections (when user corrects a mistake), preferences (how user likes things done), learnings (new knowledge), decisions (architectural choices), context (ongoing project state)."
+    )]
     async fn memory_write(&self, Parameters(params): Parameters<MemoryWriteParams>) -> String {
         match self.do_memory_write(params).await {
             Ok(msg) => msg,
@@ -184,38 +185,70 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Search user prompts, questions, and knowledge base. Use to find what was asked or discussed.")]
+    #[tool(
+        description = "Search user prompts, questions, and knowledge base. Use to find what was asked or discussed."
+    )]
     async fn prompt_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         log("tool: prompt_search called");
         match self.do_search(params, COLLECTION_PROMPTS).await {
-            Ok(r) => { log("tool: prompt_search ok"); r }
-            Err(e) => { log(&format!("tool: prompt_search error: {e}")); format!("Error: {e}") }
+            Ok(r) => {
+                log("tool: prompt_search ok");
+                r
+            }
+            Err(e) => {
+                log(&format!("tool: prompt_search error: {e}"));
+                format!("Error: {e}")
+            }
         }
     }
 
-    #[tool(description = "Search assistant responses and solutions. Use to find how problems were solved.")]
+    #[tool(
+        description = "Search assistant responses and solutions. Use to find how problems were solved."
+    )]
     async fn answer_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         log("tool: answer_search called");
         match self.do_search(params, COLLECTION_ANSWERS).await {
-            Ok(r) => { log("tool: answer_search ok"); r }
-            Err(e) => { log(&format!("tool: answer_search error: {e}")); format!("Error: {e}") }
+            Ok(r) => {
+                log("tool: answer_search ok");
+                r
+            }
+            Err(e) => {
+                log(&format!("tool: answer_search error: {e}"));
+                format!("Error: {e}")
+            }
         }
     }
 
-    #[tool(description = "List all memory entries matching exact filters. Returns full content, no truncation. Use for loading all memories of a specific category/project.")]
+    #[tool(
+        description = "List all memory entries matching exact filters. Returns full content, no truncation. Use for loading all memories of a specific category/project."
+    )]
     async fn memory_list(&self, Parameters(params): Parameters<MemoryListParams>) -> String {
         log("tool: memory_list called");
         match self.do_memory_list(params).await {
-            Ok(r) => { log("tool: memory_list ok"); r }
-            Err(e) => { log(&format!("tool: memory_list error: {e}")); format!("Error: {e}") }
+            Ok(r) => {
+                log("tool: memory_list ok");
+                r
+            }
+            Err(e) => {
+                log(&format!("tool: memory_list error: {e}"));
+                format!("Error: {e}")
+            }
         }
     }
 }
 
 impl MemoryService {
     async fn do_memory_write(&self, params: MemoryWriteParams) -> Result<String> {
-        append_daily(&params.content, params.category.as_deref(), params.project.as_deref())?;
-        if let Err(e) = append_kb_memory(&params.content, params.category.as_deref(), params.project.as_deref()) {
+        append_daily(
+            &params.content,
+            params.category.as_deref(),
+            params.project.as_deref(),
+        )?;
+        if let Err(e) = append_kb_memory(
+            &params.content,
+            params.category.as_deref(),
+            params.project.as_deref(),
+        ) {
             log(&format!("KB memory write failed (non-fatal): {e}"));
         }
         let chunks = chunk_text(&params.content);
@@ -225,7 +258,10 @@ impl MemoryService {
         let client = get_qdrant().await?;
         let (mut indexed, mut merged) = (0u32, 0u32);
         for chunk in &chunks {
-            match self.try_dedup_or_insert(client, chunk, &params.category, &params.project).await {
+            match self
+                .try_dedup_or_insert(client, chunk, &params.category, &params.project)
+                .await
+            {
                 Ok(true) => merged += 1,
                 Ok(false) => indexed += 1,
                 Err(e) => log(&format!("memory_write chunk error: {e}")),
@@ -247,20 +283,27 @@ impl MemoryService {
         project: &Option<String>,
     ) -> Result<bool> {
         const DEDUP_THRESHOLD: f32 = 0.88;
-        if let Some((existing_id, existing_text, score)) =
-            self.find_similar_memory(client, &chunk.text, COLLECTION_PROMPTS).await?
+        if let Some((existing_id, existing_text, score)) = self
+            .find_similar_memory(client, &chunk.text, COLLECTION_PROMPTS)
+            .await?
         {
             if score >= DEDUP_THRESHOLD {
                 if let Some(merged_text) = llm::merge_memories(&existing_text, &chunk.text).await {
-                    log(&format!("dedup: merging with point {existing_id} (score {score:.3})"));
-                    return self.replace_memory_point(client, existing_id, &merged_text, category, project)
-                        .await.map(|()| true);
+                    log(&format!(
+                        "dedup: merging with point {existing_id} (score {score:.3})"
+                    ));
+                    return self
+                        .replace_memory_point(client, existing_id, &merged_text, category, project)
+                        .await
+                        .map(|()| true);
                 }
             }
         }
         let point = self.build_memory_point(chunk, category, project).await?;
-        client.upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
-            .await.context("failed to index")?;
+        client
+            .upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
+            .await
+            .context("failed to index")?;
         Ok(false)
     }
 
@@ -273,7 +316,11 @@ impl MemoryService {
         category: &Option<String>,
         project: &Option<String>,
     ) -> Result<()> {
-        let embedding = self.embedder.embed(text).await.context("embedding failed")?;
+        let embedding = self
+            .embedder
+            .embed(text)
+            .await
+            .context("embedding failed")?;
         let named = build_named_vectors(embedding, text);
         let path = format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md"));
         let payload = build_payload(vec![
@@ -285,8 +332,10 @@ impl MemoryService {
             ("hash", claude_memory::chunk::hash_text(text).into()),
         ]);
         let point = PointStruct::new(id, named, payload);
-        client.upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
-            .await.context("failed to replace point")?;
+        client
+            .upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
+            .await
+            .context("failed to replace point")?;
         Ok(())
     }
 
@@ -296,7 +345,11 @@ impl MemoryService {
         category: &Option<String>,
         project: &Option<String>,
     ) -> Result<PointStruct> {
-        let embedding = self.embedder.embed(&chunk.text).await.context("embedding failed")?;
+        let embedding = self
+            .embedder
+            .embed(&chunk.text)
+            .await
+            .context("embedding failed")?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let path = format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md"));
         let named = build_named_vectors(embedding, &chunk.text);
@@ -321,24 +374,51 @@ impl MemoryService {
     }
 
     async fn do_search(&self, params: SearchParams, collection: &str) -> Result<String> {
-        log(&format!("do_search: collection={collection} query={:?}", &params.query[..params.query.len().min(80)]));
+        log(&format!(
+            "do_search: collection={collection} query={:?}",
+            &params.query[..params.query.len().min(80)]
+        ));
         let client = get_qdrant().await?;
         let limit = params.limit.unwrap_or(5);
         let query_vec = self.embedder.embed(&params.query).await?;
-        let points = self.run_hybrid_search(client, collection, query_vec, &params.query, 20, params.source.as_deref()).await?;
-        log(&format!("do_search: {} raw results, scores: {:?}", points.len(), points.iter().map(|p| p.score).collect::<Vec<_>>()));
+        let points = self
+            .run_hybrid_search(
+                client,
+                collection,
+                query_vec,
+                &params.query,
+                20,
+                params.source.as_deref(),
+            )
+            .await?;
+        log(&format!(
+            "do_search: {} raw results, scores: {:?}",
+            points.len(),
+            points.iter().map(|p| p.score).collect::<Vec<_>>()
+        ));
         if points.is_empty() {
             return Ok("No results found.".to_string());
         }
         const MIN_SCORE: f32 = 0.65;
         let filtered = filter_with_llm(&params.query, &points, limit).await;
-        let filtered: Vec<_> = filtered.into_iter().filter(|p| p.score >= MIN_SCORE).collect();
-        log(&format!("do_search: {} after filter, scores: {:?}", filtered.len(), filtered.iter().map(|p| p.score).collect::<Vec<_>>()));
+        let filtered: Vec<_> = filtered
+            .into_iter()
+            .filter(|p| p.score >= MIN_SCORE)
+            .collect();
+        log(&format!(
+            "do_search: {} after filter, scores: {:?}",
+            filtered.len(),
+            filtered.iter().map(|p| p.score).collect::<Vec<_>>()
+        ));
         if filtered.is_empty() {
             return Ok("No results found.".to_string());
         }
         let graph_context = enrich_with_graph(&params.query).await;
-        let mut output: String = filtered.iter().enumerate().map(|(i, p)| format_scored_point(i, p)).collect();
+        let mut output: String = filtered
+            .iter()
+            .enumerate()
+            .map(|(i, p)| format_scored_point(i, p))
+            .collect();
         if !graph_context.is_empty() {
             output.push_str("Related (graph):\n");
             for r in &graph_context {
@@ -360,33 +440,60 @@ impl MemoryService {
         let over_fetch = ((limit * 4) as u64).max(20);
         let mut qb = make_hybrid_query(collection, query_vec, query_text, limit as u64, over_fetch);
         if let Some(src) = source {
-            qb = qb.filter(Filter::must([Condition::matches("source", src.to_string())]));
+            qb = qb.filter(Filter::must([Condition::matches(
+                "source",
+                src.to_string(),
+            )]));
         }
-        Ok(client.query(qb).await.context("hybrid search failed")?.result)
+        Ok(client
+            .query(qb)
+            .await
+            .context("hybrid search failed")?
+            .result)
     }
 
     /// Find a similar existing memory for deduplication. Returns (id, text, score).
-    async fn find_similar_memory(&self, client: &Qdrant, text: &str, collection: &str) -> Result<Option<(u64, String, f32)>> {
+    async fn find_similar_memory(
+        &self,
+        client: &Qdrant,
+        text: &str,
+        collection: &str,
+    ) -> Result<Option<(u64, String, f32)>> {
         let embedding = self.embedder.embed(text).await?;
         let search = SearchPointsBuilder::new(collection, embedding, 1)
             .vector_name("dense")
             .with_payload(true)
-            .filter(Filter::must([Condition::matches("source", "memory".to_string())]));
+            .filter(Filter::must([Condition::matches(
+                "source",
+                "memory".to_string(),
+            )]));
         let results = client.search_points(search).await?;
-        let Some(point) = results.result.into_iter().next() else { return Ok(None) };
+        let Some(point) = results.result.into_iter().next() else {
+            return Ok(None);
+        };
         let id = match point.id.and_then(|p| p.point_id_options) {
             Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => n,
             _ => return Ok(None),
         };
-        Ok(Some((id, get_payload_str(&point.payload, "text"), point.score)))
+        Ok(Some((
+            id,
+            get_payload_str(&point.payload, "text"),
+            point.score,
+        )))
     }
 }
 
 fn format_write_result(indexed: u32, merged: u32) -> String {
     match (indexed, merged) {
         (0, 0) => "Memory stored (no chunks indexed)".to_string(),
-        (i, 0) => format!("Memory stored and indexed ({i} chunk{})", if i == 1 { "" } else { "s" }),
-        (0, m) => format!("Memory stored and merged with {m} existing entry{}", if m == 1 { "" } else { "ies" }),
+        (i, 0) => format!(
+            "Memory stored and indexed ({i} chunk{})",
+            if i == 1 { "" } else { "s" }
+        ),
+        (0, m) => format!(
+            "Memory stored and merged with {m} existing entry{}",
+            if m == 1 { "" } else { "ies" }
+        ),
         (i, m) => format!("Memory stored ({i} indexed, {m} merged)"),
     }
 }
@@ -405,8 +512,15 @@ async fn filter_with_llm<'a>(
         })
         .collect();
     if let Some(indices) = llm::filter_relevant(query, &raw).await {
-        log(&format!("LLM filter: {} relevant of {}", indices.len(), points.len()));
-        indices.iter().filter_map(|&i| points.get(i.saturating_sub(1))).collect()
+        log(&format!(
+            "LLM filter: {} relevant of {}",
+            indices.len(),
+            points.len()
+        ));
+        indices
+            .iter()
+            .filter_map(|&i| points.get(i.saturating_sub(1)))
+            .collect()
     } else {
         points.iter().take(fallback_limit).collect()
     }
@@ -453,7 +567,9 @@ async fn scroll_all_entries(filter: Filter) -> Result<Vec<(String, String, Strin
             ));
         }
         offset = result.next_page_offset;
-        if offset.is_none() { break; }
+        if offset.is_none() {
+            break;
+        }
     }
     Ok(entries)
 }
@@ -466,7 +582,9 @@ fn format_entries(entries: &[(String, String, String)]) -> String {
     for (i, (category, project, text)) in entries.iter().enumerate() {
         let entry = format_entry(i, category, project, text);
         if output.len() + entry.len() > MAX_BYTES {
-            output.push_str(&format!("[truncated at 50KB — showing {shown}/{total} entries]\n"));
+            output.push_str(&format!(
+                "[truncated at 50KB — showing {shown}/{total} entries]\n"
+            ));
             return output;
         }
         output.push_str(&entry);
@@ -477,8 +595,12 @@ fn format_entries(entries: &[(String, String, String)]) -> String {
 
 fn format_entry(i: usize, category: &str, project: &str, text: &str) -> String {
     let mut entry = format!("{}.", i + 1);
-    if !category.is_empty() { entry.push_str(&format!(" [{}]", category)); }
-    if !project.is_empty() { entry.push_str(&format!(" ({})", project)); }
+    if !category.is_empty() {
+        entry.push_str(&format!(" [{}]", category));
+    }
+    if !project.is_empty() {
+        entry.push_str(&format!(" ({})", project));
+    }
     entry.push('\n');
     entry.push_str(text);
     entry.push_str("\n\n");
@@ -490,7 +612,8 @@ impl ServerHandler for MemoryService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Claude memory MCP server - store and search semantic memories across sessions".into(),
+                "Claude memory MCP server - store and search semantic memories across sessions"
+                    .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
