@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 pub(super) fn sanitize_triplet(
     subject: &str,
     relation: &str,
@@ -95,10 +93,10 @@ fn normalize_relation(relation: &str) -> Option<String> {
         _ => normalized.as_str(),
     };
 
-    if blocked_relations().contains(relation) {
+    if BLOCKED_RELATIONS.contains(&relation) {
         return None;
     }
-    if !allowed_relations().contains(relation) {
+    if !ALLOWED_RELATIONS.contains(&relation) {
         return None;
     }
 
@@ -112,7 +110,7 @@ fn is_blocked_triplet(subject: &str, relation: &str, object: &str) -> bool {
     if relation == "requires" && subject.ends_with(" CLI") && object == "Microsoft Graph" {
         return true;
     }
-    generic_objects().contains(object)
+    GENERIC_OBJECTS.contains(&object)
 }
 
 fn collapse_whitespace(value: &str) -> String {
@@ -149,132 +147,120 @@ fn looks_like_symbolic_artifact(name: &str) -> bool {
     punctuation >= alnum
 }
 
-fn blocked_relations() -> HashSet<&'static str> {
-    [
-        "documented_in",
-        "contains",
-        "feature",
-        "has_feature",
-        "includes_tool",
-        "demonstrates",
-        "sometimes_conflicts_with",
-        "publishes_about",
-        "should_be",
-        "is_program",
-        "describes",
-        "full_name",
-        "represents",
-        "purpose",
-        "targets",
-        "workflow_preference",
-        "coding_practice",
-        "practices",
-        "experience",
-        "experienced_in",
-        "location",
-        "compares_with",
-        "compared_with",
-        "competes_with",
-        "stronger_at",
-        "acted_in",
-        "worked_on",
-        "follows",
-        "follows_pattern",
-        "follows_standard",
-        "groups",
-        "knows",
-        "avoids",
-        "should_avoid",
-        "should_create",
-        "defends_against",
-        "measures",
-        "decreases_in",
-        "is",
-        "is_alias_for",
-        "is_theme_for",
-    ]
-    .into_iter()
-    .collect()
-}
+const BLOCKED_RELATIONS: &[&str] = &[
+    "documented_in",
+    "contains",
+    "feature",
+    "has_feature",
+    "includes_tool",
+    "demonstrates",
+    "sometimes_conflicts_with",
+    "publishes_about",
+    "should_be",
+    "is_program",
+    "describes",
+    "full_name",
+    "represents",
+    "purpose",
+    "targets",
+    "workflow_preference",
+    "coding_practice",
+    "practices",
+    "experience",
+    "experienced_in",
+    "location",
+    "compares_with",
+    "compared_with",
+    "competes_with",
+    "stronger_at",
+    "acted_in",
+    "worked_on",
+    "follows",
+    "follows_pattern",
+    "follows_standard",
+    "groups",
+    "knows",
+    "avoids",
+    "should_avoid",
+    "should_create",
+    "defends_against",
+    "measures",
+    "decreases_in",
+    "is",
+    "is_alias_for",
+    "is_theme_for",
+];
 
-fn allowed_relations() -> HashSet<&'static str> {
-    [
-        "applies_mixin",
-        "authenticates_with",
-        "benchmarked_on",
-        "built_in",
-        "built_with",
-        "calls",
-        "compatible_with",
-        "component_in",
-        "configures",
-        "connects_to",
-        "depends_on",
-        "deploys_to",
-        "developed_by",
-        "distributed_via",
-        "enables",
-        "exposes",
-        "featured_in",
-        "has",
-        "has_issue",
-        "has_method",
-        "hosts",
-        "implemented_in",
-        "implements",
-        "includes",
-        "incompatible_with",
-        "indexed_in",
-        "integrates_with",
-        "license",
-        "loads_data_from",
-        "maintains",
-        "manages",
-        "maps_to",
-        "monitors",
-        "needed_for",
-        "owned_by",
-        "packaged_as",
-        "part_of",
-        "powers",
-        "product_of",
-        "produces",
-        "project_of",
-        "provides",
-        "queries",
-        "references",
-        "replaces",
-        "requires",
-        "reviewed_by",
-        "runs_on",
-        "stores_in",
-        "supports",
-        "tested_on",
-        "tested_with",
-        "used_by",
-        "used_for",
-        "used_in",
-        "uses",
-        "uses_architecture",
-        "uses_mixin",
-        "use_protocol",
-        "written_in",
-    ]
-    .into_iter()
-    .collect()
-}
+const ALLOWED_RELATIONS: &[&str] = &[
+    "applies_mixin",
+    "authenticates_with",
+    "benchmarked_on",
+    "built_in",
+    "built_with",
+    "calls",
+    "compatible_with",
+    "component_in",
+    "configures",
+    "connects_to",
+    "depends_on",
+    "deploys_to",
+    "developed_by",
+    "distributed_via",
+    "enables",
+    "exposes",
+    "featured_in",
+    "has",
+    "has_issue",
+    "has_method",
+    "hosts",
+    "implemented_in",
+    "implements",
+    "includes",
+    "incompatible_with",
+    "indexed_in",
+    "integrates_with",
+    "license",
+    "loads_data_from",
+    "maintains",
+    "manages",
+    "maps_to",
+    "monitors",
+    "needed_for",
+    "owned_by",
+    "packaged_as",
+    "part_of",
+    "powers",
+    "product_of",
+    "produces",
+    "project_of",
+    "provides",
+    "queries",
+    "references",
+    "replaces",
+    "requires",
+    "reviewed_by",
+    "runs_on",
+    "stores_in",
+    "supports",
+    "tested_on",
+    "tested_with",
+    "used_by",
+    "used_for",
+    "used_in",
+    "uses",
+    "uses_architecture",
+    "uses_mixin",
+    "use_protocol",
+    "written_in",
+];
 
-fn generic_objects() -> HashSet<&'static str> {
-    [
-        "instructions",
-        "memory",
-        "memory improvements",
-        "performance critical",
-        "use cases",
-    ]
-    .into_iter()
-    .collect()
-}
+const GENERIC_OBJECTS: &[&str] = &[
+    "instructions",
+    "memory",
+    "memory improvements",
+    "performance critical",
+    "use cases",
+];
 
 const GOOD_NUM_PREFIXES: &[&str] = &["2d", "3d", "2fa", "4k"];
 
@@ -311,7 +297,7 @@ fn has_file_extension(name: &str) -> bool {
     EXTS.iter().any(|ext| name.ends_with(ext))
 }
 
-fn looks_like_number_or_hash(name: &str) -> bool {
+pub(super) fn looks_like_number_or_hash(name: &str) -> bool {
     let stripped = name.replace(['.', ',', ' ', '-', '_', '%', '+'], "");
     if stripped.is_empty() {
         return true;

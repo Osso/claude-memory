@@ -21,68 +21,89 @@ pub fn chunk_text(text: &str) -> Vec<Chunk> {
         return vec![];
     }
 
-    // Convert to char indices for safe slicing
     let char_indices: Vec<(usize, char)> = text.char_indices().collect();
     let char_count = char_indices.len();
-
     if char_count <= CHUNK_SIZE {
-        return vec![Chunk {
-            text: text.to_string(),
-            hash: hash_text(text),
-        }];
+        return vec![build_chunk(text)];
     }
 
     let mut chunks = Vec::new();
     let mut start_char = 0;
-
     while start_char < char_count {
         let end_char = (start_char + CHUNK_SIZE).min(char_count);
-
-        // Get byte positions
-        let start_byte = char_indices[start_char].0;
-        let end_byte = if end_char >= char_count {
-            text.len()
-        } else {
-            char_indices[end_char].0
-        };
-
-        // Try to break at newline
-        let slice = &text[start_byte..end_byte];
-        let actual_end_byte = if end_char < char_count {
-            if let Some(newline_pos) = slice.rfind('\n') {
-                // Only use newline if it's not too close to start
-                let chars_before_newline = slice[..newline_pos].chars().count();
-                if chars_before_newline > CHUNK_OVERLAP {
-                    start_byte + newline_pos + 1
-                } else {
-                    end_byte
-                }
-            } else {
-                end_byte
-            }
-        } else {
-            end_byte
-        };
-
+        let (start_byte, end_byte) =
+            chunk_byte_bounds(&char_indices, start_char, end_char, text.len());
+        let actual_end_byte = choose_chunk_end(text, start_byte, end_byte, end_char, char_count);
         let chunk_text = text[start_byte..actual_end_byte].trim();
         if !chunk_text.is_empty() {
-            chunks.push(Chunk {
-                text: chunk_text.to_string(),
-                hash: hash_text(chunk_text),
-            });
+            chunks.push(build_chunk(chunk_text));
         }
-
-        // Move start, accounting for overlap in chars
-        let chunk_chars = text[start_byte..actual_end_byte].chars().count();
-        let advance = chunk_chars.saturating_sub(CHUNK_OVERLAP);
-        if advance == 0 {
-            start_char = end_char; // Prevent infinite loop
-        } else {
-            start_char += advance;
-        }
+        start_char = next_start_char(text, start_char, start_byte, actual_end_byte, end_char);
     }
 
     chunks
+}
+
+fn build_chunk(text: &str) -> Chunk {
+    Chunk {
+        text: text.to_string(),
+        hash: hash_text(text),
+    }
+}
+
+fn chunk_byte_bounds(
+    char_indices: &[(usize, char)],
+    start_char: usize,
+    end_char: usize,
+    text_len: usize,
+) -> (usize, usize) {
+    let start_byte = char_indices[start_char].0;
+    let end_byte = if end_char >= char_indices.len() {
+        text_len
+    } else {
+        char_indices[end_char].0
+    };
+    (start_byte, end_byte)
+}
+
+fn choose_chunk_end(
+    text: &str,
+    start_byte: usize,
+    end_byte: usize,
+    end_char: usize,
+    char_count: usize,
+) -> usize {
+    if end_char >= char_count {
+        return end_byte;
+    }
+
+    let slice = &text[start_byte..end_byte];
+    let Some(newline_pos) = slice.rfind('\n') else {
+        return end_byte;
+    };
+
+    let chars_before_newline = slice[..newline_pos].chars().count();
+    if chars_before_newline > CHUNK_OVERLAP {
+        start_byte + newline_pos + 1
+    } else {
+        end_byte
+    }
+}
+
+fn next_start_char(
+    text: &str,
+    start_char: usize,
+    start_byte: usize,
+    end_byte: usize,
+    end_char: usize,
+) -> usize {
+    let chunk_chars = text[start_byte..end_byte].chars().count();
+    let advance = chunk_chars.saturating_sub(CHUNK_OVERLAP);
+    if advance == 0 {
+        end_char
+    } else {
+        start_char + advance
+    }
 }
 
 pub fn hash_text(text: &str) -> String {

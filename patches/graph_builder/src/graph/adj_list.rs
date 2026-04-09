@@ -223,49 +223,15 @@ where
         (edge_list, node_count, direction, csr_layout): (&'_ E, NI, Direction, CsrLayout),
     ) -> Self {
         let start = Instant::now();
-        let thread_safe_vec = edge_list
-            .degrees(node_count, direction)
-            .into_par_iter()
-            .map(|degree| RwLock::new(Vec::with_capacity(degree.into_inner().index())))
-            .collect::<Vec<_>>();
+        let thread_safe_vec = init_adjacency_buckets(edge_list, node_count, direction);
         info!("Initialized adjacency list in {:?}", start.elapsed());
 
         let start = Instant::now();
-        edge_list.edges().for_each(|(s, t, v)| {
-            if matches!(direction, Direction::Outgoing | Direction::Undirected) {
-                thread_safe_vec[s.index()]
-                    .write()
-                    .unwrap()
-                    .push(Target::new(t, v));
-            }
-            if matches!(direction, Direction::Incoming | Direction::Undirected) {
-                thread_safe_vec[t.index()]
-                    .write()
-                    .unwrap()
-                    .push(Target::new(s, v));
-            }
-        });
+        populate_adjacency_buckets(edge_list, direction, &thread_safe_vec);
         info!("Grouped edge tuples in {:?}", start.elapsed());
 
         let start = Instant::now();
-        let mut edges = Vec::with_capacity(node_count.index());
-        thread_safe_vec
-            .into_par_iter()
-            .map(|list| {
-                let mut list = list.into_inner().unwrap();
-
-                match csr_layout {
-                    CsrLayout::Sorted => list.sort_unstable_by_key(|t| t.target),
-                    CsrLayout::Unsorted => {}
-                    CsrLayout::Deduplicated => {
-                        list.sort_unstable_by_key(|t| t.target);
-                        list.dedup_by_key(|t| t.target)
-                    }
-                }
-
-                list
-            })
-            .collect_into_vec(&mut edges);
+        let edges = finalize_adjacency_buckets(thread_safe_vec, csr_layout, node_count);
 
         info!(
             "Applied list layout and finalized edge list in {:?}",
@@ -273,6 +239,98 @@ where
         );
 
         AdjacencyList::with_layout(edges, csr_layout)
+    }
+}
+
+fn init_adjacency_buckets<NI, EV, E>(
+    edge_list: &E,
+    node_count: NI,
+    direction: Direction,
+) -> Vec<RwLock<Vec<Target<NI, EV>>>>
+where
+    NI: Idx,
+    EV: Copy + Send + Sync,
+    E: Edges<NI = NI, EV = EV>,
+{
+    edge_list
+        .degrees(node_count, direction)
+        .into_par_iter()
+        .map(|degree| RwLock::new(Vec::with_capacity(degree.into_inner().index())))
+        .collect()
+}
+
+fn populate_adjacency_buckets<NI, EV, E>(
+    edge_list: &E,
+    direction: Direction,
+    buckets: &[RwLock<Vec<Target<NI, EV>>>],
+) where
+    NI: Idx,
+    EV: Copy + Send + Sync,
+    E: Edges<NI = NI, EV = EV>,
+{
+    edge_list.edges().for_each(|(source, target, value)| {
+        push_target(buckets, direction, source, target, value);
+        push_target(buckets, reverse_direction(direction), target, source, value);
+    });
+}
+
+fn push_target<NI, EV>(
+    buckets: &[RwLock<Vec<Target<NI, EV>>>],
+    direction: Direction,
+    source: NI,
+    target: NI,
+    value: EV,
+) where
+    NI: Idx,
+    EV: Copy + Send + Sync,
+{
+    if !matches!(direction, Direction::Outgoing | Direction::Undirected) {
+        return;
+    }
+
+    buckets[source.index()]
+        .write()
+        .unwrap()
+        .push(Target::new(target, value));
+}
+
+fn reverse_direction(direction: Direction) -> Direction {
+    match direction {
+        Direction::Outgoing => Direction::Incoming,
+        Direction::Incoming => Direction::Outgoing,
+        Direction::Undirected => Direction::Undirected,
+    }
+}
+
+fn finalize_adjacency_buckets<NI, EV>(
+    buckets: Vec<RwLock<Vec<Target<NI, EV>>>>,
+    csr_layout: CsrLayout,
+    node_count: NI,
+) -> Vec<Vec<Target<NI, EV>>>
+where
+    NI: Idx,
+    EV: Copy + Send + Sync,
+{
+    let mut edges = Vec::with_capacity(node_count.index());
+    buckets
+        .into_par_iter()
+        .map(|list| {
+            let mut list = list.into_inner().unwrap();
+            apply_adjacency_layout(&mut list, csr_layout);
+            list
+        })
+        .collect_into_vec(&mut edges);
+    edges
+}
+
+fn apply_adjacency_layout<NI: Idx, EV>(list: &mut Vec<Target<NI, EV>>, csr_layout: CsrLayout) {
+    match csr_layout {
+        CsrLayout::Sorted => list.sort_unstable_by_key(|target| target.target),
+        CsrLayout::Unsorted => {}
+        CsrLayout::Deduplicated => {
+            list.sort_unstable_by_key(|target| target.target);
+            list.dedup_by_key(|target| target.target);
+        }
     }
 }
 
@@ -595,471 +653,4 @@ where
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use crate::prelude::EdgeList;
-    use crate::GraphBuilder;
-    use tap::prelude::*;
-
-    #[test]
-    fn empty_list() {
-        let list = AdjacencyList::<u32, u32>::new(vec![]);
-        assert_eq!(list.node_count(), 0);
-        assert_eq!(list.edge_count(), 0);
-    }
-
-    #[test]
-    fn degree() {
-        let list = AdjacencyList::<u32, u32>::new(vec![
-            /* node 0 */ vec![Target::new(1, 42)],
-            /* node 1 */ vec![Target::new(0, 1337)],
-        ]);
-        assert_eq!(list.node_count(), 2);
-        assert_eq!(list.edge_count(), 2);
-        assert_eq!(list.degree(0), 1);
-        assert_eq!(list.degree(1), 1);
-    }
-
-    #[test]
-    fn targets_with_values() {
-        let list = AdjacencyList::<u32, u32>::new(vec![
-            /* node 0 */ vec![Target::new(1, 42)],
-            /* node 1 */ vec![Target::new(0, 1337)],
-        ]);
-
-        assert_eq!(
-            list.targets_with_values(0).as_slice(),
-            &[Target::new(1, 42)]
-        );
-        assert_eq!(
-            list.targets_with_values(1).as_slice(),
-            &[Target::new(0, 1337)]
-        );
-    }
-
-    #[test]
-    fn targets() {
-        let list = AdjacencyList::<u32, ()>::new(vec![
-            /* node 0 */ vec![Target::new(1, ())],
-            /* node 1 */ vec![Target::new(0, ())],
-        ]);
-
-        assert_eq!(list.targets(0).as_slice(), &[1]);
-        assert_eq!(list.targets(1).as_slice(), &[0]);
-    }
-
-    #[test]
-    fn from_edges_outgoing() {
-        let edges = vec![(0, 1, 42), (0, 2, 1337), (1, 0, 43), (2, 0, 1338)];
-        let edges = EdgeList::new(edges);
-        let list =
-            AdjacencyList::<u32, u32>::from((&edges, 3, Direction::Outgoing, CsrLayout::Unsorted));
-
-        assert_eq!(
-            list.targets_with_values(0)
-                .into_iter()
-                .collect::<Vec<_>>()
-                .tap_mut(|v| v.sort_by_key(|t| t.target)),
-            &[&Target::new(1, 42), &Target::new(2, 1337)]
-        );
-        assert_eq!(
-            list.targets_with_values(1).as_slice(),
-            &[Target::new(0, 84)]
-        );
-        assert_eq!(
-            list.targets_with_values(2).as_slice(),
-            &[Target::new(0, 1337)]
-        );
-    }
-
-    #[test]
-    fn from_edges_incoming() {
-        let edges = vec![(0, 1, 42), (0, 2, 1337), (1, 0, 43), (2, 0, 1338)];
-        let edges = EdgeList::new(edges);
-        let list =
-            AdjacencyList::<u32, u32>::from((&edges, 3, Direction::Incoming, CsrLayout::Unsorted));
-
-        assert_eq!(
-            list.targets_with_values(0)
-                .into_iter()
-                .collect::<Vec<_>>()
-                .tap_mut(|v| v.sort_by_key(|t| t.target)),
-            &[&Target::new(1, 42), &Target::new(2, 1337)]
-        );
-        assert_eq!(
-            list.targets_with_values(1).as_slice(),
-            &[Target::new(0, 42)]
-        );
-        assert_eq!(
-            list.targets_with_values(2).as_slice(),
-            &[Target::new(0, 1337)]
-        );
-    }
-
-    #[test]
-    fn from_edges_undirected() {
-        let edges = vec![(0, 1, 42), (0, 2, 1337), (1, 0, 43), (2, 0, 1338)];
-        let edges = EdgeList::new(edges);
-        let list = AdjacencyList::<u32, u32>::from((
-            &edges,
-            3,
-            Direction::Undirected,
-            CsrLayout::Unsorted,
-        ));
-
-        assert_eq!(
-            list.targets_with_values(0)
-                .into_iter()
-                .collect::<Vec<_>>()
-                .tap_mut(|v| v.sort_by_key(|t| t.target)),
-            &[
-                &Target::new(1, 42),
-                &Target::new(1, 43),
-                &Target::new(2, 1337),
-                &Target::new(2, 1338)
-            ]
-        );
-        assert_eq!(
-            list.targets_with_values(1)
-                .into_iter()
-                .collect::<Vec<_>>()
-                .tap_mut(|v| v.sort_by_key(|t| t.target)),
-            &[&Target::new(0, 42), &Target::new(0, 43)]
-        );
-        assert_eq!(
-            list.targets_with_values(2)
-                .into_iter()
-                .collect::<Vec<_>>()
-                .tap_mut(|v| v.sort_by_key(|t| t.target)),
-            &[&Target::new(0, 1337), &Target::new(0, 1338)]
-        );
-    }
-
-    #[test]
-    fn from_edges_sorted() {
-        let edges = vec![
-            (0, 1, ()),
-            (0, 3, ()),
-            (0, 2, ()),
-            (1, 3, ()),
-            (1, 2, ()),
-            (1, 0, ()),
-        ];
-        let edges = EdgeList::new(edges);
-        let list =
-            AdjacencyList::<u32, ()>::from((&edges, 3, Direction::Outgoing, CsrLayout::Sorted));
-
-        assert_eq!(list.targets(0).as_slice(), &[1, 2, 3]);
-        assert_eq!(list.targets(1).as_slice(), &[0, 2, 3]);
-    }
-
-    #[test]
-    fn from_edges_deduplicated() {
-        let edges = vec![
-            (0, 1, ()),
-            (0, 3, ()),
-            (0, 3, ()),
-            (0, 2, ()),
-            (0, 2, ()),
-            (1, 3, ()),
-            (1, 3, ()),
-            (1, 2, ()),
-            (1, 2, ()),
-            (1, 0, ()),
-            (1, 0, ()),
-        ];
-        let edges = EdgeList::new(edges);
-        let list = AdjacencyList::<u32, ()>::from((
-            &edges,
-            3,
-            Direction::Outgoing,
-            CsrLayout::Deduplicated,
-        ));
-
-        assert_eq!(list.targets(0).as_slice(), &[1, 2, 3]);
-        assert_eq!(list.targets(1).as_slice(), &[0, 2, 3]);
-    }
-
-    #[test]
-    fn directed_al_graph() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 1), (0, 2), (1, 2)])
-            .build::<DirectedALGraph<u32, ()>>();
-
-        assert_eq!(g.node_count(), 3);
-        assert_eq!(g.edge_count(), 3);
-        assert_eq!(g.out_degree(0), 2);
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 2]);
-        assert_eq!(g.in_degree(2), 2);
-        assert_eq!(g.in_neighbors(2).as_slice(), &[0, 1]);
-    }
-
-    #[test]
-    fn directed_al_graph_with_node_values() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 1), (0, 2), (1, 2)])
-            .node_values(vec!["foo", "bar", "baz"])
-            .build::<DirectedALGraph<u32, &str>>();
-
-        assert_eq!(g.node_value(0), &"foo");
-        assert_eq!(g.node_value(1), &"bar");
-        assert_eq!(g.node_value(2), &"baz");
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_unsorted() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<DirectedALGraph<u32>>();
-
-        assert_eq!(g.out_neighbors(0).as_slice(), &[2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[2, 1]);
-        g.add_edge(0, 2).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[2, 1, 2]);
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_sorted() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<DirectedALGraph<u32>>();
-
-        assert_eq!(g.out_neighbors(0).as_slice(), &[2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 1, 2]);
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_deduplicated() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Deduplicated)
-            .edges([(0, 2), (1, 2), (1, 3)])
-            .build::<DirectedALGraph<u32>>();
-
-        assert_eq!(g.out_neighbors(0).as_slice(), &[2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 2]);
-        g.add_edge(0, 3).expect("add edge failed");
-        assert_eq!(g.out_neighbors(0).as_slice(), &[1, 2, 3]);
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_with_value() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges_with_values([(0, 2, 4.2), (1, 2, 13.37)])
-            .build::<DirectedALGraph<u32, (), f32>>();
-
-        assert_eq!(
-            g.out_neighbors_with_values(0).as_slice(),
-            &[Target::new(2, 4.2)]
-        );
-        g.add_edge_with_value(0, 1, 19.84).expect("add edge failed");
-        assert_eq!(
-            g.out_neighbors_with_values(0).as_slice(),
-            &[Target::new(2, 4.2), Target::new(1, 19.84)]
-        );
-        g.add_edge_with_value(0, 2, 1.23).expect("add edge failed");
-        assert_eq!(
-            g.out_neighbors_with_values(0).as_slice(),
-            &[
-                Target::new(2, 4.2),
-                Target::new(1, 19.84),
-                Target::new(2, 1.23)
-            ]
-        );
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_missing_node() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<DirectedALGraph<u32>>();
-
-        let err = g.add_edge(0, 3).unwrap_err();
-
-        assert!(matches!(err, crate::Error::MissingNode { node } if node == "3" ));
-    }
-
-    #[test]
-    fn directed_al_graph_add_edge_parallel() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 1), (0, 2), (0, 3)])
-            .build::<DirectedALGraph<u32>>();
-
-        std::thread::scope(|scope| {
-            for _ in 0..4 {
-                scope.spawn(|| g.add_edge(0, 1));
-            }
-        });
-
-        assert_eq!(g.edge_count(), 7);
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_unsorted() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<UndirectedALGraph<u32>>();
-
-        assert_eq!(g.neighbors(0).as_slice(), &[2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[2, 1]);
-        assert_eq!(g.neighbors(1).as_slice(), &[2, 0]);
-        g.add_edge(0, 2).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[2, 1, 2]);
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_sorted() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<UndirectedALGraph<u32>>();
-
-        assert_eq!(g.neighbors(0).as_slice(), &[2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[0, 2]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 1, 2]);
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_deduplicated() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Deduplicated)
-            .edges([(0, 2), (1, 2), (1, 3)])
-            .build::<UndirectedALGraph<u32>>();
-
-        assert_eq!(g.neighbors(0).as_slice(), &[2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[2, 3]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[0, 2, 3]);
-        g.add_edge(0, 1).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 2]);
-        assert_eq!(g.neighbors(1).as_slice(), &[0, 2, 3]);
-        g.add_edge(0, 3).expect("add edge failed");
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 2, 3]);
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_with_value() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges_with_values([(0, 2, 4.2), (1, 2, 13.37)])
-            .build::<UndirectedALGraph<u32, (), f32>>();
-
-        assert_eq!(
-            g.neighbors_with_values(0).as_slice(),
-            &[Target::new(2, 4.2)]
-        );
-        assert_eq!(
-            g.neighbors_with_values(1).as_slice(),
-            &[Target::new(2, 13.37)]
-        );
-        g.add_edge_with_value(0, 1, 19.84).expect("add edge failed");
-        assert_eq!(
-            g.neighbors_with_values(0).as_slice(),
-            &[Target::new(2, 4.2), Target::new(1, 19.84)]
-        );
-        assert_eq!(
-            g.neighbors_with_values(1).as_slice(),
-            &[Target::new(2, 13.37), Target::new(0, 19.84)]
-        );
-        g.add_edge_with_value(0, 2, 1.23).expect("add edge failed");
-        assert_eq!(
-            g.neighbors_with_values(0).as_slice(),
-            &[
-                Target::new(2, 4.2),
-                Target::new(1, 19.84),
-                Target::new(2, 1.23)
-            ]
-        );
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_missing_node() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 2), (1, 2)])
-            .build::<UndirectedALGraph<u32>>();
-
-        let err = g.add_edge(0, 3).unwrap_err();
-
-        assert!(matches!(err, crate::Error::MissingNode { node } if node == "3" ));
-    }
-
-    #[test]
-    fn undirected_al_graph_add_edge_parallel() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Unsorted)
-            .edges([(0, 1), (0, 2), (0, 3)])
-            .build::<UndirectedALGraph<u32>>();
-
-        std::thread::scope(|scope| {
-            for _ in 0..4 {
-                scope.spawn(|| g.add_edge(0, 1));
-            }
-        });
-
-        assert_eq!(g.edge_count(), 7);
-    }
-    #[test]
-    fn undirected_al_graph() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 1), (0, 2), (1, 2)])
-            .build::<UndirectedALGraph<u32, ()>>();
-
-        assert_eq!(g.node_count(), 3);
-        assert_eq!(g.edge_count(), 3);
-        assert_eq!(g.degree(0), 2);
-        assert_eq!(g.degree(2), 2);
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 2]);
-        assert_eq!(g.neighbors(2).as_slice(), &[0, 1]);
-    }
-
-    #[test]
-    fn undirected_al_graph_cycle() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 1), (1, 0)])
-            .build::<UndirectedALGraph<u32, ()>>();
-
-        assert_eq!(g.node_count(), 2);
-        assert_eq!(g.edge_count(), 2);
-        assert_eq!(g.degree(0), 2);
-        assert_eq!(g.degree(1), 2);
-        assert_eq!(g.neighbors(0).as_slice(), &[1, 1]);
-        assert_eq!(g.neighbors(1).as_slice(), &[0, 0]);
-    }
-
-    #[test]
-    fn undirected_al_graph_with_node_values() {
-        let g = GraphBuilder::new()
-            .csr_layout(CsrLayout::Sorted)
-            .edges([(0, 1), (0, 2), (1, 2)])
-            .node_values(vec!["foo", "bar", "baz"])
-            .build::<UndirectedALGraph<u32, &str>>();
-
-        assert_eq!(g.node_value(0), &"foo");
-        assert_eq!(g.node_value(1), &"bar");
-        assert_eq!(g.node_value(2), &"baz");
-    }
-}
+mod tests;

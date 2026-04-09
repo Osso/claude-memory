@@ -194,13 +194,7 @@ impl GraphBuilder<Uninitialized> {
         NI: Idx,
         Edges: IntoIterator<Item = (NI, NI)>,
     {
-        GraphBuilder {
-            state: FromEdges {
-                csr_layout: self.state.csr_layout,
-                edges,
-                _node: PhantomData,
-            },
-        }
+        build_graph_builder(from_edges_state(self.state.csr_layout, edges))
     }
 
     /// Create a graph from the given edge triplets.
@@ -225,13 +219,7 @@ impl GraphBuilder<Uninitialized> {
         NI: Idx,
         Edges: IntoIterator<Item = (NI, NI, EV)>,
     {
-        GraphBuilder {
-            state: FromEdgesWithValues {
-                csr_layout: self.state.csr_layout,
-                edges,
-                _node: PhantomData,
-            },
-        }
+        build_graph_builder(from_edges_with_values_state(self.state.csr_layout, edges))
     }
 
     /// Creates a graph using Graph Definition Language (GDL).
@@ -392,16 +380,11 @@ where
     where
         I: IntoIterator<Item = NV>,
     {
-        let edge_list = EdgeList::from(EdgeIterator(self.state.edges));
-        let node_values = node_values.into_iter().collect::<NodeValues<NV>>();
-
-        GraphBuilder {
-            state: FromEdgeListAndNodeValues {
-                csr_layout: self.state.csr_layout,
-                node_values,
-                edge_list,
-            },
-        }
+        into_node_values_builder(
+            self.state.csr_layout,
+            EdgeList::from(EdgeIterator(self.state.edges)),
+            node_values,
+        )
     }
 
     /// Build the graph from the given vec of edges.
@@ -429,16 +412,11 @@ where
     where
         I: IntoIterator<Item = NV>,
     {
-        let edge_list = EdgeList::from(EdgeWithValueIterator(self.state.edges));
-        let node_values = node_values.into_iter().collect::<NodeValues<NV>>();
-
-        GraphBuilder {
-            state: FromEdgeListAndNodeValues {
-                csr_layout: self.state.csr_layout,
-                node_values,
-                edge_list,
-            },
-        }
+        into_node_values_builder(
+            self.state.csr_layout,
+            EdgeList::from(EdgeWithValueIterator(self.state.edges)),
+            node_values,
+        )
     }
 
     /// Build the graph from the given vec of edges.
@@ -464,6 +442,69 @@ impl<NI: Idx, NV, EV> GraphBuilder<FromEdgeListAndNodeValues<NI, NV, EV>> {
             self.state.csr_layout,
         ))
     }
+}
+
+fn build_graph_builder<State>(state: State) -> GraphBuilder<State> {
+    GraphBuilder { state }
+}
+
+fn from_edges_state<NI, Edges>(csr_layout: CsrLayout, edges: Edges) -> FromEdges<NI, Edges>
+where
+    NI: Idx,
+    Edges: IntoIterator<Item = (NI, NI)>,
+{
+    FromEdges {
+        csr_layout,
+        edges,
+        _node: PhantomData,
+    }
+}
+
+fn from_edges_with_values_state<NI, Edges, EV>(
+    csr_layout: CsrLayout,
+    edges: Edges,
+) -> FromEdgesWithValues<NI, Edges, EV>
+where
+    NI: Idx,
+    Edges: IntoIterator<Item = (NI, NI, EV)>,
+{
+    FromEdgesWithValues {
+        csr_layout,
+        edges,
+        _node: PhantomData,
+    }
+}
+
+fn from_edge_list_and_node_values<NI, NV, EV, I>(
+    csr_layout: CsrLayout,
+    edge_list: EdgeList<NI, EV>,
+    node_values: I,
+) -> FromEdgeListAndNodeValues<NI, NV, EV>
+where
+    NI: Idx,
+    I: IntoIterator<Item = NV>,
+{
+    FromEdgeListAndNodeValues {
+        csr_layout,
+        node_values: node_values.into_iter().collect::<NodeValues<NV>>(),
+        edge_list,
+    }
+}
+
+fn into_node_values_builder<NI, NV, EV, I>(
+    csr_layout: CsrLayout,
+    edge_list: EdgeList<NI, EV>,
+    node_values: I,
+) -> GraphBuilder<FromEdgeListAndNodeValues<NI, NV, EV>>
+where
+    NI: Idx,
+    I: IntoIterator<Item = NV>,
+{
+    build_graph_builder(from_edge_list_and_node_values(
+        csr_layout,
+        edge_list,
+        node_values,
+    ))
 }
 
 #[cfg(feature = "gdl")]

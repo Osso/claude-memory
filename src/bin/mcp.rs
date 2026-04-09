@@ -374,58 +374,19 @@ impl MemoryService {
     }
 
     async fn do_search(&self, params: SearchParams, collection: &str) -> Result<String> {
-        log(&format!(
-            "do_search: collection={collection} query={:?}",
-            &params.query[..params.query.len().min(80)]
-        ));
+        log_search_request(collection, &params.query);
         let client = get_qdrant().await?;
         let limit = params.limit.unwrap_or(5);
-        let query_vec = self.embedder.embed(&params.query).await?;
-        let points = self
-            .run_hybrid_search(
-                client,
-                collection,
-                query_vec,
-                &params.query,
-                20,
-                params.source.as_deref(),
-            )
-            .await?;
-        log(&format!(
-            "do_search: {} raw results, scores: {:?}",
-            points.len(),
-            points.iter().map(|p| p.score).collect::<Vec<_>>()
-        ));
+        let points = self.search_points(client, collection, &params).await?;
         if points.is_empty() {
             return Ok("No results found.".to_string());
         }
-        const MIN_SCORE: f32 = 0.65;
-        let filtered = filter_with_llm(&params.query, &points, limit).await;
-        let filtered: Vec<_> = filtered
-            .into_iter()
-            .filter(|p| p.score >= MIN_SCORE)
-            .collect();
-        log(&format!(
-            "do_search: {} after filter, scores: {:?}",
-            filtered.len(),
-            filtered.iter().map(|p| p.score).collect::<Vec<_>>()
-        ));
+        let filtered = filter_search_results(&params.query, &points, limit).await;
         if filtered.is_empty() {
             return Ok("No results found.".to_string());
         }
         let graph_context = enrich_with_graph(&params.query).await;
-        let mut output: String = filtered
-            .iter()
-            .enumerate()
-            .map(|(i, p)| format_scored_point(i, p))
-            .collect();
-        if !graph_context.is_empty() {
-            output.push_str("Related (graph):\n");
-            for r in &graph_context {
-                output.push_str(&format!("  - {r}\n"));
-            }
-        }
-        Ok(output)
+        Ok(format_search_output(&filtered, &graph_context))
     }
 
     async fn run_hybrid_search(
@@ -450,6 +411,27 @@ impl MemoryService {
             .await
             .context("hybrid search failed")?
             .result)
+    }
+
+    async fn search_points(
+        &self,
+        client: &Qdrant,
+        collection: &str,
+        params: &SearchParams,
+    ) -> Result<Vec<qdrant_client::qdrant::ScoredPoint>> {
+        let query_vec = self.embedder.embed(&params.query).await?;
+        let points = self
+            .run_hybrid_search(
+                client,
+                collection,
+                query_vec,
+                &params.query,
+                20,
+                params.source.as_deref(),
+            )
+            .await?;
+        log_scores("raw", &points);
+        Ok(points)
     }
 
     /// Find a similar existing memory for deduplication. Returns (id, text, score).
@@ -524,6 +506,66 @@ async fn filter_with_llm<'a>(
     } else {
         points.iter().take(fallback_limit).collect()
     }
+}
+
+async fn filter_search_results<'a>(
+    query: &str,
+    points: &'a [qdrant_client::qdrant::ScoredPoint],
+    limit: usize,
+) -> Vec<&'a qdrant_client::qdrant::ScoredPoint> {
+    const MIN_SCORE: f32 = 0.65;
+    let filtered: Vec<_> = filter_with_llm(query, points, limit)
+        .await
+        .into_iter()
+        .filter(|point| point.score >= MIN_SCORE)
+        .collect();
+    log_ref_scores("after filter", &filtered);
+    filtered
+}
+
+fn log_search_request(collection: &str, query: &str) {
+    log(&format!(
+        "do_search: collection={collection} query={:?}",
+        &query[..query.len().min(80)]
+    ));
+}
+
+fn log_scores(stage: &str, points: &[qdrant_client::qdrant::ScoredPoint]) {
+    log(&format!(
+        "do_search: {} {} results, scores: {:?}",
+        points.len(),
+        stage,
+        points.iter().map(|point| point.score).collect::<Vec<_>>()
+    ));
+}
+
+fn log_ref_scores(stage: &str, points: &[&qdrant_client::qdrant::ScoredPoint]) {
+    log(&format!(
+        "do_search: {} {}, scores: {:?}",
+        points.len(),
+        stage,
+        points.iter().map(|point| point.score).collect::<Vec<_>>()
+    ));
+}
+
+fn format_search_output(
+    points: &[&qdrant_client::qdrant::ScoredPoint],
+    graph_context: &[String],
+) -> String {
+    let mut output: String = points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| format_scored_point(index, point))
+        .collect();
+    if graph_context.is_empty() {
+        return output;
+    }
+
+    output.push_str("Related (graph):\n");
+    for relation in graph_context {
+        output.push_str(&format!("  - {relation}\n"));
+    }
+    output
 }
 
 /// Query graph for related entities to enrich search results.

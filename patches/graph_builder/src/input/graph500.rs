@@ -116,9 +116,11 @@ struct PackedEdge {
     high: u32,
 }
 
+const LOW_U32_MASK: u64 = 0xFFFF;
+
 impl PackedEdge {
     fn source(&self) -> u64 {
-        self.v0_low as u64 | (self.high as u64 & 0xFFFF) << 32
+        self.v0_low as u64 | (self.high as u64 & LOW_U32_MASK) << 32
     }
 
     fn target(&self) -> u64 {

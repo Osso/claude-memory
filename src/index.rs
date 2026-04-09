@@ -18,6 +18,11 @@ use crate::extract::{
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
+mod search_results;
+use search_results::build_search_results;
+#[cfg(test)]
+use search_results::get_string;
+
 const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
 const COLLECTION_ANSWERS: &str = "claude-answers";
@@ -199,34 +204,12 @@ async fn index_summaries(
     if !projects_dir.exists() {
         return Ok(0);
     }
-    let summaries: Vec<_> = WalkDir::new(projects_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .file_name()
-                .map(|f| f == "summary.md")
-                .unwrap_or(false)
-        })
-        .collect();
+    let summaries = collect_summary_entries(projects_dir);
 
     let mut indexed = 0;
     eprintln!("Processing {} summaries...", summaries.len());
     for (i, entry) in summaries.iter().enumerate() {
-        let path = entry.path();
-        match extract_summary(path, projects_dir) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.prompt_hashes,
-                    &state.prompt_next_id,
-                    COLLECTION_PROMPTS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
-        }
+        indexed += index_summary_entry(state, entry.path(), projects_dir).await?;
         eprint!(
             "\r  Summaries: {}/{} (indexed: {})",
             i + 1,
@@ -236,6 +219,42 @@ async fn index_summaries(
     }
     eprintln!();
     Ok(indexed)
+}
+
+fn collect_summary_entries(projects_dir: &Path) -> Vec<walkdir::DirEntry> {
+    WalkDir::new(projects_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .is_some_and(|name| name == "summary.md")
+        })
+        .collect()
+}
+
+async fn index_summary_entry(
+    state: &IndexState,
+    path: &Path,
+    projects_dir: &Path,
+) -> Result<usize> {
+    let chunks = match extract_summary(path, projects_dir) {
+        Ok(chunks) => chunks,
+        Err(error) => {
+            tracing::warn!("Failed to extract {}: {}", path.display(), error);
+            return Ok(0);
+        }
+    };
+
+    index_new_chunks(
+        state,
+        &chunks,
+        &state.prompt_hashes,
+        &state.prompt_next_id,
+        COLLECTION_PROMPTS,
+    )
+    .await
 }
 
 async fn index_session_prompts(
@@ -526,34 +545,6 @@ async fn search_collection(
     Ok(build_search_results(results.result))
 }
 
-pub(crate) fn build_search_results(
-    points: Vec<qdrant_client::qdrant::ScoredPoint>,
-) -> Vec<SearchResult> {
-    points
-        .into_iter()
-        .map(|point| {
-            let payload = point.payload;
-            SearchResult {
-                text: get_string(&payload, "text"),
-                source: get_string(&payload, "source"),
-                path: get_string(&payload, "path"),
-                score: point.score,
-            }
-        })
-        .collect()
-}
-
-pub(crate) fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
-    payload
-        .get(key)
-        .and_then(|v| v.kind.as_ref())
-        .and_then(|k| match k {
-            qdrant_client::qdrant::value::Kind::StringValue(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
 /// Index a single conversation file (both prompts and answers).
 pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
     let client = Qdrant::from_url(QDRANT_URL)
@@ -754,7 +745,6 @@ fn build_single_point(
     .collect();
     PointStruct::new(id, named, payload)
 }
-
 #[cfg(test)]
 #[path = "index_tests.rs"]
 mod index_tests;

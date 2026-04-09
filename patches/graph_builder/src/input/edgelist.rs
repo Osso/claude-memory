@@ -187,81 +187,117 @@ where
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let start = std::time::Instant::now();
-
-        let page_size = page_size::get();
-        let cpu_count = num_cpus::get_physical();
-        let chunk_size =
-            (usize::max(1, bytes.len() / cpu_count) + (page_size - 1)) & !(page_size - 1);
-
+        let chunk_size = chunk_size(bytes.len());
         info!(
             "page_size = {}, cpu_count = {}, chunk_size = {}",
-            page_size, cpu_count, chunk_size
+            page_size::get(),
+            num_cpus::get_physical(),
+            chunk_size
         );
 
         let all_edges = Arc::new(Mutex::new(Vec::new()));
-
         let new_line_bytes = new_line_bytes(bytes);
-
-        std::thread::scope(|s| {
-            for start in (0..bytes.len()).step_by(chunk_size) {
-                let all_edges = Arc::clone(&all_edges);
-                s.spawn(move || {
-                    let mut end = usize::min(start + chunk_size, bytes.len());
-                    while end <= bytes.len() && bytes[end - 1] != b'\n' {
-                        end += 1;
-                    }
-
-                    let mut start = start;
-                    if start != 0 {
-                        while bytes[start - 1] != b'\n' {
-                            start += 1;
-                        }
-                    }
-
-                    let mut edges = Vec::new();
-                    let mut chunk = &bytes[start..end];
-                    while !chunk.is_empty() {
-                        let (source, source_bytes) = NI::parse(chunk);
-                        chunk = &chunk[source_bytes + 1..];
-
-                        let (target, target_bytes) = NI::parse(chunk);
-                        chunk = &chunk[target_bytes..];
-
-                        let value = match chunk.strip_prefix(b" ") {
-                            Some(value_chunk) => {
-                                let (value, value_bytes) = EV::parse(value_chunk);
-                                chunk = &value_chunk[value_bytes + new_line_bytes..];
-                                value
-                            }
-                            None => {
-                                chunk = &chunk[new_line_bytes..];
-                                // if the input does not have a value, the default for EV is used
-                                EV::parse(&[]).0
-                            }
-                        };
-
-                        edges.push((source, target, value));
-                    }
-
-                    let mut all_edges = all_edges.lock();
-                    all_edges.append(&mut edges);
-                });
-            }
-        });
-
+        collect_edges_parallel::<NI, EV>(bytes, chunk_size, new_line_bytes, &all_edges);
         let edges = Arc::try_unwrap(all_edges).unwrap().into_inner();
-
-        let elapsed = start.elapsed().as_millis() as f64 / 1000_f64;
-
-        info!(
-            "Read {} edges in {:.2}s ({:.2} MB/s)",
-            edges.len(),
-            elapsed,
-            ((bytes.len() as f64) / elapsed) / (1024.0 * 1024.0)
-        );
-
+        log_edge_read(start, bytes.len(), edges.len());
         Ok(EdgeList::new(edges))
     }
+}
+
+fn chunk_size(byte_len: usize) -> usize {
+    let page_size = page_size::get();
+    let cpu_count = num_cpus::get_physical();
+    (usize::max(1, byte_len / cpu_count) + (page_size - 1)) & !(page_size - 1)
+}
+
+fn collect_edges_parallel<NI, EV>(
+    bytes: &[u8],
+    chunk_size: usize,
+    new_line_bytes: usize,
+    all_edges: &Arc<Mutex<Vec<(NI, NI, EV)>>>,
+) where
+    NI: Idx,
+    EV: ParseValue + std::fmt::Debug + Send + Sync,
+{
+    std::thread::scope(|scope| {
+        for start in (0..bytes.len()).step_by(chunk_size) {
+            let all_edges = Arc::clone(all_edges);
+            scope.spawn(move || {
+                let bounds = chunk_bounds(bytes, start, chunk_size);
+                let mut edges = parse_chunk_edges::<NI, EV>(bytes, bounds, new_line_bytes);
+                let mut all_edges = all_edges.lock();
+                all_edges.append(&mut edges);
+            });
+        }
+    });
+}
+
+fn chunk_bounds(bytes: &[u8], start: usize, chunk_size: usize) -> std::ops::Range<usize> {
+    let mut end = usize::min(start + chunk_size, bytes.len());
+    while end <= bytes.len() && bytes[end - 1] != b'\n' {
+        end += 1;
+    }
+    adjusted_chunk_start(bytes, start)..end
+}
+
+fn adjusted_chunk_start(bytes: &[u8], start: usize) -> usize {
+    if start == 0 {
+        return start;
+    }
+
+    let mut adjusted = start;
+    while bytes[adjusted - 1] != b'\n' {
+        adjusted += 1;
+    }
+    adjusted
+}
+
+fn parse_chunk_edges<NI, EV>(
+    bytes: &[u8],
+    bounds: std::ops::Range<usize>,
+    new_line_bytes: usize,
+) -> Vec<(NI, NI, EV)>
+where
+    NI: Idx,
+    EV: ParseValue + std::fmt::Debug + Send + Sync,
+{
+    let mut chunk = &bytes[bounds];
+    let mut edges = Vec::new();
+
+    while !chunk.is_empty() {
+        let (source, source_bytes) = NI::parse(chunk);
+        chunk = &chunk[source_bytes + 1..];
+        let (target, target_bytes) = NI::parse(chunk);
+        chunk = &chunk[target_bytes..];
+        let value = parse_edge_value::<EV>(&mut chunk, new_line_bytes);
+        edges.push((source, target, value));
+    }
+
+    edges
+}
+
+fn parse_edge_value<EV: ParseValue>(chunk: &mut &[u8], new_line_bytes: usize) -> EV {
+    match chunk.strip_prefix(b" ") {
+        Some(value_chunk) => {
+            let (value, value_bytes) = EV::parse(value_chunk);
+            *chunk = &value_chunk[value_bytes + new_line_bytes..];
+            value
+        }
+        None => {
+            *chunk = &chunk[new_line_bytes..];
+            EV::parse(&[]).0
+        }
+    }
+}
+
+fn log_edge_read(start: std::time::Instant, byte_len: usize, edge_count: usize) {
+    let elapsed = start.elapsed().as_millis() as f64 / 1000_f64;
+    info!(
+        "Read {} edges in {:.2}s ({:.2} MB/s)",
+        edge_count,
+        elapsed,
+        ((byte_len as f64) / elapsed) / (1024.0 * 1024.0)
+    );
 }
 
 // Returns the OS-dependent number of bytes for newline:

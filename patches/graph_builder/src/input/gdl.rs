@@ -99,60 +99,63 @@ where
     /// labels. In order to circumvent this, node labels need to be prefixed
     /// with a single character, e.g. `(n:L0)` to declare label `0`.
     fn from(gdl_graph: &gdl::Graph) -> Self {
-        fn degree(gdl_graph: &gdl::Graph, node: &gdl::graph::Node) -> usize {
-            let mut degree = 0;
-
-            for rel in gdl_graph.relationships() {
-                if rel.source() == node.variable() {
-                    degree += 1;
-                }
-                if rel.target() == node.variable() {
-                    degree += 1;
-                }
-            }
-            degree
-        }
-
-        let header = format!(
-            "t {} {}",
-            gdl_graph.node_count(),
-            gdl_graph.relationship_count()
-        );
-
-        let mut nodes_string = String::from("");
-
-        let mut sorted_nodes = gdl_graph.nodes().collect::<Vec<_>>();
-        sorted_nodes.sort_by_key(|node| node.id());
-
-        for node in sorted_nodes {
-            let id = node.id();
-            let label = node.labels().next().expect("Single label expected");
-            let degree = degree(gdl_graph, node);
-            let _ = writeln!(nodes_string, "v {id} {} {degree}", &label[1..]);
-        }
-
-        let mut rels_string = String::from("");
-
-        let mut sorted_rels = gdl_graph.relationships().collect::<Vec<_>>();
-        sorted_rels.sort_by_key(|rel| (rel.source(), rel.target()));
-
-        for rel in sorted_rels {
-            let source_id = gdl_graph
-                .get_node(rel.source())
-                .expect("Source expected")
-                .id();
-            let target_id = gdl_graph
-                .get_node(rel.target())
-                .expect("Target expected")
-                .id();
-            let _ = writeln!(rels_string, "e {source_id} {target_id}");
-        }
-
+        let header = graph_header(gdl_graph);
+        let nodes_string = graph_nodes(gdl_graph);
+        let rels_string = graph_relationships(gdl_graph);
         let input = format!("{header}\n{nodes_string}{rels_string}");
         let reader = LineReader::new(input.as_bytes());
 
         DotGraph::<NI, Label>::try_from(reader).expect("GDL to .graph conversion failed")
     }
+}
+
+fn graph_header(gdl_graph: &gdl::Graph) -> String {
+    format!(
+        "t {} {}",
+        gdl_graph.node_count(),
+        gdl_graph.relationship_count()
+    )
+}
+
+fn graph_nodes(gdl_graph: &gdl::Graph) -> String {
+    let mut nodes = gdl_graph.nodes().collect::<Vec<_>>();
+    nodes.sort_by_key(|node| node.id());
+
+    let mut output = String::new();
+    for node in nodes {
+        let id = node.id();
+        let label = node.labels().next().expect("Single label expected");
+        let degree = node_degree(gdl_graph, node);
+        let _ = writeln!(output, "v {id} {} {degree}", &label[1..]);
+    }
+    output
+}
+
+fn graph_relationships(gdl_graph: &gdl::Graph) -> String {
+    let mut relationships = gdl_graph.relationships().collect::<Vec<_>>();
+    relationships.sort_by_key(|rel| (rel.source(), rel.target()));
+
+    let mut output = String::new();
+    for rel in relationships {
+        let source_id = node_id(gdl_graph, rel.source(), "Source");
+        let target_id = node_id(gdl_graph, rel.target(), "Target");
+        let _ = writeln!(output, "e {source_id} {target_id}");
+    }
+    output
+}
+
+fn node_degree(gdl_graph: &gdl::Graph, node: &gdl::graph::Node) -> usize {
+    gdl_graph
+        .relationships()
+        .filter(|rel| rel.source() == node.variable() || rel.target() == node.variable())
+        .count()
+}
+
+fn node_id(gdl_graph: &gdl::Graph, variable: &str, label: &str) -> usize {
+    gdl_graph
+        .get_node(variable)
+        .unwrap_or_else(|| panic!("{label} expected"))
+        .id()
 }
 
 impl<'a, NI, NV, EV> From<(&'a gdl::Graph, CsrLayout)> for DirectedCsrGraph<NI, NV, EV>

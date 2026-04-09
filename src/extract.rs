@@ -63,190 +63,178 @@ pub fn extract_summary(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk
 
 /// Extract user messages from an uncompressed JSONL file.
 pub fn extract_jsonl(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
-    let session_id = path.file_stem().map(|s| s.to_string_lossy().to_string());
-    let rel_path = path
-        .strip_prefix(base_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string_lossy().to_string());
-
     let file = File::open(path).context("failed to open JSONL")?;
     let reader = BufReader::new(file);
-
-    let texts = extract_user_messages(reader)?;
-    if texts.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let combined = texts.join("\n");
-    Ok(chunk_text(&combined)
-        .into_iter()
-        .map(|chunk| IndexedChunk {
-            chunk,
-            source: "session".to_string(),
-            path: rel_path.clone(),
-            session_id: session_id.clone(),
-        })
-        .collect())
+    let metadata = session_metadata(path, base_path);
+    extract_chunks_from_reader(reader, extract_user_message, metadata, "session")
 }
 
 /// Extract user messages from a zstd-compressed JSONL file.
 pub fn extract_zst(path: &Path) -> Result<Vec<IndexedChunk>> {
-    let session_id = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.trim_end_matches(".jsonl").to_string());
-
     let file = File::open(path).context("failed to open ZST")?;
     let decoder = zstd::Decoder::new(file).context("failed to create zstd decoder")?;
     let reader = BufReader::new(decoder);
-
-    let texts = extract_user_messages(reader)?;
-    if texts.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let combined = texts.join("\n");
-    let file_path = path.file_name().unwrap().to_string_lossy().to_string();
-    Ok(chunk_text(&combined)
-        .into_iter()
-        .map(|chunk| IndexedChunk {
-            chunk,
-            source: "archive".to_string(),
-            path: file_path.clone(),
-            session_id: session_id.clone(),
-        })
-        .collect())
+    let metadata = archive_metadata(path);
+    extract_chunks_from_reader(reader, extract_user_message, metadata, "archive")
 }
 
 /// Extract assistant responses from an uncompressed JSONL file.
 pub fn extract_jsonl_answers(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
-    let session_id = path.file_stem().map(|s| s.to_string_lossy().to_string());
-    let rel_path = path
-        .strip_prefix(base_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string_lossy().to_string());
-
     let file = File::open(path).context("failed to open JSONL")?;
     let reader = BufReader::new(file);
-
-    let texts = extract_assistant_messages(reader)?;
-    if texts.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let combined = texts.join("\n");
-    Ok(chunk_text(&combined)
-        .into_iter()
-        .map(|chunk| IndexedChunk {
-            chunk,
-            source: "session".to_string(),
-            path: rel_path.clone(),
-            session_id: session_id.clone(),
-        })
-        .collect())
+    let metadata = session_metadata(path, base_path);
+    extract_chunks_from_reader(reader, extract_assistant_message, metadata, "session")
 }
 
 /// Extract assistant responses from a zstd-compressed JSONL file.
 pub fn extract_zst_answers(path: &Path) -> Result<Vec<IndexedChunk>> {
-    let session_id = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.trim_end_matches(".jsonl").to_string());
-
     let file = File::open(path).context("failed to open ZST")?;
     let decoder = zstd::Decoder::new(file).context("failed to create zstd decoder")?;
     let reader = BufReader::new(decoder);
+    let metadata = archive_metadata(path);
+    extract_chunks_from_reader(reader, extract_assistant_message, metadata, "archive")
+}
 
-    let texts = extract_assistant_messages(reader)?;
+#[cfg(test)]
+fn extract_user_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
+    collect_messages(reader, extract_user_message)
+}
+
+#[cfg(test)]
+fn extract_assistant_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
+    collect_messages(reader, extract_assistant_message)
+}
+
+fn extract_chunks_from_reader<R, F>(
+    reader: BufReader<R>,
+    extractor: F,
+    metadata: ChunkMetadata,
+    source: &str,
+) -> Result<Vec<IndexedChunk>>
+where
+    R: Read,
+    F: Fn(Message) -> Vec<String>,
+{
+    let texts = collect_messages(reader, extractor)?;
+    Ok(build_indexed_chunks(texts, metadata, source))
+}
+
+fn collect_messages<R, F>(reader: BufReader<R>, extractor: F) -> Result<Vec<String>>
+where
+    R: Read,
+    F: Fn(Message) -> Vec<String>,
+{
+    let mut texts = Vec::new();
+    for message in reader
+        .lines()
+        .filter_map(Result::ok)
+        .filter_map(parse_message)
+    {
+        texts.extend(extractor(message));
+    }
+    Ok(texts)
+}
+
+fn parse_message(line: String) -> Option<Message> {
+    serde_json::from_str(&line).ok()
+}
+
+fn extract_user_message(message: Message) -> Vec<String> {
+    if message.msg_type.as_deref() != Some("user") {
+        return vec![];
+    }
+
+    match message_content(message) {
+        Some(serde_json::Value::String(text)) if !text.trim().is_empty() => {
+            vec![format!("User: {text}")]
+        }
+        _ => vec![],
+    }
+}
+
+fn extract_assistant_message(message: Message) -> Vec<String> {
+    if message.msg_type.as_deref() != Some("assistant") {
+        return vec![];
+    }
+
+    let Some(serde_json::Value::Array(blocks)) = message_content(message) else {
+        return vec![];
+    };
+
+    blocks
+        .into_iter()
+        .filter_map(parse_content_block)
+        .filter_map(extract_block_text)
+        .collect()
+}
+
+fn message_content(message: Message) -> Option<serde_json::Value> {
+    message.message.and_then(|message| message.content)
+}
+
+fn parse_content_block(block: serde_json::Value) -> Option<ContentBlock> {
+    serde_json::from_value(block).ok()
+}
+
+fn extract_block_text(block: ContentBlock) -> Option<String> {
+    if block.block_type.as_deref() != Some("text") {
+        return None;
+    }
+
+    let text = block.text?;
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    Some(format!("Assistant: {text}"))
+}
+
+fn build_indexed_chunks(
+    texts: Vec<String>,
+    metadata: ChunkMetadata,
+    source: &str,
+) -> Vec<IndexedChunk> {
     if texts.is_empty() {
-        return Ok(vec![]);
+        return vec![];
     }
 
     let combined = texts.join("\n");
-    let file_path = path.file_name().unwrap().to_string_lossy().to_string();
-    Ok(chunk_text(&combined)
+    chunk_text(&combined)
         .into_iter()
         .map(|chunk| IndexedChunk {
             chunk,
-            source: "archive".to_string(),
-            path: file_path.clone(),
-            session_id: session_id.clone(),
+            source: source.to_string(),
+            path: metadata.path.clone(),
+            session_id: metadata.session_id.clone(),
         })
-        .collect())
+        .collect()
 }
 
-fn extract_user_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
-    let mut texts = Vec::new();
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-
-        let msg: Message = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        if msg.msg_type.as_deref() != Some("user") {
-            continue;
-        }
-
-        if let Some(content) = msg.message.and_then(|m| m.content) {
-            match content {
-                serde_json::Value::String(s) if !s.trim().is_empty() => {
-                    texts.push(format!("User: {}", s));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(texts)
+struct ChunkMetadata {
+    path: String,
+    session_id: Option<String>,
 }
 
-fn extract_assistant_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
-    let mut texts = Vec::new();
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
-
-        let msg: Message = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        if msg.msg_type.as_deref() != Some("assistant") {
-            continue;
-        }
-
-        if let Some(content) = msg.message.and_then(|m| m.content) {
-            // Assistant content is an array of blocks
-            if let serde_json::Value::Array(blocks) = content {
-                for block in blocks {
-                    let cb: ContentBlock = match serde_json::from_value(block) {
-                        Ok(b) => b,
-                        Err(_) => continue,
-                    };
-
-                    // Only extract text blocks, skip tool_use and thinking
-                    if cb.block_type.as_deref() == Some("text") {
-                        if let Some(text) = cb.text {
-                            if !text.trim().is_empty() {
-                                texts.push(format!("Assistant: {}", text));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+fn session_metadata(path: &Path, base_path: &Path) -> ChunkMetadata {
+    ChunkMetadata {
+        path: path
+            .strip_prefix(base_path)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string()),
+        session_id: path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string()),
     }
+}
 
-    Ok(texts)
+fn archive_metadata(path: &Path) -> ChunkMetadata {
+    ChunkMetadata {
+        path: path.file_name().unwrap().to_string_lossy().to_string(),
+        session_id: path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.trim_end_matches(".jsonl").to_string()),
+    }
 }
 
 #[cfg(test)]

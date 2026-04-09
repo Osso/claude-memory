@@ -86,26 +86,44 @@ impl<T: PartialEq> SlicePartitionDedupExt<T> for [T] {
         let ptr = self.as_mut_ptr();
         let mut next_read: usize = 1;
         let mut next_write: usize = 1;
-
-        unsafe {
-            while next_read < len {
-                let ptr_read = ptr.add(next_read);
-                let prev_ptr_write = ptr.add(next_write - 1);
-                // Changed from if `!same_bucket(&mut *ptr_read, &mut *prev_ptr_write)`
-                // as the original implementation is copied from `partition_dedup_by`.
-                if *ptr_read != *prev_ptr_write {
-                    if next_read != next_write {
-                        let ptr_write = prev_ptr_write.offset(1);
-                        core::ptr::swap(ptr_read, ptr_write);
-                    }
-                    next_write += 1;
-                }
-                next_read += 1;
-            }
-        }
+        unsafe { partition_dedup_in_place(ptr, len, &mut next_read, &mut next_write) };
 
         self.split_at_mut(next_write)
     }
+}
+
+#[cfg(not(has_slice_partition_dedup))]
+unsafe fn partition_dedup_in_place<T: PartialEq>(
+    ptr: *mut T,
+    len: usize,
+    next_read: &mut usize,
+    next_write: &mut usize,
+) {
+    while *next_read < len {
+        unsafe { advance_partition(ptr, next_read, next_write) };
+    }
+}
+
+#[cfg(not(has_slice_partition_dedup))]
+unsafe fn advance_partition<T: PartialEq>(
+    ptr: *mut T,
+    next_read: &mut usize,
+    next_write: &mut usize,
+) {
+    let ptr_read = unsafe { ptr.add(*next_read) };
+    let prev_ptr_write = unsafe { ptr.add(*next_write - 1) };
+    if unsafe { *ptr_read == *prev_ptr_write } {
+        *next_read += 1;
+        return;
+    }
+
+    if *next_read != *next_write {
+        let ptr_write = unsafe { prev_ptr_write.offset(1) };
+        unsafe { core::ptr::swap(ptr_read, ptr_write) };
+    }
+
+    *next_write += 1;
+    *next_read += 1;
 }
 
 #[cfg(has_slice_partition_dedup)]

@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use claude_memory::{graph, index, llm};
-use std::path::PathBuf;
+use claude_memory::{graph, index};
+use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
+
+mod dedup;
+use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 
 #[derive(Parser)]
 #[command(name = "claude-memory", about = "Semantic memory for Claude Code")]
@@ -127,12 +130,20 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
+    run_command(Cli::parse().command).await
+}
+
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+}
 
-    let cli = Cli::parse();
-    match cli.command {
+async fn run_command(command: Command) -> Result<()> {
+    use Command::{GraphClean, SearchAnswers, SearchPrompts};
+
+    match command {
         Command::Index {
             archive,
             projects,
@@ -142,38 +153,50 @@ async fn main() -> Result<()> {
             delay_ms,
         } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
-        Command::SearchPrompts {
+        SearchPrompts {
             query,
             limit,
             source,
-        } => print_results(&index::search_prompts(&query, limit, source.as_deref()).await?),
-        Command::SearchAnswers {
+        } => run_search_prompts(query, limit, source).await,
+        SearchAnswers {
             query,
             limit,
             source,
-        } => print_results(&index::search_answers(&query, limit, source.as_deref()).await?),
+        } => run_search_answers(query, limit, source).await,
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
         Command::BuildGraph { kb, fresh } => run_build_graph(kb, fresh).await,
-        Command::GraphClean {
+        GraphClean {
             max_passes,
             dry_run,
-        } => {
-            let stats = graph::clean_graph(max_passes, dry_run)?;
-            eprintln!(
-                "Graph clean: {} pass(es), {} relationships seen, {} kept, {} removed, {} rewritten, {} entities removed",
-                stats.passes,
-                stats.relationships_seen,
-                stats.relationships_kept,
-                stats.relationships_removed,
-                stats.relationships_rewritten,
-                stats.entities_removed
-            );
-            Ok(())
-        }
+        } => run_graph_clean_cmd(max_passes, dry_run),
         Command::Enrich { limit } => run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
     }
+}
+
+async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
+    let results = index::search_prompts(&query, limit, source.as_deref()).await?;
+    print_results(&results)
+}
+
+async fn run_search_answers(query: String, limit: usize, source: Option<String>) -> Result<()> {
+    let results = index::search_answers(&query, limit, source.as_deref()).await?;
+    print_results(&results)
+}
+
+fn run_graph_clean_cmd(max_passes: usize, dry_run: bool) -> Result<()> {
+    let stats = graph::clean_graph(max_passes, dry_run)?;
+    eprintln!(
+        "Graph clean: {} pass(es), {} relationships seen, {} kept, {} removed, {} rewritten, {} entities removed",
+        stats.passes,
+        stats.relationships_seen,
+        stats.relationships_kept,
+        stats.relationships_removed,
+        stats.relationships_rewritten,
+        stats.entities_removed
+    );
+    Ok(())
 }
 
 async fn run_index_cmd(
@@ -287,31 +310,43 @@ async fn extract_texts_to_graph(texts: &[&str], label: &str) -> Result<usize> {
 }
 
 fn load_kb_texts() -> Result<Vec<String>> {
-    use claude_memory::chunk::chunk_text;
     let kb_dir = PathBuf::from("/syncthing/Sync/KB");
     let include_dirs = ["dev", "guides", "research", "state", "memory"];
-    let mut texts = Vec::new();
-    for dir_name in &include_dirs {
-        let dir = kb_dir.join(dir_name);
-        if !dir.exists() {
-            continue;
-        }
-        for entry in walkdir::WalkDir::new(&dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.extension().map(|e| e == "md").unwrap_or(false) {
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    for chunk in chunk_text(&content) {
-                        texts.push(chunk.text);
-                    }
-                }
-            }
-        }
-    }
+    let texts: Vec<String> = include_dirs
+        .iter()
+        .flat_map(|dir_name| collect_kb_chunks(&kb_dir.join(dir_name)))
+        .collect();
     eprintln!("Loaded {} KB chunks from {:?}", texts.len(), include_dirs);
     Ok(texts)
+}
+
+fn collect_kb_chunks(dir: &Path) -> Vec<String> {
+    if !dir.exists() {
+        return vec![];
+    }
+
+    walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .filter(|path| is_markdown(path))
+        .flat_map(|path| read_chunked_markdown(&path))
+        .collect()
+}
+
+fn is_markdown(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "md")
+}
+
+fn read_chunked_markdown(path: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
+
+    claude_memory::chunk::chunk_text(&content)
+        .into_iter()
+        .map(|chunk| chunk.text)
+        .collect()
 }
 
 fn run_graph_dump(limit: usize) -> Result<()> {
@@ -434,454 +469,4 @@ fn print_hook_output(context: &str) {
         }
     });
     println!("{}", output);
-}
-
-// --- Memory entry loading ---
-
-struct MemoryEntry {
-    id: u64,
-    text: String,
-    category: String,
-    project: String,
-}
-
-async fn load_all_memories() -> Result<Vec<MemoryEntry>> {
-    use claude_memory::qdrant_hybrid::ensure_hybrid_collection;
-    use qdrant_client::qdrant::{Condition, Filter};
-
-    let client = qdrant_client::Qdrant::from_url("http://localhost:6334")
-        .build()
-        .context("failed to connect to Qdrant")?;
-    ensure_hybrid_collection(&client, "claude-memory").await?;
-
-    let filter = Filter::must([Condition::matches("source", "memory".to_string())]);
-    scroll_memory_entries(&client, filter).await
-}
-
-async fn scroll_memory_entries(
-    client: &qdrant_client::Qdrant,
-    filter: qdrant_client::qdrant::Filter,
-) -> Result<Vec<MemoryEntry>> {
-    use qdrant_client::qdrant::ScrollPointsBuilder;
-
-    let mut entries = Vec::new();
-    let mut offset: Option<qdrant_client::qdrant::PointId> = None;
-    loop {
-        let mut scroll = ScrollPointsBuilder::new("claude-memory")
-            .limit(100)
-            .with_payload(true)
-            .filter(filter.clone());
-        if let Some(off) = offset {
-            scroll = scroll.offset(off);
-        }
-        let result = client.scroll(scroll).await.context("scroll failed")?;
-        for point in &result.result {
-            entries.push(point_to_entry(point));
-        }
-        offset = result.next_page_offset;
-        if offset.is_none() {
-            break;
-        }
-    }
-    Ok(entries)
-}
-
-fn point_to_entry(point: &qdrant_client::qdrant::RetrievedPoint) -> MemoryEntry {
-    let id = point
-        .id
-        .as_ref()
-        .and_then(|p| match &p.point_id_options {
-            Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => Some(*n),
-            _ => None,
-        })
-        .unwrap_or(0);
-    MemoryEntry {
-        id,
-        text: get_payload(&point.payload, "text"),
-        category: get_payload(&point.payload, "category"),
-        project: get_payload(&point.payload, "project"),
-    }
-}
-
-fn get_payload(
-    payload: &std::collections::HashMap<String, qdrant_client::qdrant::Value>,
-    key: &str,
-) -> String {
-    payload
-        .get(key)
-        .and_then(|v| v.kind.as_ref())
-        .and_then(|k| match k {
-            qdrant_client::qdrant::value::Kind::StringValue(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
-// --- Clustering ---
-
-async fn cluster_similar(entries: &[MemoryEntry], threshold: f32) -> Result<Vec<Vec<usize>>> {
-    let embedder = claude_memory::embed::Embedder::new();
-    eprintln!("Embedding {} entries...", entries.len());
-    let texts: Vec<&str> = entries.iter().map(|e| e.text.as_str()).collect();
-    let embeddings = embedder.embed_batch(&texts).await?;
-    eprintln!("Clustering...");
-    Ok(greedy_cluster(&embeddings, threshold))
-}
-
-fn greedy_cluster(embeddings: &[Vec<f32>], threshold: f32) -> Vec<Vec<usize>> {
-    let n = embeddings.len();
-    let mut assigned = vec![false; n];
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
-    for i in 0..n {
-        if assigned[i] {
-            continue;
-        }
-        let mut cluster = vec![i];
-        assigned[i] = true;
-        for j in (i + 1)..n {
-            if assigned[j] {
-                continue;
-            }
-            if cosine_sim(&embeddings[i], &embeddings[j]) >= threshold {
-                cluster.push(j);
-                assigned[j] = true;
-            }
-        }
-        clusters.push(cluster);
-        if (i + 1) % 50 == 0 || i + 1 == n {
-            eprint!("\r  Clustering: {}/{} entries processed", i + 1, n);
-        }
-    }
-    eprintln!();
-    clusters
-}
-
-fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
-}
-
-fn print_clusters(entries: &[MemoryEntry], clusters: &[Vec<usize>]) {
-    for cluster in clusters {
-        if cluster.len() < 2 {
-            continue;
-        }
-        println!("--- Cluster ({} entries) ---", cluster.len());
-        for &idx in cluster {
-            let e = &entries[idx];
-            let preview = e.text.replace('\n', " ");
-            let preview = if preview.len() > 100 {
-                format!("{}...", &preview[..100])
-            } else {
-                preview
-            };
-            println!("  [id={}] {}", e.id, preview);
-        }
-        println!();
-    }
-}
-
-// --- Merge clusters ---
-
-async fn merge_clusters(entries: &[MemoryEntry], clusters: &[Vec<usize>]) -> Result<()> {
-    let client = qdrant_client::Qdrant::from_url("http://localhost:6334")
-        .build()
-        .context("failed to connect to Qdrant")?;
-    let embedder = claude_memory::embed::Embedder::new();
-    let merge_total = clusters.iter().filter(|c| c.len() > 1).count();
-    let mut merged_count = 0u32;
-    let mut failed_count = 0u32;
-    let mut deleted_count = 0u32;
-
-    for cluster in clusters {
-        if cluster.len() < 2 {
-            continue;
-        }
-        let preview = preview_text(&entries[cluster[0]].text, 60);
-        eprintln!(
-            "\n  Cluster {}/{} ({} entries): {}",
-            merged_count + failed_count + 1,
-            merge_total,
-            cluster.len(),
-            preview
-        );
-        for &idx in &cluster[1..] {
-            eprintln!("    + {}", preview_text(&entries[idx].text, 60));
-        }
-        let Some(text) = merge_cluster_texts(entries, cluster).await else {
-            failed_count += 1;
-            eprintln!("    FAILED: LLM merge returned no result");
-            continue;
-        };
-        upsert_merged(&client, &embedder, &entries[cluster[0]], &text).await?;
-        deleted_count += delete_cluster_extras(&client, entries, cluster).await?;
-        merged_count += 1;
-        eprintln!(
-            "    OK: merged into {} chars, deleted {} dupes",
-            text.len(),
-            cluster.len() - 1
-        );
-    }
-    eprintln!(
-        "\nDone: {merged_count} merged, {failed_count} failed, {deleted_count} duplicates removed"
-    );
-    Ok(())
-}
-
-async fn upsert_merged(
-    client: &qdrant_client::Qdrant,
-    embedder: &claude_memory::embed::Embedder,
-    keep: &MemoryEntry,
-    text: &str,
-) -> Result<()> {
-    use claude_memory::qdrant_hybrid::build_named_vectors;
-    use qdrant_client::qdrant::{PointStruct, UpsertPointsBuilder};
-
-    let embedding = embedder.embed(text).await?;
-    let named = build_named_vectors(embedding, text);
-    let payload = build_merged_payload(text, &keep.category, &keep.project);
-    let point = PointStruct::new(keep.id, named, payload);
-    client
-        .upsert_points(UpsertPointsBuilder::new("claude-memory", vec![point]))
-        .await
-        .context("upsert failed")?;
-    Ok(())
-}
-
-fn build_merged_payload(
-    text: &str,
-    category: &str,
-    project: &str,
-) -> std::collections::HashMap<String, qdrant_client::qdrant::Value> {
-    [
-        ("text", text.to_string().into()),
-        ("source", "memory".to_string().into()),
-        (
-            "path",
-            format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md")).into(),
-        ),
-        ("category", category.to_string().into()),
-        ("project", project.to_string().into()),
-        ("hash", claude_memory::chunk::hash_text(text).into()),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect()
-}
-
-async fn delete_cluster_extras(
-    client: &qdrant_client::Qdrant,
-    entries: &[MemoryEntry],
-    cluster: &[usize],
-) -> Result<u32> {
-    use qdrant_client::qdrant::DeletePointsBuilder;
-
-    let ids: Vec<u64> = cluster[1..].iter().map(|&idx| entries[idx].id).collect();
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    let count = ids.len() as u32;
-    let point_ids: Vec<qdrant_client::qdrant::PointId> = ids.iter().map(|&id| id.into()).collect();
-    client
-        .delete_points(DeletePointsBuilder::new("claude-memory").points(point_ids))
-        .await
-        .context("delete failed")?;
-    Ok(count)
-}
-
-/// Progressively merge texts in a cluster via LLM.
-async fn merge_cluster_texts(entries: &[MemoryEntry], cluster: &[usize]) -> Option<String> {
-    let mut result = entries[cluster[0]].text.clone();
-    for (step, &idx) in cluster[1..].iter().enumerate() {
-        eprint!("    merging {}/{}...", step + 1, cluster.len() - 1);
-        match llm::merge_memories(&result, &entries[idx].text).await {
-            Some(merged) => {
-                eprintln!(" ok ({} chars)", merged.len());
-                result = merged;
-            }
-            None => {
-                eprintln!(" failed");
-                return None;
-            }
-        }
-    }
-    Some(result)
-}
-
-fn preview_text(text: &str, max_len: usize) -> String {
-    let oneline = text.replace('\n', " ");
-    if oneline.len() > max_len {
-        format!("{}...", &oneline[..max_len])
-    } else {
-        oneline
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // --- cosine_sim ---
-
-    #[test]
-    fn cosine_sim_identical() {
-        let v = vec![1.0f32, 2.0, 3.0];
-        let result = cosine_sim(&v, &v);
-        assert!(
-            (result - 1.0).abs() < 1e-6,
-            "identical vectors should give 1.0, got {result}"
-        );
-    }
-
-    #[test]
-    fn cosine_sim_orthogonal() {
-        let a = vec![1.0f32, 0.0, 0.0];
-        let b = vec![0.0f32, 1.0, 0.0];
-        let result = cosine_sim(&a, &b);
-        assert!(
-            (result - 0.0).abs() < 1e-6,
-            "orthogonal vectors should give 0.0, got {result}"
-        );
-    }
-
-    #[test]
-    fn cosine_sim_opposite() {
-        let a = vec![1.0f32, 0.0, 0.0];
-        let b = vec![-1.0f32, 0.0, 0.0];
-        let result = cosine_sim(&a, &b);
-        assert!(
-            (result - (-1.0)).abs() < 1e-6,
-            "opposite vectors should give -1.0, got {result}"
-        );
-    }
-
-    #[test]
-    fn cosine_sim_zero_vector() {
-        let zero = vec![0.0f32, 0.0, 0.0];
-        let other = vec![1.0f32, 2.0, 3.0];
-        // Implementation explicitly returns 0.0 for zero vectors
-        let result = cosine_sim(&zero, &other);
-        assert_eq!(result, 0.0, "zero vector should return 0.0, got {result}");
-        let result2 = cosine_sim(&zero, &zero);
-        assert_eq!(
-            result2, 0.0,
-            "two zero vectors should return 0.0, got {result2}"
-        );
-    }
-
-    // --- greedy_cluster ---
-
-    #[test]
-    fn greedy_cluster_identical_items() {
-        // Three identical vectors: all should end up in one cluster
-        let v = vec![1.0f32, 0.0, 0.0];
-        let embeddings = vec![v.clone(), v.clone(), v.clone()];
-        let clusters = greedy_cluster(&embeddings, 0.99);
-        assert_eq!(
-            clusters.len(),
-            1,
-            "identical vectors should form one cluster"
-        );
-        assert_eq!(clusters[0].len(), 3);
-    }
-
-    #[test]
-    fn greedy_cluster_completely_different() {
-        // Orthogonal unit vectors: none should cluster together above threshold 0.5
-        let embeddings = vec![
-            vec![1.0f32, 0.0, 0.0],
-            vec![0.0f32, 1.0, 0.0],
-            vec![0.0f32, 0.0, 1.0],
-        ];
-        let clusters = greedy_cluster(&embeddings, 0.5);
-        assert_eq!(
-            clusters.len(),
-            3,
-            "orthogonal vectors should form separate clusters"
-        );
-        for c in &clusters {
-            assert_eq!(c.len(), 1);
-        }
-    }
-
-    #[test]
-    fn greedy_cluster_threshold_boundary() {
-        // Two vectors at exactly cosine_sim = 0.0: with threshold 0.0 they cluster,
-        // with threshold 0.01 they don't.
-        let a = vec![1.0f32, 0.0];
-        let b = vec![0.0f32, 1.0];
-        // threshold = 0.0: sim(a,b)=0.0 >= 0.0 → one cluster
-        let clusters_inc = greedy_cluster(&[a.clone(), b.clone()], 0.0);
-        assert_eq!(
-            clusters_inc.len(),
-            1,
-            "threshold 0.0 should include all non-negative pairs"
-        );
-
-        // threshold = 0.01: sim(a,b)=0.0 < 0.01 → two clusters
-        let clusters_exc = greedy_cluster(&[a, b], 0.01);
-        assert_eq!(
-            clusters_exc.len(),
-            2,
-            "threshold 0.01 should exclude orthogonal pair"
-        );
-    }
-
-    #[test]
-    fn greedy_cluster_empty() {
-        let clusters = greedy_cluster(&[], 0.9);
-        assert!(clusters.is_empty());
-    }
-
-    // --- preview_text ---
-
-    #[test]
-    fn preview_text_short() {
-        let text = "hello world";
-        let result = preview_text(text, 50);
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn preview_text_long() {
-        let text = "a".repeat(100);
-        let result = preview_text(&text, 20);
-        assert!(result.ends_with("..."), "long text should end with '...'");
-        // prefix is exactly max_len 'a' chars plus "..."
-        assert_eq!(result, format!("{}...", "a".repeat(20)));
-    }
-
-    #[test]
-    fn preview_text_empty() {
-        let result = preview_text("", 50);
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn preview_text_newlines_replaced() {
-        let text = "line one\nline two\nline three";
-        let result = preview_text(text, 200);
-        assert!(
-            !result.contains('\n'),
-            "newlines should be replaced with spaces"
-        );
-        assert_eq!(result, "line one line two line three");
-    }
-
-    #[test]
-    fn preview_text_utf8_boundary() {
-        // Each emoji is 4 bytes; max_len=4 lands exactly on a char boundary (one emoji).
-        // max_len=5 would be mid-emoji and cause a panic in the naive byte slice.
-        // The implementation uses byte-level slicing, so we only test a safe boundary.
-        let text = "😀😁😂"; // 12 bytes total
-        // max_len=4 → slices exactly one emoji → no panic
-        let result = preview_text(text, 4);
-        assert!(result.starts_with("😀"), "should preserve first emoji");
-        assert!(result.ends_with("..."));
-    }
 }
