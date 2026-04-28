@@ -8,6 +8,118 @@ use std::path::Path;
 
 use crate::chunk::{Chunk, chunk_text};
 
+// ── Turn-level transcript reader ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone)]
+pub struct Turn {
+    pub role: Role,
+    pub text: String,
+    pub turn_index: u32,
+    pub has_tool_use: bool,
+    pub tool_call_count: u32,
+}
+
+/// Parse a session JSONL into turns, preserving role and tool-use metadata.
+/// Only user and assistant turns are included (system/other lines are skipped).
+/// Tool-use blocks are stripped from text; only text content blocks are kept.
+pub fn read_session_turns(path: &Path) -> Result<Vec<Turn>> {
+    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut turns = Vec::new();
+    let mut turn_index: u32 = 0;
+
+    for line in reader.lines() {
+        let line = line.context("failed to read line")?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let msg: Message = match serde_json::from_str(line) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let role = match msg.msg_type.as_deref() {
+            Some("user") => Role::User,
+            Some("assistant") => Role::Assistant,
+            _ => continue,
+        };
+
+        let content = match msg.message.and_then(|m| m.content) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let turn = build_turn(role, content, turn_index);
+        // Skip turns with no text content (e.g. pure tool-result user turns)
+        if !turn.text.is_empty() || turn.has_tool_use {
+            turns.push(turn);
+            turn_index += 1;
+        }
+    }
+
+    Ok(turns)
+}
+
+fn build_turn(role: Role, content: serde_json::Value, turn_index: u32) -> Turn {
+    match content {
+        serde_json::Value::String(s) => Turn {
+            role,
+            text: s,
+            turn_index,
+            has_tool_use: false,
+            tool_call_count: 0,
+        },
+        serde_json::Value::Array(blocks) => {
+            let mut text_parts: Vec<String> = Vec::new();
+            let mut tool_call_count: u32 = 0;
+
+            for block in blocks {
+                let block_type = block
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                match block_type.as_str() {
+                    "text" => {
+                        if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                            let t = t.trim();
+                            if !t.is_empty() {
+                                text_parts.push(t.to_string());
+                            }
+                        }
+                    }
+                    "tool_use" => {
+                        tool_call_count += 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            Turn {
+                role,
+                text: text_parts.join("\n"),
+                turn_index,
+                has_tool_use: tool_call_count > 0,
+                tool_call_count,
+            }
+        }
+        _ => Turn {
+            role,
+            text: String::new(),
+            turn_index,
+            has_tool_use: false,
+            tool_call_count: 0,
+        },
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexedChunk {
     pub chunk: Chunk,

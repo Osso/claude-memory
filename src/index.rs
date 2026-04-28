@@ -23,7 +23,7 @@ use search_results::build_search_results;
 #[cfg(test)]
 use search_results::get_string;
 
-const QDRANT_URL: &str = "http://localhost:6334";
+pub const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
 const COLLECTION_ANSWERS: &str = "claude-answers";
 
@@ -81,6 +81,7 @@ async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Resu
 
     ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
     ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
+    crate::memory_unit::ensure_memory_units_collection(&client).await?;
     let (prompt_hashes, answer_hashes) = load_hashes(&client, fresh).await?;
     eprintln!(
         "Found {} prompt chunks, {} answer chunks",

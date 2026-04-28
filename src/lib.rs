@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod chunk;
 pub mod config;
 pub mod daily;
@@ -6,4 +7,5 @@ pub mod extract;
 pub mod graph;
 pub mod index;
 pub mod llm;
+pub mod memory_unit;
 pub mod qdrant_hybrid;

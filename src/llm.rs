@@ -71,7 +71,12 @@ fn default_model_for_backend(backend: LlmBackend) -> &'static str {
 }
 
 /// Build the appropriate backend and call `.complete(user)`. Returns `Some(text)` on success.
-async fn complete(system: &str, user: &str, max_tokens: u32, timeout_secs: u64) -> Option<String> {
+pub async fn complete(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    timeout_secs: u64,
+) -> Option<String> {
     let backend = parse_backend();
     let model = std::env::var("CLAUDE_MEMORY_LLM_MODEL")
         .unwrap_or_else(|_| default_model_for_backend(backend).to_owned());

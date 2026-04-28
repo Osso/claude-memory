@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use claude_memory::{config, graph, index};
+use claude_memory::{analyze, config, graph, index};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -126,6 +126,12 @@ enum Command {
 
     /// Show collection statistics
     Stats,
+
+    /// Analyze a single session JSONL for friction moments and extract memory units
+    Analyze {
+        /// Path to the session .jsonl file
+        session_jsonl: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -172,6 +178,7 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Enrich { limit } => run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
+        Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
     }
 }
 
@@ -459,6 +466,48 @@ fn format_graph_results(related: &[String]) -> String {
         out.push_str(&format!("\n  ...and {} more", related.len() - 20));
     }
     out
+}
+
+async fn run_analyze(session_jsonl: &PathBuf) -> Result<()> {
+    use analyze::AnalysisOutcome;
+
+    println!("Analyzing: {}", session_jsonl.display());
+    let outcomes = analyze::analyze_session(session_jsonl).await?;
+
+    let mut no_friction = 0usize;
+    let mut discarded = 0usize;
+    let mut stored = 0usize;
+
+    for outcome in &outcomes {
+        match outcome {
+            AnalysisOutcome::NoFriction { .. } => {
+                no_friction += 1;
+            }
+            AnalysisOutcome::Discarded { turn, reason } => {
+                discarded += 1;
+                println!("[turn {turn}] DISCARDED: {reason}");
+            }
+            AnalysisOutcome::Stored {
+                turn,
+                unit,
+                deduped,
+            } => {
+                stored += 1;
+                let dedup_label = if *deduped {
+                    " (merged with existing)"
+                } else {
+                    ""
+                };
+                println!("[turn {turn}] STORED{dedup_label}: {}", unit.text);
+            }
+        }
+    }
+
+    println!(
+        "\nDone. Turns analysed: {}  |  no-friction: {no_friction}  |  discarded: {discarded}  |  stored: {stored}",
+        outcomes.len()
+    );
+    Ok(())
 }
 
 fn print_hook_output(context: &str) {
