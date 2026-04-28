@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use anyhow::{Result, anyhow};
 use llm_sdk::Backend;
 
 const FILTER_SYSTEM: &str = "\
@@ -70,19 +71,20 @@ fn default_model_for_backend(backend: LlmBackend) -> &'static str {
     }
 }
 
-/// Build the appropriate backend and call `.complete(user)`. Returns `Some(text)` on success.
+/// Build the appropriate backend and call `.complete(user)`.
+/// Returns `Err` on auth/connection/timeout failures.
 pub async fn complete(
     system: &str,
     user: &str,
     max_tokens: u32,
     timeout_secs: u64,
-) -> Option<String> {
+) -> Result<String> {
     let backend = parse_backend();
     let model = std::env::var("CLAUDE_MEMORY_LLM_MODEL")
         .unwrap_or_else(|_| default_model_for_backend(backend).to_owned());
     let timeout = Duration::from_secs(timeout_secs);
 
-    let result: Result<llm_sdk::Output, llm_sdk::Error> = match backend {
+    let result: std::result::Result<llm_sdk::Output, llm_sdk::Error> = match backend {
         LlmBackend::Anthropic => {
             let b = llm_sdk::anthropic::Anthropic::new(&model)
                 .api_key_env("ANTHROPIC_API_KEY")
@@ -100,21 +102,17 @@ pub async fn complete(
         }
         LlmBackend::Claude => {
             let b = llm_sdk::claude::Claude::new()
-                .map_err(|e| {
-                    log(&format!("claude backend init error: {e}"));
-                })
-                .ok()?
+                .map_err(|e| anyhow!("claude backend init failed: {e}"))?
                 .model(&model)
                 .system_prompt(system)
-                .timeout(timeout);
+                .timeout(timeout)
+                .extra_arg("--tools")
+                .extra_arg("");
             b.complete(user).await
         }
         LlmBackend::Codex => {
             let b = llm_sdk::codex_cli::CodexCli::new()
-                .map_err(|e| {
-                    log(&format!("codex backend init error: {e}"));
-                })
-                .ok()?
+                .map_err(|e| anyhow!("codex backend init failed: {e}"))?
                 .model(&model)
                 .system_prompt(system)
                 .timeout(timeout);
@@ -122,10 +120,14 @@ pub async fn complete(
         }
     };
 
-    result
-        .map(|o| o.text)
-        .map_err(|e| log(&format!("llm error ({backend:?}): {e}")))
-        .ok()
+    match result {
+        Ok(o) => Ok(o.text),
+        Err(e) => {
+            let msg = format!("llm error ({backend:?}): {e}");
+            log(&msg);
+            Err(anyhow!(msg))
+        }
+    }
 }
 
 /// Parse a JSON array of `usize` from the LLM's raw text. Handles markdown fences.
@@ -157,7 +159,7 @@ fn build_filter_user_message(query: &str, results: &[RawResult]) -> String {
 /// Returns `None` if no backend is configured or if any error occurs.
 pub async fn filter_relevant(query: &str, results: &[RawResult]) -> Option<Vec<usize>> {
     let user = build_filter_user_message(query, results);
-    let raw = complete(FILTER_SYSTEM, &user, 200, 15).await?;
+    let raw = complete(FILTER_SYSTEM, &user, 200, 15).await.ok()?;
     parse_index_array(&raw).or_else(|| {
         log(&format!("could not parse indices from: {raw}"));
         None
@@ -169,7 +171,7 @@ pub async fn filter_relevant(query: &str, results: &[RawResult]) -> Option<Vec<u
 /// Returns `None` if no backend is configured or if any error occurs.
 pub async fn merge_memories(existing: &str, new: &str) -> Option<String> {
     let user = format!("Existing:\n{existing}\n\nNew:\n{new}");
-    complete(MERGE_SYSTEM, &user, 1000, 20).await
+    complete(MERGE_SYSTEM, &user, 1000, 20).await.ok()
 }
 
 #[cfg(test)]

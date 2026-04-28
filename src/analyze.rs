@@ -177,19 +177,18 @@ backtracked, repeated similar searches, said 'I couldn't find', or was corrected
 Respond ONLY with JSON: {\"flagged\": bool, \"reason\": \"...\"}. \
 Keep reason under 30 words.";
 
-pub async fn classify_friction(turns: &[Turn], target_turn_index: u32) -> Option<FrictionFlag> {
+pub async fn classify_friction(turns: &[Turn], target_turn_index: u32) -> Result<FrictionFlag> {
     let context = build_context_window(turns, target_turn_index, 2);
     let user_msg = format!(
         "Classify whether the assistant struggled at turn {target_turn_index}:\n\n{context}"
     );
-    let raw = llm::complete(FRICTION_SYSTEM, &user_msg, 200, 90).await?;
+    let raw = llm::complete(FRICTION_SYSTEM, &user_msg, 200, 90)
+        .await
+        .context("friction classifier LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: FlaggedJson = serde_json::from_str(json_str)
-        .map_err(|e| {
-            eprintln!("  [friction] parse error: {e} | raw: {raw}");
-        })
-        .ok()?;
-    Some(FrictionFlag {
+        .with_context(|| format!("friction classifier JSON parse failed | raw: {raw}"))?;
+    Ok(FrictionFlag {
         flagged: parsed.flagged,
         reason: parsed.reason,
     })
@@ -258,7 +257,7 @@ pub async fn extract_candidate(
     full_session: &[Turn],
     friction_turn_index: u32,
     feedback: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let session_text = full_session_text(full_session);
     let feedback_clause = feedback
         .map(|f| format!("\n\nPrevious attempt failed: {f}. Adjust accordingly."))
@@ -268,14 +267,13 @@ pub async fn extract_candidate(
         The assistant struggled at turn {friction_turn_index}. \
         Extract a 1-3 sentence preload that would have prevented the struggle.{feedback_clause}"
     );
-    let raw = llm::complete(EXTRACTOR_SYSTEM, &user_msg, 300, 120).await?;
+    let raw = llm::complete(EXTRACTOR_SYSTEM, &user_msg, 300, 120)
+        .await
+        .context("extractor LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: PreloadJson = serde_json::from_str(json_str)
-        .map_err(|e| {
-            eprintln!("  [extractor] parse error: {e} | raw: {raw}");
-        })
-        .ok()?;
-    parsed.preload.filter(|s| !s.trim().is_empty())
+        .with_context(|| format!("extractor JSON parse failed | raw: {raw}"))?;
+    Ok(parsed.preload.filter(|s| !s.trim().is_empty()))
 }
 
 // ── T3c: Replay simulator ─────────────────────────────────────────────────────
@@ -287,9 +285,11 @@ do not say you need to investigate. Use the preload to give a substantive answer
 the action it enables. If the user prompt is ambiguous, pick the most likely interpretation \
 and proceed.\n\nPreload:\n";
 
-pub async fn replay_with_preload(preload: &str, original_user_prompt: &str) -> Option<String> {
+pub async fn replay_with_preload(preload: &str, original_user_prompt: &str) -> Result<String> {
     let system = format!("{REPLAY_SYSTEM_PREFIX}{preload}");
-    llm::complete(&system, original_user_prompt, 500, 180).await
+    llm::complete(&system, original_user_prompt, 500, 180)
+        .await
+        .context("replay LLM call failed")
 }
 
 // ── T3d: Dual judge ───────────────────────────────────────────────────────────
@@ -313,41 +313,44 @@ The simulated response should cite, build on, or apply the preload directly. \
 Fail if the response ignores the preload and proposes exploration (file reads, greps, searches). \
 Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 30 words.";
 
-pub async fn judge_correctness(simulated: &str, eventual_resolution: &str) -> Option<JudgeResult> {
+pub async fn judge_correctness(simulated: &str, eventual_resolution: &str) -> Result<JudgeResult> {
     let user_msg =
         format!("Simulated response:\n{simulated}\n\nEventual resolution:\n{eventual_resolution}");
-    let raw = llm::complete(CORRECTNESS_SYSTEM, &user_msg, 200, 90).await?;
+    let raw = llm::complete(CORRECTNESS_SYSTEM, &user_msg, 200, 90)
+        .await
+        .context("correctness judge LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
-        .map_err(|e| eprintln!("  [correctness judge] parse error: {e} | raw: {raw}"))
-        .ok()?;
-    Some(JudgeResult {
+        .with_context(|| format!("correctness judge JSON parse failed | raw: {raw}"))?;
+    Ok(JudgeResult {
         passed: parsed.passed,
         reason: parsed.reason,
     })
 }
 
-pub async fn judge_efficiency(simulated: &str, preload: &str) -> Option<JudgeResult> {
+pub async fn judge_efficiency(simulated: &str, preload: &str) -> Result<JudgeResult> {
     let user_msg = format!("Preload:\n{preload}\n\nSimulated response:\n{simulated}");
-    let raw = llm::complete(EFFICIENCY_SYSTEM, &user_msg, 200, 90).await?;
+    let raw = llm::complete(EFFICIENCY_SYSTEM, &user_msg, 200, 90)
+        .await
+        .context("efficiency judge LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
-        .map_err(|e| eprintln!("  [efficiency judge] parse error: {e} | raw: {raw}"))
-        .ok()?;
-    Some(JudgeResult {
+        .with_context(|| format!("efficiency judge JSON parse failed | raw: {raw}"))?;
+    Ok(JudgeResult {
         passed: parsed.passed,
         reason: parsed.reason,
     })
 }
 
-pub async fn judge_durability(preload: &str) -> Option<JudgeResult> {
+pub async fn judge_durability(preload: &str) -> Result<JudgeResult> {
     let user_msg = format!("Candidate memory:\n{preload}");
-    let raw = llm::complete(DURABILITY_SYSTEM, &user_msg, 200, 90).await?;
+    let raw = llm::complete(DURABILITY_SYSTEM, &user_msg, 200, 90)
+        .await
+        .context("durability judge LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
-        .map_err(|e| eprintln!("  [durability judge] parse error: {e} | raw: {raw}"))
-        .ok()?;
-    Some(JudgeResult {
+        .with_context(|| format!("durability judge JSON parse failed | raw: {raw}"))?;
+    Ok(JudgeResult {
         passed: parsed.passed,
         reason: parsed.reason,
     })
@@ -382,15 +385,12 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
 
         let turn_index = turn.turn_index;
 
-        let friction = match classify_friction(&turns, turn_index).await {
-            Some(f) => f,
-            None => {
-                eprintln!("  [turn {turn_index}] friction classifier returned None, skipping");
-                continue;
-            }
-        };
+        let friction = classify_friction(&turns, turn_index)
+            .await
+            .with_context(|| format!("classify_friction failed at turn {turn_index}"))?;
 
         if !friction.flagged {
+            eprintln!("  [turn {turn_index}] no friction: {}", friction.reason);
             outcomes.push(AnalysisOutcome::NoFriction { turn: turn_index });
             continue;
         }
@@ -409,7 +409,10 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
 
         for attempt in 0..MAX_ITERATIONS {
             // Extract candidate
-            let candidate = match extract_candidate(&turns, turn_index, feedback.as_deref()).await {
+            let candidate = match extract_candidate(&turns, turn_index, feedback.as_deref())
+                .await
+                .with_context(|| format!("extract_candidate failed at turn {turn_index}"))?
+            {
                 Some(c) => c,
                 None => {
                     final_fail_reason = "extractor returned null".to_string();
@@ -424,10 +427,9 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
             );
 
             // Durability gate (pre-replay): reject session-specific preloads cheaply
-            let durability = judge_durability(&candidate).await.unwrap_or(JudgeResult {
-                passed: false,
-                reason: "judge unavailable".to_string(),
-            });
+            let durability = judge_durability(&candidate)
+                .await
+                .with_context(|| format!("judge_durability failed at turn {turn_index}"))?;
             if !durability.passed {
                 let fail_reason = format!("durability: {}", durability.reason);
                 eprintln!(
@@ -441,26 +443,17 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
             }
 
             // Replay
-            let simulated = match replay_with_preload(&candidate, &user_prompt).await {
-                Some(s) => s,
-                None => {
-                    feedback = Some("replay failed to produce output".to_string());
-                    continue;
-                }
-            };
+            let simulated = replay_with_preload(&candidate, &user_prompt)
+                .await
+                .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))?;
 
-            // Judge correctness
-            let correctness = judge_correctness(&simulated, &resolution).await;
-            let efficiency = judge_efficiency(&simulated, &candidate).await;
-
-            let c_result = correctness.unwrap_or(JudgeResult {
-                passed: false,
-                reason: "judge unavailable".to_string(),
-            });
-            let e_result = efficiency.unwrap_or(JudgeResult {
-                passed: false,
-                reason: "judge unavailable".to_string(),
-            });
+            // Judge correctness + efficiency
+            let c_result = judge_correctness(&simulated, &resolution)
+                .await
+                .with_context(|| format!("judge_correctness failed at turn {turn_index}"))?;
+            let e_result = judge_efficiency(&simulated, &candidate)
+                .await
+                .with_context(|| format!("judge_efficiency failed at turn {turn_index}"))?;
 
             if c_result.passed && e_result.passed {
                 // Store
