@@ -15,7 +15,7 @@ use crate::qdrant_hybrid::ensure_hybrid_collection;
 
 pub const COLLECTION_MEMORY_UNITS: &str = "claude-memory-units";
 
-const DEDUP_THRESHOLD: f32 = 0.92;
+const DEDUP_THRESHOLD: f32 = 0.85;
 const DEDUP_TOP_K: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

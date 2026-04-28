@@ -133,23 +133,38 @@ fn full_session_text(turns: &[Turn]) -> String {
         .join("\n\n")
 }
 
-/// Find the assistant text within ~10 turns after the friction turn.
+/// Concatenate non-empty post-friction text. Many sessions resolve via multiple
+/// assistant turns with tool-use intermixed; one turn's `text` may be empty even
+/// when the resolution is plain. Falls back to user turns as last resort, since
+/// the user's next message often acknowledges the resolution.
 fn eventual_resolution(turns: &[Turn], friction_turn: u32) -> String {
+    let window = 30u32;
+
+    let assistant_texts: Vec<String> = turns
+        .iter()
+        .filter(|t| {
+            t.turn_index > friction_turn
+                && t.turn_index <= friction_turn + window
+                && matches!(t.role, crate::extract::Role::Assistant)
+                && !t.text.trim().is_empty()
+        })
+        .map(|t| t.text.clone())
+        .collect();
+
+    if !assistant_texts.is_empty() {
+        return assistant_texts.join("\n\n");
+    }
+
     turns
         .iter()
         .filter(|t| {
             t.turn_index > friction_turn
-                && t.turn_index <= friction_turn + 20
-                && matches!(t.role, crate::extract::Role::Assistant)
+                && t.turn_index <= friction_turn + window
+                && !t.text.trim().is_empty()
         })
-        .last()
-        .or_else(|| {
-            turns.iter().find(|t| {
-                t.turn_index > friction_turn && matches!(t.role, crate::extract::Role::Assistant)
-            })
-        })
-        .map(|t| t.text.clone())
-        .unwrap_or_default()
+        .map(|t| format_turn(t))
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 // ── T3a: Friction classifier ──────────────────────────────────────────────────
@@ -183,50 +198,60 @@ pub async fn classify_friction(turns: &[Turn], target_turn_index: u32) -> Option
 // ── T3b: Candidate extractor ──────────────────────────────────────────────────
 
 const EXTRACTOR_SYSTEM: &str = "\
-You extract DURABLE memory preloads from Claude session transcripts.\n\n\
-A preload is a TECHNICAL FACT about how a tool, system, or environment behaves — knowledge that would apply to anyone, \
-not just this user. The user's reaction in the transcript is just evidence; the real preload is the underlying mechanism that drove it.\n\n\
-PRIORITY ORDER for what to extract:\n\n\
-1. Tool-behavior facts (strongest — universal, non-subjective):\n\
-   - \"`git absorb` uses blame-based target detection, so it fails when fixing up commits that contain newly-added lines (no blame history exists). Explicit `git commit --fixup=<sha>` works regardless.\"\n\
-   - \"`pacman` does not manage AUR packages; AUR builds require an external helper.\"\n\n\
-2. Configured artifacts that exist on this system:\n\
-   - \"A `git fix <sha>` helper is documented in ~/.claude/rules/02-git.md (non-interactive autosquash).\"\n\
-   - \"MCP server config lives at ~/.claude.json.\"\n\n\
-3. Concrete environment / project facts:\n\
-   - \"This is Arch Linux; package operations go through the `arch` CLI wrapper.\"\n\
-   - \"Tests live in `tests/`, not co-located with `src/`.\"\n\n\
-DO NOT WRITE preference-framed memories. If the user pushed back on something, find the TECHNICAL reason and write THAT. \
-\"User prefers X\" is almost always wrong — the user's choice was driven by a constraint, find the constraint.\n\n\
-BAD examples:\n\
-- \"User prefers explicit-SHA fixup over `git absorb`.\" (preference framing — the real fact is `git absorb`'s failure mode)\n\
-- \"When helping with fixups, always use `git fix <sha>`.\" (prescriptive rule — write what `git fix` IS, not what to always do)\n\
-- \"User wants to fix commit X today.\" (session-specific task)\n\
-- \"Assume the user prefers concise responses.\" (generic platitude with no anchoring fact)\n\n\
-Forbidden phrasing: \"always\", \"never\", \"when X, do Y\", \"the user prefers\", \"assume the user wants\".\n\
-Required phrasing: present-tense statements about what exists or how something works.\n\n\
-Return null if the friction has no transferable technical fact — sometimes it's one-off task confusion. \
+You write encyclopedia-style entries for a long-term technical knowledge base.\n\n\
+Given a transcript where the assistant struggled, identify what TECHNICAL FACT about the relevant tool, command, codebase, \
+or environment — IF stated as a Wikipedia-style entry — would have given the assistant the knowledge it lacked.\n\n\
+Reframe the question in your head: NOT \"what should the assistant DO\" but \"what IS true about <subject>\". \
+The output should read like the first paragraph of a man page or a Wikipedia article — describing properties and behaviors, not giving advice.\n\n\
+GOOD (encyclopedia-style facts):\n\
+- \"`git absorb` selects fixup targets via `git blame` of changed lines; it cannot route hunks containing newly-added lines because no blame information exists for them.\"\n\
+- \"`git cherry -v <upstream> <branch>` lists each commit in <branch> with `+` (not in upstream) or `-` (already present in upstream by patch-id), detecting cherry-picked or rebased commits despite different SHAs.\"\n\
+- \"In the codex codebase, `PreToolUseOutcome` carries the `updatedInput` field from `events/pre_tool_use.rs` to `core/src/tools/registry.rs`, which mutates the shell tool invocation payload before dispatch.\"\n\
+- \"The `arch` CLI on this system wraps `pacman` and `paru`, so AUR packages are installed via `arch install` rather than `pacman -S`.\"\n\n\
+BAD (recipes, instructions, preferences):\n\
+- \"Use `git cherry -v` to detect cherry-picks.\" (imperative recipe — say what `git cherry -v` IS instead)\n\
+- \"When checking branch merge status, use patch-id comparison.\" (conditional recipe — describe the patch-id comparison itself)\n\
+- \"User prefers explicit-SHA fixup.\" (preference — describe `git absorb`'s mechanism instead)\n\
+- \"Always run X before Y.\" (universal rule)\n\n\
+THE TEST: read your candidate aloud. Does it sound like a Wikipedia sentence (describing properties)? \
+Or does it sound like advice (telling someone what to do)? Only the first kind is acceptable.\n\n\
+Forbidden openers: \"Use\", \"Run\", \"For\", \"When\", \"To\", \"If\", \"Before\", \"After\", \"Always\", \"Never\", \"Verify\", \"Check\", \"Compare\".\n\
+Forbidden subjects: \"The user\", \"The assistant\", \"You\".\n\
+Required openers: a noun phrase naming the tool, command, file, or system that the fact is about.\n\n\
+Return null if the friction has no transferable encyclopedia-style fact. \
 Respond ONLY with JSON: {\"preload\": \"...\" | null}.";
 
 const DURABILITY_SYSTEM: &str = "\
 You are a strict gatekeeper for a long-term memory system. You see ONLY a candidate memory.\n\n\
-GOOD memories are TECHNICAL FACTS — about how a tool behaves, what's configured, what an environment is. \
-They would be useful to anyone, not just one user. They state WHAT IS, in present tense.\n\n\
-BAD memories frame things as user preferences or prescriptive rules. \"User prefers X\" is almost always lazy — \
-the real fact is the technical constraint that drove the preference.\n\n\
-PASS:\n\
-- \"`pacman` does not manage AUR packages; an external helper is required.\"\n\
-- \"Codex CLI is configured via ~/.codex/auth.json; it uses ChatGPT subscription for zero-cost API access.\"\n\
-- \"`~/Projects/system/sentinel` is a Rust security daemon; `arch install` (custom CLI) rebuilds it via PKGBUILD.\"\n\
-- \"Tests for this repo live in `tests/`, not in `src/`.\"\n\n\
-FAIL:\n\
-- \"When using LLMs, always prefer Codex CLI.\" (prescriptive + universalized)\n\
-- \"User prefers explicit-SHA fixup over `git absorb`.\" (preference framing — what's the technical reason?)\n\
-- \"When the user asks for fixups, do X.\" (prescriptive rule — write what X IS instead)\n\
-- \"User prefers concise responses.\" (no anchoring fact)\n\
-- \"User wants to fix commit X today.\" (session-specific)\n\n\
-Red-flag phrasing: \"always\", \"never\", \"when X do Y\", \"the user prefers\", \"assume the user wants\", \"the user's goal is\". \
-Fail anything containing these unless the rest of the sentence is a clean technical fact (rare).\n\n\
+A good memory is INDICATIVE — it states what something IS or DOES, in present tense.\n\
+A bad memory is IMPERATIVE or CONDITIONAL — it tells the assistant what to DO, when, or how.\n\n\
+PASS only declarative facts about properties, behaviors, or configurations:\n\
+- \"`pacman` does not manage AUR packages; AUR builds need an external helper.\"\n\
+- \"`git cherry -v <upstream> <branch>` outputs +/- markers for patch-equivalent commits, detecting cherry-picks even with different SHAs.\"\n\
+- \"`git absorb` chooses fixup targets via `git blame`, so it cannot route hunks containing newly-added lines.\"\n\
+- \"Codex CLI auth lives at ~/.codex/auth.json; calls bill against ChatGPT subscription, not the OpenAI API.\"\n\n\
+FAIL imperative or conditional phrasing — these are recipes, not facts:\n\
+- \"For branch-maturity checks, run X.\" (recipe: \"for X, do Y\")\n\
+- \"When comparing branches, use `git cherry`.\" (conditional recipe)\n\
+- \"Use `git cherry -v` to detect cherry-picks.\" (imperative \"use X to Y\")\n\
+- \"To check merge status, do Z.\" (\"to X, do Y\")\n\
+- \"Always prefer X.\" / \"Never use Y.\" (universalized rules)\n\
+- \"The user prefers X.\" / \"The user wants Y.\" (preference framing)\n\
+- \"Verify X before doing Y.\" (instruction, not fact)\n\n\
+FAIL ephemeral snapshots — current state of specific entities, which goes stale fast:\n\
+- \"`feature-x-branch` is 3346 commits ahead of master with 355 files changed.\" (specific branch's current diff stats; will change daily)\n\
+- \"`config.toml` currently has `model = \"gpt-5.4\"` set.\" (current config value; user changes these)\n\
+- \"The `widgets` table has 12,453 rows.\" (current data state)\n\
+- \"PR #1234 is in review.\" (current PR status)\n\
+- \"On 2026-04-28 the user is working on Y.\" (timestamped state)\n\n\
+Snapshot red flags: specific commit counts/file counts/line counts/row counts, named branches/PRs/issues with current status, timestamped facts, or any \"X currently is/has Y\" where Y is volatile state. \
+Generalizing to a class is fine (\"branches with rebased history\"), but specific named entities with numeric state are not.\n\n\
+Red-flag openers (FAIL on sight unless paired with a pure declarative): \
+\"For ...\", \"When ...\", \"To ...\", \"Use ...\", \"Always\", \"Never\", \"Before ...\", \"After ...\", \"If ...\", \
+\"The user prefers\", \"Assume\", \"You should\".\n\n\
+Convert mentally: if the candidate could be rewritten as \"X is/has/does Y\" without losing meaning, \
+it might be a fact in disguise — pass it. If rewriting requires adding a subject like \"the assistant\" or \"someone\" \
+or \"you\", it's a recipe — fail it.\n\n\
 Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 30 words.";
 
 pub async fn extract_candidate(
