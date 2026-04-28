@@ -182,7 +182,7 @@ pub async fn classify_friction(turns: &[Turn], target_turn_index: u32) -> Option
     let user_msg = format!(
         "Classify whether the assistant struggled at turn {target_turn_index}:\n\n{context}"
     );
-    let raw = llm::complete(FRICTION_SYSTEM, &user_msg, 200, 15).await?;
+    let raw = llm::complete(FRICTION_SYSTEM, &user_msg, 200, 90).await?;
     let json_str = extract_json(&raw);
     let parsed: FlaggedJson = serde_json::from_str(json_str)
         .map_err(|e| {
@@ -268,7 +268,7 @@ pub async fn extract_candidate(
         The assistant struggled at turn {friction_turn_index}. \
         Extract a 1-3 sentence preload that would have prevented the struggle.{feedback_clause}"
     );
-    let raw = llm::complete(EXTRACTOR_SYSTEM, &user_msg, 300, 20).await?;
+    let raw = llm::complete(EXTRACTOR_SYSTEM, &user_msg, 300, 120).await?;
     let json_str = extract_json(&raw);
     let parsed: PreloadJson = serde_json::from_str(json_str)
         .map_err(|e| {
@@ -281,21 +281,31 @@ pub async fn extract_candidate(
 // ── T3c: Replay simulator ─────────────────────────────────────────────────────
 
 const REPLAY_SYSTEM_PREFIX: &str = "\
-You are an assistant. Use the following preload as your knowledge context. \
-Respond to the user's prompt concisely and directly, using the preload.\n\nPreload:\n";
+You are an assistant answering a user. The preload below is established background knowledge — \
+treat it as ground truth and apply it directly. Do not ask the user clarifying questions; \
+do not say you need to investigate. Use the preload to give a substantive answer or take \
+the action it enables. If the user prompt is ambiguous, pick the most likely interpretation \
+and proceed.\n\nPreload:\n";
 
 pub async fn replay_with_preload(preload: &str, original_user_prompt: &str) -> Option<String> {
     let system = format!("{REPLAY_SYSTEM_PREFIX}{preload}");
-    llm::complete(&system, original_user_prompt, 500, 30).await
+    llm::complete(&system, original_user_prompt, 500, 180).await
 }
 
 // ── T3d: Dual judge ───────────────────────────────────────────────────────────
 
 const CORRECTNESS_SYSTEM: &str = "\
-You are a judge comparing two assistant responses to the same user prompt. \
-Does the simulated response reach substantively the same conclusion as the eventual resolution? \
-Minor wording differences are fine; penalise only missing conclusions or wrong conclusions. \
-Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 30 words.";
+You judge whether a simulated single-turn response is consistent with how a real multi-turn \
+session resolved. The simulated response was produced from a preload alone, with no tool access \
+and no conversation history; the eventual resolution emerged from many turns and tool calls.\n\n\
+PASS if the simulated response conveys information that is consistent with — and would lead toward — \
+the eventual resolution. Different stylistic framings, partial answers, or stating the relevant fact \
+without taking an action all PASS as long as nothing said is wrong.\n\n\
+FAIL only if the simulated response asserts a fact that contradicts the resolution, takes a wrong \
+direction the resolution explicitly rejected, or is empty/refuses entirely (e.g. 'I don't know').\n\n\
+Asking a clarifying question is NOT automatic failure if the preload's content is reflected in the question. \
+Stylistic divergence is fine.\n\n\
+Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 40 words.";
 
 const EFFICIENCY_SYSTEM: &str = "\
 You are a judge evaluating whether a simulated assistant response uses a given preload. \
@@ -306,7 +316,7 @@ Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason und
 pub async fn judge_correctness(simulated: &str, eventual_resolution: &str) -> Option<JudgeResult> {
     let user_msg =
         format!("Simulated response:\n{simulated}\n\nEventual resolution:\n{eventual_resolution}");
-    let raw = llm::complete(CORRECTNESS_SYSTEM, &user_msg, 200, 15).await?;
+    let raw = llm::complete(CORRECTNESS_SYSTEM, &user_msg, 200, 90).await?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
         .map_err(|e| eprintln!("  [correctness judge] parse error: {e} | raw: {raw}"))
@@ -319,7 +329,7 @@ pub async fn judge_correctness(simulated: &str, eventual_resolution: &str) -> Op
 
 pub async fn judge_efficiency(simulated: &str, preload: &str) -> Option<JudgeResult> {
     let user_msg = format!("Preload:\n{preload}\n\nSimulated response:\n{simulated}");
-    let raw = llm::complete(EFFICIENCY_SYSTEM, &user_msg, 200, 15).await?;
+    let raw = llm::complete(EFFICIENCY_SYSTEM, &user_msg, 200, 90).await?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
         .map_err(|e| eprintln!("  [efficiency judge] parse error: {e} | raw: {raw}"))
@@ -332,7 +342,7 @@ pub async fn judge_efficiency(simulated: &str, preload: &str) -> Option<JudgeRes
 
 pub async fn judge_durability(preload: &str) -> Option<JudgeResult> {
     let user_msg = format!("Candidate memory:\n{preload}");
-    let raw = llm::complete(DURABILITY_SYSTEM, &user_msg, 200, 15).await?;
+    let raw = llm::complete(DURABILITY_SYSTEM, &user_msg, 200, 90).await?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
         .map_err(|e| eprintln!("  [durability judge] parse error: {e} | raw: {raw}"))

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::embed::Embedder;
+use crate::index::{QDRANT_URL, SearchResult};
 use crate::qdrant_hybrid::ensure_hybrid_collection;
 
 pub const COLLECTION_MEMORY_UNITS: &str = "claude-memory-units";
@@ -162,4 +163,49 @@ pub async fn upsert_with_dedup(
         .context("failed to upsert memory unit")?;
 
     Ok(DedupOutcome::Inserted(new_uuid))
+}
+
+/// Search the memory-units collection by semantic similarity.
+pub async fn search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    ensure_memory_units_collection(&client).await?;
+
+    let embedder = Embedder::new();
+    let query_vec = embedder.embed(query).await?;
+
+    let search = SearchPointsBuilder::new(COLLECTION_MEMORY_UNITS, query_vec, limit as u64)
+        .vector_name("dense")
+        .with_payload(true);
+
+    let results = client
+        .search_points(search)
+        .await
+        .context("memory-units search failed")?;
+
+    Ok(results
+        .result
+        .into_iter()
+        .map(|p| {
+            let text = string_field(&p.payload, "text");
+            let session = string_field(&p.payload, "source_session");
+            SearchResult {
+                text,
+                source: "memory-unit".to_string(),
+                path: session,
+                score: p.score,
+            }
+        })
+        .collect())
+}
+
+fn string_field(payload: &HashMap<String, Value>, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(|v| match &v.kind {
+            Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }

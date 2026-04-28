@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use claude_memory::{analyze, backfill, config, graph, index};
+use claude_memory::{analyze, backfill, config, graph, index, memory_unit};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -448,15 +448,43 @@ async fn run_enrich(limit: usize) -> Result<()> {
 
     let mut sections = Vec::new();
 
-    // Vector search for memories (filter low-score noise)
-    const MIN_SCORE: f32 = 0.85;
-    let memories = index::search_prompts(prompt, limit, Some("memory")).await;
-    if let Ok(ref results) = memories {
-        let relevant: Vec<_> = results.iter().filter(|r| r.score >= MIN_SCORE).collect();
-        if !relevant.is_empty() {
-            let mem_text = format_memory_results(&relevant);
-            sections.push(mem_text);
+    // Vector search across curated memories (prompts collection, source="memory")
+    // and auto-extracted memory units (claude-memory-units collection)
+    const MIN_SCORE: f32 = 0.65;
+    let curated = match index::search_prompts(prompt, limit, Some("memory")).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("enrich: prompts search failed: {e:#}");
+            Vec::new()
         }
+    };
+    let units = match memory_unit::search(prompt, limit).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("enrich: memory-units search failed: {e:#}");
+            Vec::new()
+        }
+    };
+
+    let curated_relevant: Vec<&index::SearchResult> = curated
+        .iter()
+        .filter(|r| r.score >= MIN_SCORE)
+        .collect();
+    if !curated_relevant.is_empty() {
+        sections.push(format_memory_results(&curated_relevant));
+    }
+
+    let units_relevant: Vec<&index::SearchResult> = units
+        .iter()
+        .filter(|r| r.score >= MIN_SCORE)
+        .filter(|r| {
+            !curated_relevant
+                .iter()
+                .any(|c| c.text.trim() == r.text.trim())
+        })
+        .collect();
+    if !units_relevant.is_empty() {
+        sections.push(format_memory_unit_results(&units_relevant));
     }
 
     // Graph: extract entities from prompt, query relationships
@@ -488,6 +516,22 @@ fn read_hook_stdin() -> Result<serde_json::Value> {
 
 fn format_memory_results(results: &[&index::SearchResult]) -> String {
     let mut out = String::from("Relevant memories:");
+    for r in results {
+        let text = r.text.replace('\n', " ");
+        let text = if text.len() > 300 {
+            format!("{}...", &text[..300])
+        } else {
+            text
+        };
+        out.push_str(&format!("\n- ({:.2}) {}", r.score, text));
+    }
+    out
+}
+
+fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
+    let mut out = String::from(
+        "## Possibly-useful preloads (from prior sessions, may be stale or wrong; treat as hints, not facts)",
+    );
     for r in results {
         let text = r.text.replace('\n', " ");
         let text = if text.len() > 300 {
