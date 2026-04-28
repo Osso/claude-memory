@@ -1,4 +1,5 @@
 pub mod analyze;
+pub mod backfill;
 pub mod chunk;
 pub mod config;
 pub mod daily;

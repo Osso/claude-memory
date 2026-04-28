@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use claude_memory::{analyze, config, graph, index};
+use claude_memory::{analyze, backfill, config, graph, index};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -132,6 +132,27 @@ enum Command {
         /// Path to the session .jsonl file
         session_jsonl: PathBuf,
     },
+
+    /// Backfill: walk the live projects directory and analyze each session.
+    /// Resumable via a sidecar state file.
+    Backfill {
+        /// Projects directory (default: ~/.claude/projects)
+        #[arg(long)]
+        projects: Option<PathBuf>,
+
+        /// State file tracking processed session IDs
+        /// (default: ~/.cache/claude-memory/backfill-processed.txt)
+        #[arg(long)]
+        state_file: Option<PathBuf>,
+
+        /// Skip sessions with fewer than this many user turns
+        #[arg(long, default_value = "3")]
+        min_user_turns: usize,
+
+        /// Stop after analysing this many sessions (useful for testing)
+        #[arg(long)]
+        max_sessions: Option<usize>,
+    },
 }
 
 #[tokio::main]
@@ -179,7 +200,29 @@ async fn run_command(command: Command) -> Result<()> {
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
+        Command::Backfill {
+            projects,
+            state_file,
+            min_user_turns,
+            max_sessions,
+        } => run_backfill_cmd(projects, state_file, min_user_turns, max_sessions).await,
     }
+}
+
+async fn run_backfill_cmd(
+    projects: Option<PathBuf>,
+    state_file: Option<PathBuf>,
+    min_user_turns: usize,
+    max_sessions: Option<usize>,
+) -> Result<()> {
+    let home = dirs::home_dir().context("no home directory")?;
+    let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
+    let state_file = state_file.unwrap_or_else(|| {
+        dirs::cache_dir()
+            .unwrap_or_else(|| home.join(".cache"))
+            .join("claude-memory/backfill-processed.txt")
+    });
+    backfill::run_backfill(&projects_dir, &state_file, min_user_turns, max_sessions).await
 }
 
 async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
