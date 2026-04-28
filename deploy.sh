@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "Building claude-memory..."
-cargo build --release
+cargo install --force --path .
 
-echo "Done. Restart Claude Code to reload the MCP server."
+echo "Installed to ~/.cargo/bin/claude-memory"
+echo "Restart Claude Code to reload the MCP server."

@@ -12,6 +12,7 @@ name = "claude-memory-mcp"
 path = "src/bin/mcp.rs"
 
 [dependencies]
+llm-sdk = { path = "../../lib/llm-sdk" }
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
@@ -30,6 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
 zstd = "0.13"
 cozo = { version = "0.7", features = ["storage-sqlite"] }
+toml = "0.8"
 
 [patch.crates-io]
 graph_builder = { path = "patches/graph_builder" }

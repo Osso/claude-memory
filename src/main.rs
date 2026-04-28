@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use claude_memory::{graph, index};
+use claude_memory::{config, graph, index};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -299,9 +299,11 @@ async fn extract_texts_to_graph(texts: &[&str], label: &str) -> Result<usize> {
     );
     let mut extracted = 0;
     for (i, text) in texts.iter().enumerate() {
-        match graph::extract_and_store(text).await {
-            Ok(n) => extracted += n,
-            Err(e) => eprintln!("  entry {}: {e}", i + 1),
+        if config::graph_enabled() {
+            match graph::extract_and_store(text).await {
+                Ok(n) => extracted += n,
+                Err(e) => eprintln!("  entry {}: {e}", i + 1),
+            }
         }
         eprint!("\r  {}/{} ({} triplets)", i + 1, texts.len(), extracted);
     }
@@ -408,12 +410,14 @@ async fn run_enrich(limit: usize) -> Result<()> {
     }
 
     // Graph: extract entities from prompt, query relationships
-    let entities = graph::find_concepts(prompt).await;
-    if !entities.is_empty() {
-        if let Ok(related) = graph::query_related(&entities) {
-            if !related.is_empty() {
-                let graph_text = format_graph_results(&related);
-                sections.push(graph_text);
+    if config::graph_enabled() {
+        let entities = graph::find_concepts(prompt).await;
+        if !entities.is_empty() {
+            if let Ok(related) = graph::query_related(&entities) {
+                if !related.is_empty() {
+                    let graph_text = format_graph_results(&related);
+                    sections.push(graph_text);
+                }
             }
         }
     }

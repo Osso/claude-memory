@@ -1,8 +1,8 @@
-//! LLM-based filtering and merging via the Anthropic Claude Haiku API.
+//! LLM-based filtering and merging via llm-sdk (configurable backend).
 
 use std::time::Duration;
 
-const MODEL: &str = "claude-haiku-4-5-20251001";
+use llm_sdk::Backend;
 
 const FILTER_SYSTEM: &str = "\
 You are a relevance judge for a semantic memory system.
@@ -35,75 +35,92 @@ fn log(msg: &str) {
     let _ = writeln!(f, "[{now} llm] {msg}");
 }
 
-fn build_request_body(system: &str, user: &str, max_tokens: u32) -> serde_json::Value {
-    serde_json::json!({
-        "model": MODEL,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": user}]
-    })
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlmBackend {
+    Anthropic,
+    OpenRouter,
+    Claude,
+    Codex,
 }
 
-async fn send_request(
-    body: serde_json::Value,
-    key: &str,
-    timeout_secs: u64,
-) -> Option<serde_json::Value> {
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .timeout(Duration::from_secs(timeout_secs))
-        .send()
-        .await
-        .map_err(|e| log(&format!("request error: {e}")))
-        .ok()?;
-
-    let status = response.status();
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| log(&format!("response parse error: {e}")))
-        .ok()?;
-
-    if !status.is_success() {
-        log(&format!("API error {status}: {json}"));
-        return None;
+fn parse_backend() -> LlmBackend {
+    match std::env::var("CLAUDE_MEMORY_LLM_BACKEND")
+        .unwrap_or_default()
+        .as_str()
+    {
+        "anthropic" => LlmBackend::Anthropic,
+        "claude" => LlmBackend::Claude,
+        "openrouter" => LlmBackend::OpenRouter,
+        "codex" | "" => LlmBackend::Codex,
+        other => {
+            log(&format!(
+                "unknown CLAUDE_MEMORY_LLM_BACKEND={other:?}, falling back to codex"
+            ));
+            LlmBackend::Codex
+        }
     }
-
-    Some(json)
 }
 
-fn extract_text_content(json: &serde_json::Value) -> Option<String> {
-    let text = json
-        .get("content")
-        .and_then(|c| c.get(0))
-        .and_then(|b| b.get("text"))
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_owned());
-
-    if text.is_none() {
-        log(&format!("unexpected response shape: {json}"));
+fn default_model_for_backend(backend: LlmBackend) -> &'static str {
+    match backend {
+        LlmBackend::Anthropic => "claude-haiku-4-5-20251001",
+        LlmBackend::OpenRouter => "google/gemini-2.5-flash-lite",
+        LlmBackend::Claude => "haiku",
+        LlmBackend::Codex => "gpt-5.3-codex-spark",
     }
-
-    text
 }
 
-/// Call Claude Haiku with a system prompt and user message. Returns the text of the first
-/// content block, or `None` on any error.
-async fn call_haiku(
-    system: &str,
-    user: &str,
-    max_tokens: u32,
-    timeout_secs: u64,
-) -> Option<String> {
-    let key = std::env::var("ANTHROPIC_API_KEY").ok()?;
-    let body = build_request_body(system, user, max_tokens);
-    let json = send_request(body, &key, timeout_secs).await?;
-    extract_text_content(&json)
+/// Build the appropriate backend and call `.complete(user)`. Returns `Some(text)` on success.
+async fn complete(system: &str, user: &str, max_tokens: u32, timeout_secs: u64) -> Option<String> {
+    let backend = parse_backend();
+    let model = std::env::var("CLAUDE_MEMORY_LLM_MODEL")
+        .unwrap_or_else(|_| default_model_for_backend(backend).to_owned());
+    let timeout = Duration::from_secs(timeout_secs);
+
+    let result: Result<llm_sdk::Output, llm_sdk::Error> = match backend {
+        LlmBackend::Anthropic => {
+            let b = llm_sdk::anthropic::Anthropic::new(&model)
+                .api_key_env("ANTHROPIC_API_KEY")
+                .system_prompt(system)
+                .max_tokens(max_tokens)
+                .timeout(timeout);
+            b.complete(user).await
+        }
+        LlmBackend::OpenRouter => {
+            let b = llm_sdk::openrouter::OpenRouter::new(&model)
+                .api_key_env("OPENROUTER_API_KEY")
+                .system_prompt(system)
+                .timeout(timeout);
+            b.complete(user).await
+        }
+        LlmBackend::Claude => {
+            let b = llm_sdk::claude::Claude::new()
+                .map_err(|e| {
+                    log(&format!("claude backend init error: {e}"));
+                })
+                .ok()?
+                .model(&model)
+                .system_prompt(system)
+                .timeout(timeout);
+            b.complete(user).await
+        }
+        LlmBackend::Codex => {
+            let b = llm_sdk::codex_cli::CodexCli::new()
+                .map_err(|e| {
+                    log(&format!("codex backend init error: {e}"));
+                })
+                .ok()?
+                .model(&model)
+                .system_prompt(system)
+                .timeout(timeout);
+            b.complete(user).await
+        }
+    };
+
+    result
+        .map(|o| o.text)
+        .map_err(|e| log(&format!("llm error ({backend:?}): {e}")))
+        .ok()
 }
 
 /// Parse a JSON array of `usize` from the LLM's raw text. Handles markdown fences.
@@ -132,15 +149,10 @@ fn build_filter_user_message(query: &str, results: &[RawResult]) -> String {
 
 /// Filter a list of raw results to only those genuinely relevant to `query`.
 ///
-/// Returns `None` if the `ANTHROPIC_API_KEY` environment variable is unset or if
-/// any error occurs (network, parsing, etc.).
+/// Returns `None` if no backend is configured or if any error occurs.
 pub async fn filter_relevant(query: &str, results: &[RawResult]) -> Option<Vec<usize>> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return None;
-    }
-
     let user = build_filter_user_message(query, results);
-    let raw = call_haiku(FILTER_SYSTEM, &user, 200, 15).await?;
+    let raw = complete(FILTER_SYSTEM, &user, 200, 15).await?;
     parse_index_array(&raw).or_else(|| {
         log(&format!("could not parse indices from: {raw}"));
         None
@@ -149,15 +161,10 @@ pub async fn filter_relevant(query: &str, results: &[RawResult]) -> Option<Vec<u
 
 /// Merge two related memory entries into one concise entry.
 ///
-/// Returns `None` if the `ANTHROPIC_API_KEY` environment variable is unset or if
-/// any error occurs.
+/// Returns `None` if no backend is configured or if any error occurs.
 pub async fn merge_memories(existing: &str, new: &str) -> Option<String> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return None;
-    }
-
     let user = format!("Existing:\n{existing}\n\nNew:\n{new}");
-    call_haiku(MERGE_SYSTEM, &user, 1000, 20).await
+    complete(MERGE_SYSTEM, &user, 1000, 20).await
 }
 
 #[cfg(test)]
@@ -222,33 +229,43 @@ mod tests {
         assert_eq!(msg, "Query: anything\n\nResults:\n");
     }
 
-    // --- extract_text_content ---
+    // --- parse_backend ---
 
     #[test]
-    fn extract_text_content_simple() {
-        let json = serde_json::json!({
-            "content": [{"type": "text", "text": "hello world"}]
-        });
-        assert_eq!(extract_text_content(&json), Some("hello world".to_string()));
+    fn parse_backend_explicit_values() {
+        fn parse_str(s: &str) -> LlmBackend {
+            match s {
+                "anthropic" => LlmBackend::Anthropic,
+                "claude" => LlmBackend::Claude,
+                "openrouter" => LlmBackend::OpenRouter,
+                "codex" | "" => LlmBackend::Codex,
+                _ => LlmBackend::Codex,
+            }
+        }
+        assert_eq!(parse_str("anthropic"), LlmBackend::Anthropic);
+        assert_eq!(parse_str("openrouter"), LlmBackend::OpenRouter);
+        assert_eq!(parse_str("claude"), LlmBackend::Claude);
+        assert_eq!(parse_str("codex"), LlmBackend::Codex);
+        assert_eq!(parse_str(""), LlmBackend::Codex);
+        assert_eq!(parse_str("unknown"), LlmBackend::Codex);
     }
 
-    #[test]
-    fn extract_text_content_missing_content_key() {
-        let json = serde_json::json!({"id": "msg_123"});
-        assert_eq!(extract_text_content(&json), None);
-    }
+    // --- default_model_for_backend ---
 
     #[test]
-    fn extract_text_content_empty_content_array() {
-        let json = serde_json::json!({"content": []});
-        assert_eq!(extract_text_content(&json), None);
-    }
-
-    #[test]
-    fn extract_text_content_missing_text_field() {
-        let json = serde_json::json!({
-            "content": [{"type": "tool_use", "id": "tool_1"}]
-        });
-        assert_eq!(extract_text_content(&json), None);
+    fn default_model_for_each_backend() {
+        assert_eq!(
+            default_model_for_backend(LlmBackend::Anthropic),
+            "claude-haiku-4-5-20251001"
+        );
+        assert_eq!(
+            default_model_for_backend(LlmBackend::OpenRouter),
+            "google/gemini-2.5-flash-lite"
+        );
+        assert_eq!(default_model_for_backend(LlmBackend::Claude), "haiku");
+        assert_eq!(
+            default_model_for_backend(LlmBackend::Codex),
+            "gpt-5.3-codex-spark"
+        );
     }
 }
