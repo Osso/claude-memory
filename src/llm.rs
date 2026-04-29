@@ -106,6 +106,7 @@ pub async fn complete(
                 .model(&model)
                 .system_prompt(system)
                 .timeout(timeout)
+                .stdin_prompt()
                 .extra_arg("--tools")
                 .extra_arg("");
             b.complete(user).await

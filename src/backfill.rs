@@ -14,6 +14,10 @@ use crate::extract::{Role, read_session_turns};
 /// Skip sessions whose mtime is newer than this — they're likely still active.
 const ACTIVE_SKEW_SECS: u64 = 300;
 
+/// Skip sessions with more user turns than this — analyzing 100s of turns
+/// per session would dominate wall-clock time.
+const MAX_USER_TURNS: usize = 40;
+
 pub async fn run_backfill(
     projects_dir: &Path,
     state_file: &Path,
@@ -72,6 +76,13 @@ pub async fn run_backfill(
         if user_turn_count < min_user_turns {
             skipped_short += 1;
             writeln!(state, "{session_id} short turns={user_turn_count}")?;
+            continue;
+        }
+        if user_turn_count > MAX_USER_TURNS {
+            eprintln!(
+                "  [{session_id}] skipping: too long ({user_turn_count} user turns > {MAX_USER_TURNS})"
+            );
+            writeln!(state, "{session_id} too_long turns={user_turn_count}")?;
             continue;
         }
 
