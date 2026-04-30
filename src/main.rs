@@ -133,6 +133,32 @@ enum Command {
         session_jsonl: PathBuf,
     },
 
+    /// List stored memory units (id, source, text)
+    MemoryList {
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+        #[arg(long)]
+        offset: Option<u64>,
+        /// Case-insensitive substring filter on memory text
+        #[arg(long)]
+        substring: Option<String>,
+        /// Semantic similarity search (returns top-K by cosine score)
+        #[arg(long)]
+        query: Option<String>,
+    },
+
+    /// Delete a memory unit by its numeric Qdrant point ID
+    MemoryDelete {
+        /// Point ID returned by `memory-list`
+        id: u64,
+    },
+
+    /// Manually write a memory unit (alternative to the MCP memory_write tool)
+    MemoryWrite {
+        /// Memory text (1-3 sentences, encyclopedia-style)
+        text: String,
+    },
+
     /// Backfill: walk the live projects directory and analyze each session.
     /// Resumable via a sidecar state file.
     Backfill {
@@ -200,6 +226,14 @@ async fn run_command(command: Command) -> Result<()> {
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
+        Command::MemoryList {
+            limit,
+            offset,
+            substring,
+            query,
+        } => run_memory_list(limit, offset, substring, query).await,
+        Command::MemoryDelete { id } => run_memory_delete(id).await,
+        Command::MemoryWrite { text } => run_memory_write(text).await,
         Command::Backfill {
             projects,
             state_file,
@@ -223,6 +257,67 @@ async fn run_backfill_cmd(
             .join("claude-memory/backfill-processed.txt")
     });
     backfill::run_backfill(&projects_dir, &state_file, min_user_turns, max_sessions).await
+}
+
+async fn run_memory_list(
+    limit: usize,
+    offset: Option<u64>,
+    substring: Option<String>,
+    query: Option<String>,
+) -> Result<()> {
+    let memories =
+        memory_unit::list(limit, offset, substring.as_deref(), query.as_deref()).await?;
+    if memories.is_empty() {
+        println!("(no memory units stored)");
+        return Ok(());
+    }
+    for m in memories {
+        let preview = if m.text.len() > 200 {
+            format!("{}…", &m.text[..200])
+        } else {
+            m.text.clone()
+        };
+        println!(
+            "{}  seen={}  src={}#{}  {}\n  {}\n",
+            m.id, m.seen_count, m.source_session, m.source_turn, m.created_at, preview
+        );
+    }
+    Ok(())
+}
+
+async fn run_memory_delete(id: u64) -> Result<()> {
+    memory_unit::delete(id).await?;
+    println!("deleted memory unit {id}");
+    Ok(())
+}
+
+async fn run_memory_write(text: String) -> Result<()> {
+    use claude_memory::embed::Embedder;
+    use claude_memory::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
+    use chrono::Utc;
+    use qdrant_client::Qdrant;
+
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("memory text is empty");
+    }
+    let client = Qdrant::from_url(claude_memory::index::QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    memory_unit::ensure_memory_units_collection(&client).await?;
+    let embedder = Embedder::new();
+    let unit = MemoryUnit {
+        text: trimmed.to_string(),
+        created_at: Utc::now(),
+        source_session: "manual".to_string(),
+        source_turn: 0,
+        seen_in_sessions: vec!["manual".to_string()],
+    };
+    match upsert_with_dedup(&client, &embedder, unit).await? {
+        DedupOutcome::Inserted(uuid) => println!("inserted (uuid={uuid})"),
+        DedupOutcome::Merged(_) => println!("merged with an existing similar memory"),
+    }
+    Ok(())
 }
 
 async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
@@ -466,10 +561,8 @@ async fn run_enrich(limit: usize) -> Result<()> {
         }
     };
 
-    let curated_relevant: Vec<&index::SearchResult> = curated
-        .iter()
-        .filter(|r| r.score >= MIN_SCORE)
-        .collect();
+    let curated_relevant: Vec<&index::SearchResult> =
+        curated.iter().filter(|r| r.score >= MIN_SCORE).collect();
     if !curated_relevant.is_empty() {
         sections.push(format_memory_results(&curated_relevant));
     }

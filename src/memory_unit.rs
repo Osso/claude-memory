@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
-    PointId, PointStruct, SearchPointsBuilder, SetPayloadPointsBuilder, UpsertPointsBuilder, Value,
+    DeletePointsBuilder, PointId, PointStruct, ScrollPointsBuilder, SearchPointsBuilder,
+    SetPayloadPointsBuilder, UpsertPointsBuilder, Value,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -198,6 +199,119 @@ pub async fn search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
             }
         })
         .collect())
+}
+
+/// A stored memory unit with its Qdrant point ID, for listing/deletion.
+pub struct StoredMemory {
+    pub id: u64,
+    pub text: String,
+    pub source_session: String,
+    pub source_turn: u32,
+    pub created_at: String,
+    pub seen_count: usize,
+}
+
+/// List stored memory units. Either paged (offset) or filtered by substring/semantic query.
+pub async fn list(
+    limit: usize,
+    offset: Option<u64>,
+    substring: Option<&str>,
+    query: Option<&str>,
+) -> Result<Vec<StoredMemory>> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    ensure_memory_units_collection(&client).await?;
+
+    if let Some(q) = query {
+        let embedder = Embedder::new();
+        let vec = embedder.embed(q).await?;
+        let search = SearchPointsBuilder::new(COLLECTION_MEMORY_UNITS, vec, limit as u64)
+            .vector_name("dense")
+            .with_payload(true);
+        let results = client.search_points(search).await?;
+        return Ok(results
+            .result
+            .into_iter()
+            .map(|p| point_to_stored_memory(p.id.as_ref(), &p.payload))
+            .collect());
+    }
+
+    // Scroll all (optionally filter by substring client-side)
+    let scroll_limit = if substring.is_some() {
+        // pull a larger window so substring filtering still yields up to `limit`
+        (limit * 10).max(200) as u32
+    } else {
+        limit as u32
+    };
+    let mut builder = ScrollPointsBuilder::new(COLLECTION_MEMORY_UNITS)
+        .limit(scroll_limit)
+        .with_payload(true);
+    if let Some(o) = offset {
+        builder = builder.offset(o);
+    }
+
+    let scrolled = client
+        .scroll(builder)
+        .await
+        .context("memory-units scroll failed")?;
+
+    let needle = substring.map(|s| s.to_lowercase());
+    Ok(scrolled
+        .result
+        .into_iter()
+        .map(|p| point_to_stored_memory(p.id.as_ref(), &p.payload))
+        .filter(|m| match &needle {
+            Some(n) => m.text.to_lowercase().contains(n),
+            None => true,
+        })
+        .take(limit)
+        .collect())
+}
+
+fn point_to_stored_memory(
+    id: Option<&PointId>,
+    payload: &HashMap<String, Value>,
+) -> StoredMemory {
+    let id_num = match id.and_then(|i| i.point_id_options.as_ref()) {
+        Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => *n,
+        _ => 0,
+    };
+    let seen_count = payload
+        .get("seen_in_sessions")
+        .and_then(|v| match &v.kind {
+            Some(qdrant_client::qdrant::value::Kind::ListValue(list)) => Some(list.values.len()),
+            _ => None,
+        })
+        .unwrap_or(0);
+    StoredMemory {
+        id: id_num,
+        text: string_field(payload, "text"),
+        source_session: string_field(payload, "source_session"),
+        source_turn: payload
+            .get("source_turn")
+            .and_then(|v| match &v.kind {
+                Some(qdrant_client::qdrant::value::Kind::IntegerValue(n)) => Some(*n as u32),
+                _ => None,
+            })
+            .unwrap_or(0),
+        created_at: string_field(payload, "created_at"),
+        seen_count,
+    }
+}
+
+/// Delete a memory unit by its numeric Qdrant point ID.
+pub async fn delete(id: u64) -> Result<()> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    client
+        .delete_points(
+            DeletePointsBuilder::new(COLLECTION_MEMORY_UNITS).points(vec![PointId::from(id)]),
+        )
+        .await
+        .with_context(|| format!("failed to delete memory unit {id}"))?;
+    Ok(())
 }
 
 fn string_field(payload: &HashMap<String, Value>, key: &str) -> String {
