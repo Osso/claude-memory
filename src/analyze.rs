@@ -88,7 +88,21 @@ fn format_turn(t: &Turn) -> String {
         crate::extract::Role::User => "User",
         crate::extract::Role::Assistant => "Assistant",
     };
-    format!("[Turn {}] {}: {}", t.turn_index, role, t.text)
+    let body = match (t.text.trim().is_empty(), t.has_tool_use) {
+        (true, true) => format!(
+            "<{} tool call{}>",
+            t.tool_call_count,
+            if t.tool_call_count == 1 { "" } else { "s" }
+        ),
+        (false, true) => format!(
+            "{}\n<{} tool call{}>",
+            t.text,
+            t.tool_call_count,
+            if t.tool_call_count == 1 { "" } else { "s" }
+        ),
+        _ => t.text.clone(),
+    };
+    format!("[Turn {}] {}: {}", t.turn_index, role, body)
 }
 
 fn build_context_window(turns: &[Turn], target: u32, prior_n: usize) -> String {
