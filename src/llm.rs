@@ -112,13 +112,24 @@ pub async fn complete(
             b.complete(user).await
         }
         LlmBackend::Codex => {
+            // Disable all tool features so codex acts as a pure completion API.
+            // With tools enabled, the agent calls shell/apply_patch/etc on
+            // technical prompts, ballooning input tokens to 200K+ and timing
+            // out (or panicking on broken-pipe). Without tools: ~3s/call, ~25K
+            // input.
             let b = llm_sdk::codex_cli::CodexCli::new()
                 .map_err(|e| anyhow!("codex backend init failed: {e}"))?
                 .model(&model)
                 .system_prompt(system)
                 .timeout(timeout)
                 .extra_config("model_reasoning_effort=\"low\"")
-                .extra_config("web_search=\"disabled\"");
+                .extra_config("web_search=\"disabled\"")
+                .extra_config("features.shell_tool=false")
+                .extra_config("features.include_apply_patch_tool=false")
+                .extra_config("features.tool_search=false")
+                .extra_config("features.tool_suggest=false")
+                .extra_config("features.memory_tool=false")
+                .extra_config("features.request_permissions_tool=false");
             b.complete(user).await
         }
     };
