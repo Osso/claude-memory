@@ -210,62 +210,14 @@ pub async fn classify_friction(turns: &[Turn], target_turn_index: u32) -> Result
 
 // ── T3b: Candidate extractor ──────────────────────────────────────────────────
 
-const EXTRACTOR_SYSTEM: &str = "\
-You write encyclopedia-style entries for a long-term technical knowledge base.\n\n\
-Given a transcript where the assistant struggled, identify what TECHNICAL FACT about the relevant tool, command, codebase, \
-or environment — IF stated as a Wikipedia-style entry — would have given the assistant the knowledge it lacked.\n\n\
-Reframe the question in your head: NOT \"what should the assistant DO\" but \"what IS true about <subject>\". \
-The output should read like the first paragraph of a man page or a Wikipedia article — describing properties and behaviors, not giving advice.\n\n\
-GOOD (encyclopedia-style facts):\n\
-- \"`git absorb` selects fixup targets via `git blame` of changed lines; it cannot route hunks containing newly-added lines because no blame information exists for them.\"\n\
-- \"`git cherry -v <upstream> <branch>` lists each commit in <branch> with `+` (not in upstream) or `-` (already present in upstream by patch-id), detecting cherry-picked or rebased commits despite different SHAs.\"\n\
-- \"In the codex codebase, `PreToolUseOutcome` carries the `updatedInput` field from `events/pre_tool_use.rs` to `core/src/tools/registry.rs`, which mutates the shell tool invocation payload before dispatch.\"\n\
-- \"The `arch` CLI on this system wraps `pacman` and `paru`, so AUR packages are installed via `arch install` rather than `pacman -S`.\"\n\n\
-BAD (recipes, instructions, preferences):\n\
-- \"Use `git cherry -v` to detect cherry-picks.\" (imperative recipe — say what `git cherry -v` IS instead)\n\
-- \"When checking branch merge status, use patch-id comparison.\" (conditional recipe — describe the patch-id comparison itself)\n\
-- \"User prefers explicit-SHA fixup.\" (preference — describe `git absorb`'s mechanism instead)\n\
-- \"Always run X before Y.\" (universal rule)\n\n\
-THE TEST: read your candidate aloud. Does it sound like a Wikipedia sentence (describing properties)? \
-Or does it sound like advice (telling someone what to do)? Only the first kind is acceptable.\n\n\
-Forbidden openers: \"Use\", \"Run\", \"For\", \"When\", \"To\", \"If\", \"Before\", \"After\", \"Always\", \"Never\", \"Verify\", \"Check\", \"Compare\".\n\
-Forbidden subjects: \"The user\", \"The assistant\", \"You\".\n\
-Required openers: a noun phrase naming the tool, command, file, or system that the fact is about.\n\n\
-Return null if the friction has no transferable encyclopedia-style fact. \
-Respond ONLY with JSON: {\"preload\": \"...\" | null}.";
+const EXTRACTOR_SYSTEM: &str = r#"You extract operational preload memory from Claude transcripts.
 
-const DURABILITY_SYSTEM: &str = "\
-You are a strict gatekeeper for a long-term memory system. You see ONLY a candidate memory.\n\n\
-A good memory is INDICATIVE — it states what something IS or DOES, in present tense.\n\
-A bad memory is IMPERATIVE or CONDITIONAL — it tells the assistant what to DO, when, or how.\n\n\
-PASS only declarative facts about properties, behaviors, or configurations:\n\
-- \"`pacman` does not manage AUR packages; AUR builds need an external helper.\"\n\
-- \"`git cherry -v <upstream> <branch>` outputs +/- markers for patch-equivalent commits, detecting cherry-picks even with different SHAs.\"\n\
-- \"`git absorb` chooses fixup targets via `git blame`, so it cannot route hunks containing newly-added lines.\"\n\
-- \"Codex CLI auth lives at ~/.codex/auth.json; calls bill against ChatGPT subscription, not the OpenAI API.\"\n\n\
-FAIL imperative or conditional phrasing — these are recipes, not facts:\n\
-- \"For branch-maturity checks, run X.\" (recipe: \"for X, do Y\")\n\
-- \"When comparing branches, use `git cherry`.\" (conditional recipe)\n\
-- \"Use `git cherry -v` to detect cherry-picks.\" (imperative \"use X to Y\")\n\
-- \"To check merge status, do Z.\" (\"to X, do Y\")\n\
-- \"Always prefer X.\" / \"Never use Y.\" (universalized rules)\n\
-- \"The user prefers X.\" / \"The user wants Y.\" (preference framing)\n\
-- \"Verify X before doing Y.\" (instruction, not fact)\n\n\
-FAIL ephemeral snapshots — current state of specific entities, which goes stale fast:\n\
-- \"`feature-x-branch` is 3346 commits ahead of master with 355 files changed.\" (specific branch's current diff stats; will change daily)\n\
-- \"`config.toml` currently has `model = \"gpt-5.4\"` set.\" (current config value; user changes these)\n\
-- \"The `widgets` table has 12,453 rows.\" (current data state)\n\
-- \"PR #1234 is in review.\" (current PR status)\n\
-- \"On 2026-04-28 the user is working on Y.\" (timestamped state)\n\n\
-Snapshot red flags: specific commit counts/file counts/line counts/row counts, named branches/PRs/issues with current status, timestamped facts, or any \"X currently is/has Y\" where Y is volatile state. \
-Generalizing to a class is fine (\"branches with rebased history\"), but specific named entities with numeric state are not.\n\n\
-Red-flag openers (FAIL on sight unless paired with a pure declarative): \
-\"For ...\", \"When ...\", \"To ...\", \"Use ...\", \"Always\", \"Never\", \"Before ...\", \"After ...\", \"If ...\", \
-\"The user prefers\", \"Assume\", \"You should\".\n\n\
-Convert mentally: if the candidate could be rewritten as \"X is/has/does Y\" without losing meaning, \
-it might be a fact in disguise — pass it. If rewriting requires adding a subject like \"the assistant\" or \"someone\" \
-or \"you\", it's a recipe — fail it.\n\n\
-Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 30 words.";
+Given a transcript where the assistant struggled, return the 1-3 sentence preload that would have let the assistant skip the struggle.
+Prefer a compact, transferable fact or constraint drawn from earlier in the transcript when possible.
+The preload is not a recipe, instruction, or preference. It is background knowledge a future assistant would want before answering.
+
+Return null if no useful preload exists.
+Respond ONLY with JSON: {"preload": "..." | null}."#;
 
 pub async fn extract_candidate(
     full_session: &[Turn],
@@ -356,23 +308,9 @@ pub async fn judge_efficiency(simulated: &str, preload: &str) -> Result<JudgeRes
     })
 }
 
-pub async fn judge_durability(preload: &str) -> Result<JudgeResult> {
-    let user_msg = format!("Candidate memory:\n{preload}");
-    let raw = llm::complete(DURABILITY_SYSTEM, &user_msg, 200, 90)
-        .await
-        .context("durability judge LLM call failed")?;
-    let json_str = extract_json(&raw);
-    let parsed: JudgeJson = serde_json::from_str(json_str)
-        .with_context(|| format!("durability judge JSON parse failed | raw: {raw}"))?;
-    Ok(JudgeResult {
-        passed: parsed.passed,
-        reason: parsed.reason,
-    })
-}
-
 // ── T4: Orchestrator ──────────────────────────────────────────────────────────
 
-const MAX_ITERATIONS: usize = 3;
+const MAX_ITERATIONS: usize = 1;
 
 pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>> {
     let turns = read_session_turns(session_path)
@@ -440,36 +378,17 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
                 candidate.chars().take(60).collect::<String>()
             );
 
-            // Durability gate (pre-replay): reject session-specific preloads cheaply
-            let durability = judge_durability(&candidate)
-                .await
-                .with_context(|| format!("judge_durability failed at turn {turn_index}"))?;
-            if !durability.passed {
-                let fail_reason = format!("durability: {}", durability.reason);
-                eprintln!(
-                    "  [turn {turn_index}] attempt {} failed durability: {}",
-                    attempt + 1,
-                    durability.reason
-                );
-                final_fail_reason = fail_reason.clone();
-                feedback = Some(fail_reason);
-                continue;
-            }
-
             // Replay
             let simulated = replay_with_preload(&candidate, &user_prompt)
                 .await
                 .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))?;
 
-            // Judge correctness + efficiency
+            // Judge correctness only (efficiency dropped — high false-negative rate)
             let c_result = judge_correctness(&simulated, &resolution)
                 .await
                 .with_context(|| format!("judge_correctness failed at turn {turn_index}"))?;
-            let e_result = judge_efficiency(&simulated, &candidate)
-                .await
-                .with_context(|| format!("judge_efficiency failed at turn {turn_index}"))?;
 
-            if c_result.passed && e_result.passed {
+            if c_result.passed {
                 // Store
                 let unit = MemoryUnit {
                     text: candidate,
@@ -506,17 +425,7 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
                 break;
             }
 
-            // Build feedback from failing judge(s)
-            let fail_reason = if !c_result.passed && !e_result.passed {
-                format!(
-                    "correctness: {}; efficiency: {}",
-                    c_result.reason, e_result.reason
-                )
-            } else if !c_result.passed {
-                format!("correctness: {}", c_result.reason)
-            } else {
-                format!("efficiency: {}", e_result.reason)
-            };
+            let fail_reason = format!("correctness: {}", c_result.reason);
 
             eprintln!(
                 "  [turn {turn_index}] attempt {} failed: {fail_reason}",
