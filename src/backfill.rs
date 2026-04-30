@@ -16,7 +16,7 @@ const ACTIVE_SKEW_SECS: u64 = 300;
 
 /// Skip sessions with more user turns than this — analyzing 100s of turns
 /// per session would dominate wall-clock time.
-const MAX_USER_TURNS: usize = 40;
+const MAX_USER_TURNS: usize = 100;
 
 pub async fn run_backfill(
     projects_dir: &Path,
