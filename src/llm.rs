@@ -116,7 +116,9 @@ pub async fn complete(
                 .map_err(|e| anyhow!("codex backend init failed: {e}"))?
                 .model(&model)
                 .system_prompt(system)
-                .timeout(timeout);
+                .timeout(timeout)
+                .extra_config("model_reasoning_effort=\"low\"")
+                .extra_config("web_search=\"disabled\"");
             b.complete(user).await
         }
     };
