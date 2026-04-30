@@ -65,7 +65,10 @@ pub async fn run_backfill(
         }
 
         let user_turn_count = match read_session_turns(path) {
-            Ok(turns) => turns.iter().filter(|t| matches!(t.role, Role::User)).count(),
+            Ok(turns) => turns
+                .iter()
+                .filter(|t| matches!(t.role, Role::User))
+                .count(),
             Err(e) => {
                 eprintln!("  [{session_id}] read error: {e}");
                 writeln!(state, "{session_id} read_error")?;
@@ -147,7 +150,9 @@ fn collect_sessions(projects_dir: &Path) -> Vec<PathBuf> {
     if !projects_dir.exists() {
         return vec![];
     }
-    let projects_canon = projects_dir.canonicalize().unwrap_or_else(|_| projects_dir.to_path_buf());
+    let projects_canon = projects_dir
+        .canonicalize()
+        .unwrap_or_else(|_| projects_dir.to_path_buf());
     let mut sessions: Vec<PathBuf> = WalkDir::new(&projects_canon)
         .max_depth(2)
         .into_iter()
@@ -169,9 +174,7 @@ fn collect_sessions(projects_dir: &Path) -> Vec<PathBuf> {
         .map(|e| e.path().to_path_buf())
         .collect();
 
-    sessions.sort_by_key(|p| {
-        std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok())
-    });
+    sessions.sort_by_key(|p| std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok()));
     sessions
 }
 
