@@ -29,8 +29,21 @@ pub struct Turn {
 /// Only user and assistant turns are included (system/other lines are skipped).
 /// Tool-use blocks are stripped from text; only text content blocks are kept.
 pub fn read_session_turns(path: &Path) -> Result<Vec<Turn>> {
+    let is_zst = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "zst")
+        .unwrap_or(false);
     let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let reader = BufReader::new(file);
+    if is_zst {
+        let decoder = zstd::Decoder::new(file).context("failed to create zstd decoder")?;
+        read_session_turns_from(BufReader::new(decoder))
+    } else {
+        read_session_turns_from(BufReader::new(file))
+    }
+}
+
+fn read_session_turns_from<R: std::io::BufRead>(reader: R) -> Result<Vec<Turn>> {
     let mut turns = Vec::new();
     let mut turn_index: u32 = 0;
 

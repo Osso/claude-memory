@@ -166,6 +166,11 @@ enum Command {
         #[arg(long)]
         projects: Option<PathBuf>,
 
+        /// Archive directory of .jsonl.zst files (default: skip archives).
+        /// Pass `~/.claude/archive` to also process compressed archives.
+        #[arg(long)]
+        archive: Option<PathBuf>,
+
         /// State file tracking processed session IDs
         /// (default: ~/.cache/claude-memory/backfill-processed.txt)
         #[arg(long)]
@@ -236,15 +241,17 @@ async fn run_command(command: Command) -> Result<()> {
         Command::MemoryWrite { text } => run_memory_write(text).await,
         Command::Backfill {
             projects,
+            archive,
             state_file,
             min_user_turns,
             max_sessions,
-        } => run_backfill_cmd(projects, state_file, min_user_turns, max_sessions).await,
+        } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
     }
 }
 
 async fn run_backfill_cmd(
     projects: Option<PathBuf>,
+    archive: Option<PathBuf>,
     state_file: Option<PathBuf>,
     min_user_turns: usize,
     max_sessions: Option<usize>,
@@ -256,7 +263,14 @@ async fn run_backfill_cmd(
             .unwrap_or_else(|| home.join(".cache"))
             .join("claude-memory/backfill-processed.txt")
     });
-    backfill::run_backfill(&projects_dir, &state_file, min_user_turns, max_sessions).await
+    backfill::run_backfill(
+        &projects_dir,
+        archive.as_deref(),
+        &state_file,
+        min_user_turns,
+        max_sessions,
+    )
+    .await
 }
 
 async fn run_memory_list(

@@ -20,18 +20,31 @@ const MAX_USER_TURNS: usize = 100;
 
 pub async fn run_backfill(
     projects_dir: &Path,
+    archive_dir: Option<&Path>,
     state_file: &Path,
     min_user_turns: usize,
     max_sessions: Option<usize>,
 ) -> Result<()> {
     let processed = load_processed(state_file)?;
-    let sessions = collect_sessions(projects_dir);
-
-    eprintln!(
-        "Found {} sessions in {}",
-        sessions.len(),
-        projects_dir.display()
-    );
+    let mut sessions = collect_sessions(projects_dir);
+    let live_count = sessions.len();
+    if let Some(adir) = archive_dir {
+        let archive_sessions = collect_archive_sessions(adir);
+        eprintln!(
+            "Found {} live sessions in {} + {} archive sessions in {}",
+            live_count,
+            projects_dir.display(),
+            archive_sessions.len(),
+            adir.display()
+        );
+        sessions.extend(archive_sessions);
+    } else {
+        eprintln!(
+            "Found {} sessions in {}",
+            sessions.len(),
+            projects_dir.display()
+        );
+    }
     eprintln!("Already processed: {}", processed.len());
 
     if let Some(parent) = state_file.parent() {
@@ -178,7 +191,41 @@ fn collect_sessions(projects_dir: &Path) -> Vec<PathBuf> {
     sessions
 }
 
+fn collect_archive_sessions(archive_dir: &Path) -> Vec<PathBuf> {
+    if !archive_dir.exists() {
+        return vec![];
+    }
+    let mut sessions: Vec<PathBuf> = WalkDir::new(archive_dir)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .to_str()
+                .map(|s| s.ends_with(".jsonl.zst"))
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    sessions.sort_by_key(|p| std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok()));
+    sessions
+}
+
 fn session_id_from_path(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    // archive: "<encoded-cwd>_<session-uuid>.jsonl.zst" → take part after final '_'
+    if let Some(stripped) = name.strip_suffix(".jsonl.zst") {
+        return stripped
+            .rsplit_once('_')
+            .map(|(_, id)| id.to_string())
+            .or_else(|| Some(stripped.to_string()));
+    }
+    // live: "<session-uuid>.jsonl"
+    if let Some(stripped) = name.strip_suffix(".jsonl") {
+        return Some(stripped.to_string());
+    }
     path.file_stem().map(|s| s.to_string_lossy().to_string())
 }
 
