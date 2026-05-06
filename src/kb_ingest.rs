@@ -63,8 +63,14 @@ pub async fn ingest_kb_dir(
         merged: 0,
     };
 
-    for path in files {
-        ingest_kb_file(kb_dir, &path, client.as_ref(), &embedder, &mut summary).await?;
+    for (index, path) in files.iter().enumerate() {
+        eprintln!(
+            "KB file {}/{}: {}",
+            index + 1,
+            files.len(),
+            relative_path(kb_dir, path).display()
+        );
+        ingest_kb_file(kb_dir, path, client.as_ref(), &embedder, &mut summary).await?;
     }
 
     Ok(summary)
@@ -82,8 +88,16 @@ async fn ingest_kb_file(
     let sections = split_markdown_sections(&relative_path(kb_dir, path), &content);
     summary.sections += sections.len();
 
-    for section in sections {
+    let section_count = sections.len();
+    for (index, section) in sections.into_iter().enumerate() {
+        eprintln!(
+            "  section {}/{}: {}",
+            index + 1,
+            section_count,
+            section.heading
+        );
         let facts = extract_section_facts(&section).await;
+        eprintln!("    facts: {}", facts.len());
         summary.facts += facts.len();
         store_section_facts(client, embedder, &section, facts, summary).await?;
     }
