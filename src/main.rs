@@ -184,6 +184,20 @@ enum SearchTarget {
     Answers,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum MemorySearchMode {
+    Semantic,
+    Substring,
+}
+
+fn memory_search_mode(semantic_enabled: bool) -> MemorySearchMode {
+    if semantic_enabled {
+        MemorySearchMode::Semantic
+    } else {
+        MemorySearchMode::Substring
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -257,7 +271,11 @@ async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result
 }
 
 async fn run_search_memories(query: &str, limit: usize) -> Result<()> {
-    let units = memory_unit::list(limit, None, Some(query), None).await?;
+    let mode = memory_search_mode(config::search_enabled());
+    let units = match mode {
+        MemorySearchMode::Semantic => memory_unit::list(limit, None, None, Some(query)).await?,
+        MemorySearchMode::Substring => memory_unit::list(limit, None, Some(query), None).await?,
+    };
 
     if units.is_empty() {
         println!("(no memories found)");

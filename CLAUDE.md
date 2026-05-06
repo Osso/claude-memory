@@ -33,10 +33,10 @@ claude-memory stats
 ## Build & Install
 
 ```bash
-cargo build --release
+./deploy.sh
 ```
 
-Binaries are symlinked from `~/.local/bin/` to `target/release/`. Never use `cargo install` — it copies to `~/.cargo/bin/` instead.
+`deploy.sh` installs the CLI and MCP binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
 
 No systemd service — the MCP server runs as a stdio child process of Claude Code. After rebuilding, restart Claude Code to reload it.
 

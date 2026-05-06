@@ -10,6 +10,16 @@ fn search_defaults_to_memories() {
 }
 
 #[test]
+fn memory_search_uses_semantic_query_when_enabled() {
+    assert_eq!(memory_search_mode(true), MemorySearchMode::Semantic);
+}
+
+#[test]
+fn memory_search_falls_back_to_substring_when_disabled() {
+    assert_eq!(memory_search_mode(false), MemorySearchMode::Substring);
+}
+
+#[test]
 fn search_accepts_prompt_type() {
     let cli = Cli::parse_from(["claude-memory", "search", "--type", "prompts", "ollama"]);
     let Command::Search { target, .. } = cli.command else {
