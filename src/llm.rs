@@ -1,8 +1,10 @@
 //! LLM-based filtering and merging via llm-sdk (configurable backend).
 
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Local, NaiveTime};
 use llm_sdk::Backend;
 
 const FILTER_SYSTEM: &str = "\
@@ -16,6 +18,10 @@ If none are relevant, respond with: []";
 const MERGE_SYSTEM: &str = "\
 Merge two related memory entries into one concise entry. Preserve all distinct facts from both. \
 Do not add information not present in either entry. Output only the merged text.";
+
+const CODEX_FALLBACK_MODEL: &str = "gpt-5.4-mini";
+
+static CODEX_COOLDOWN_UNTIL: OnceLock<Mutex<Option<DateTime<Local>>>> = OnceLock::new();
 
 /// A raw search result passed to `filter_relevant`.
 pub struct RawResult {
@@ -84,55 +90,7 @@ pub async fn complete(
         .unwrap_or_else(|_| default_model_for_backend(backend).to_owned());
     let timeout = Duration::from_secs(timeout_secs);
 
-    let result: std::result::Result<llm_sdk::Output, llm_sdk::Error> = match backend {
-        LlmBackend::Anthropic => {
-            let b = llm_sdk::anthropic::Anthropic::new(&model)
-                .api_key_env("ANTHROPIC_API_KEY")
-                .system_prompt(system)
-                .max_tokens(max_tokens)
-                .timeout(timeout);
-            b.complete(user).await
-        }
-        LlmBackend::OpenRouter => {
-            let b = llm_sdk::openrouter::OpenRouter::new(&model)
-                .api_key_env("OPENROUTER_API_KEY")
-                .system_prompt(system)
-                .timeout(timeout);
-            b.complete(user).await
-        }
-        LlmBackend::Claude => {
-            let b = llm_sdk::claude::Claude::new()
-                .map_err(|e| anyhow!("claude backend init failed: {e}"))?
-                .model(&model)
-                .system_prompt(system)
-                .timeout(timeout)
-                .stdin_prompt()
-                .extra_arg("--tools")
-                .extra_arg("");
-            b.complete(user).await
-        }
-        LlmBackend::Codex => {
-            // Disable all tool features so codex acts as a pure completion API.
-            // With tools enabled, the agent calls shell/apply_patch/etc on
-            // technical prompts, ballooning input tokens to 200K+ and timing
-            // out (or panicking on broken-pipe). Without tools: ~3s/call, ~25K
-            // input.
-            let b = llm_sdk::codex_cli::CodexCli::new()
-                .map_err(|e| anyhow!("codex backend init failed: {e}"))?
-                .model(&model)
-                .system_prompt(system)
-                .timeout(timeout)
-                .extra_config("model_reasoning_effort=\"low\"")
-                .extra_config("web_search=\"disabled\"")
-                .extra_config("features.shell_tool=false")
-                .extra_config("features.include_apply_patch_tool=false")
-                .extra_config("features.tool_search=false")
-                .extra_config("features.tool_suggest=false")
-                .extra_config("features.memory_tool=false")
-                .extra_config("features.request_permissions_tool=false");
-            b.complete(user).await
-        }
-    };
+    let result = complete_with_backend(backend, &model, system, user, max_tokens, timeout).await;
 
     match result {
         Ok(o) => Ok(o.text),
@@ -142,6 +100,169 @@ pub async fn complete(
             Err(anyhow!(msg))
         }
     }
+}
+
+async fn complete_with_backend(
+    backend: LlmBackend,
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    match backend {
+        LlmBackend::Anthropic => {
+            complete_with_anthropic(model, system, user, max_tokens, timeout).await
+        }
+        LlmBackend::OpenRouter => complete_with_openrouter(model, system, user, timeout).await,
+        LlmBackend::Claude => complete_with_claude(model, system, user, timeout).await,
+        LlmBackend::Codex => complete_with_codex_fallback(model, system, user, timeout).await,
+    }
+}
+
+async fn complete_with_anthropic(
+    model: &str,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let backend = llm_sdk::anthropic::Anthropic::new(model)
+        .api_key_env("ANTHROPIC_API_KEY")
+        .system_prompt(system)
+        .max_tokens(max_tokens)
+        .timeout(timeout);
+    backend.complete(user).await
+}
+
+async fn complete_with_openrouter(
+    model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let backend = llm_sdk::openrouter::OpenRouter::new(model)
+        .api_key_env("OPENROUTER_API_KEY")
+        .system_prompt(system)
+        .timeout(timeout);
+    backend.complete(user).await
+}
+
+async fn complete_with_claude(
+    model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let backend = llm_sdk::claude::Claude::new()
+        .map_err(|error| llm_sdk::Error::Parse(format!("claude backend init failed: {error}")))?
+        .model(model)
+        .system_prompt(system)
+        .timeout(timeout)
+        .stdin_prompt()
+        .extra_arg("--tools")
+        .extra_arg("");
+    backend.complete(user).await
+}
+
+async fn complete_with_codex_fallback(
+    primary_model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let cooldown_until = codex_cooldown_until();
+    let selected_model = codex_model_for_time(primary_model, cooldown_until, Local::now());
+    let first_result = complete_with_codex(&selected_model, system, user, timeout).await;
+    match first_result {
+        Ok(output) => Ok(output),
+        Err(error) => {
+            retry_codex_after_usage_limit(error, primary_model, system, user, timeout).await
+        }
+    }
+}
+
+async fn complete_with_codex(
+    model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    // Disable all tool features so codex acts as a pure completion API.
+    // With tools enabled, the agent calls shell/apply_patch/etc on technical
+    // prompts, ballooning input tokens to 200K+ and timing out.
+    let backend = llm_sdk::codex_cli::CodexCli::new()?
+        .model(model)
+        .system_prompt(system)
+        .timeout(timeout)
+        .extra_config("model_reasoning_effort=\"low\"")
+        .extra_config("web_search=\"disabled\"")
+        .extra_config("features.shell_tool=false")
+        .extra_config("features.include_apply_patch_tool=false")
+        .extra_config("features.tool_search=false")
+        .extra_config("features.tool_suggest=false")
+        .extra_config("features.memory_tool=false")
+        .extra_config("features.request_permissions_tool=false");
+    backend.complete(user).await
+}
+
+async fn retry_codex_after_usage_limit(
+    error: llm_sdk::Error,
+    primary_model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let message = error.to_string();
+    let Some(retry_at) = parse_codex_retry_time(&message, Local::now()) else {
+        return Err(error);
+    };
+
+    set_codex_cooldown_until(retry_at);
+    log(&format!(
+        "codex model {primary_model} limited until {}; using {CODEX_FALLBACK_MODEL}",
+        retry_at.format("%Y-%m-%d %H:%M:%S %Z")
+    ));
+    complete_with_codex(CODEX_FALLBACK_MODEL, system, user, timeout).await
+}
+
+fn codex_model_for_time(
+    primary_model: &str,
+    cooldown_until: Option<DateTime<Local>>,
+    now: DateTime<Local>,
+) -> String {
+    match cooldown_until {
+        Some(until) if now < until => CODEX_FALLBACK_MODEL.to_string(),
+        _ => primary_model.to_string(),
+    }
+}
+
+fn codex_cooldown_until() -> Option<DateTime<Local>> {
+    let lock = CODEX_COOLDOWN_UNTIL.get_or_init(|| Mutex::new(None));
+    lock.lock().ok().and_then(|guard| *guard)
+}
+
+fn set_codex_cooldown_until(retry_at: DateTime<Local>) {
+    let lock = CODEX_COOLDOWN_UNTIL.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some(retry_at);
+    }
+}
+
+fn parse_codex_retry_time(message: &str, now: DateTime<Local>) -> Option<DateTime<Local>> {
+    let marker = "try again at ";
+    let start = message.find(marker)? + marker.len();
+    let time_text = message[start..].split(['.', '\n', '\r']).next()?.trim();
+    let retry_time = NaiveTime::parse_from_str(time_text, "%I:%M %p").ok()?;
+    let mut retry_at = now
+        .date_naive()
+        .and_time(retry_time)
+        .and_local_timezone(Local)
+        .single()?;
+    if retry_at <= now {
+        retry_at += chrono::Duration::days(1);
+    }
+    Some(retry_at)
 }
 
 /// Parse a JSON array of `usize` from the LLM's raw text. Handles markdown fences.
@@ -288,5 +409,51 @@ mod tests {
             default_model_for_backend(LlmBackend::Codex),
             "gpt-5.3-codex-spark"
         );
+    }
+
+    #[test]
+    fn parse_codex_usage_limit_time_extracts_today_time() {
+        let message = "You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at 10:36 PM.";
+        let now = chrono::Local::now();
+
+        let retry_at = parse_codex_retry_time(message, now).unwrap();
+
+        assert_eq!(retry_at.format("%I:%M %p").to_string(), "10:36 PM");
+    }
+
+    #[test]
+    fn parse_codex_usage_limit_time_rolls_past_time_to_tomorrow() {
+        let message = "try again at 12:01 AM";
+        let today = chrono::Local::now().date_naive();
+        let now = today
+            .and_hms_opt(23, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .single()
+            .unwrap();
+
+        let retry_at = parse_codex_retry_time(message, now).unwrap();
+
+        assert!(retry_at > now);
+    }
+
+    #[test]
+    fn codex_model_uses_fallback_during_cooldown() {
+        let now = chrono::Local::now();
+        let cooldown_until = now + chrono::Duration::minutes(5);
+
+        let model = codex_model_for_time("gpt-5.3-codex-spark", Some(cooldown_until), now);
+
+        assert_eq!(model, "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn codex_model_uses_primary_after_cooldown() {
+        let now = chrono::Local::now();
+        let cooldown_until = now - chrono::Duration::minutes(5);
+
+        let model = codex_model_for_time("gpt-5.3-codex-spark", Some(cooldown_until), now);
+
+        assert_eq!(model, "gpt-5.3-codex-spark");
     }
 }
