@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use claude_memory::{analyze, backfill, config, graph, index, memory_unit};
+use claude_memory::{analyze, backfill, config, graph, index, kb_ingest, memory_unit};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -8,36 +8,8 @@ mod dedup;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 
 #[cfg(test)]
-mod search_cli_tests {
-    use super::*;
-
-    #[test]
-    fn search_defaults_to_memories() {
-        let cli = Cli::parse_from(["claude-memory", "search", "ollama"]);
-        let Command::Search { target, .. } = cli.command else {
-            panic!("expected search command");
-        };
-        assert_eq!(target, SearchTarget::Memories);
-    }
-
-    #[test]
-    fn search_accepts_prompt_type() {
-        let cli = Cli::parse_from(["claude-memory", "search", "--type", "prompts", "ollama"]);
-        let Command::Search { target, .. } = cli.command else {
-            panic!("expected search command");
-        };
-        assert_eq!(target, SearchTarget::Prompts);
-    }
-
-    #[test]
-    fn search_accepts_answer_type() {
-        let cli = Cli::parse_from(["claude-memory", "search", "--type", "answers", "ollama"]);
-        let Command::Search { target, .. } = cli.command else {
-            panic!("expected search command");
-        };
-        assert_eq!(target, SearchTarget::Answers);
-    }
-}
+#[path = "main_tests.rs"]
+mod main_tests;
 
 #[derive(Parser)]
 #[command(name = "claude-memory", about = "Semantic memory for Claude Code")]
@@ -83,6 +55,21 @@ enum Command {
         /// Batch size for embedding
         #[arg(long, default_value = "10")]
         batch_size: usize,
+    },
+
+    /// Extract KB Markdown facts into memory units
+    IngestKb {
+        /// Knowledge base directory (default: /syncthing/Sync/KB)
+        #[arg(long)]
+        kb: Option<PathBuf>,
+
+        /// Stop after this many Markdown files
+        #[arg(long)]
+        max_files: Option<usize>,
+
+        /// Extract facts without writing memory units
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Search memories by default, or prompts/answers with --type
@@ -210,18 +197,10 @@ fn init_tracing() {
 }
 
 async fn run_command(command: Command) -> Result<()> {
-    use Command::GraphClean;
-
     match command {
-        Command::Index {
-            archive,
-            projects,
-            kb,
-            batch_size,
-            fresh,
-            delay_ms,
-        } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
-        Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
+        Command::Index { .. } | Command::IndexFile { .. } | Command::IngestKb { .. } => {
+            run_indexing_command(command).await
+        }
         Command::Search {
             query,
             limit,
@@ -229,7 +208,7 @@ async fn run_command(command: Command) -> Result<()> {
         } => run_search(query, limit, target).await,
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
         Command::BuildGraph { kb, fresh } => run_build_graph(kb, fresh).await,
-        GraphClean {
+        Command::GraphClean {
             max_passes,
             dry_run,
         } => run_graph_clean_cmd(max_passes, dry_run),
@@ -246,6 +225,26 @@ async fn run_command(command: Command) -> Result<()> {
             min_user_turns,
             max_sessions,
         } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
+    }
+}
+
+async fn run_indexing_command(command: Command) -> Result<()> {
+    match command {
+        Command::Index {
+            archive,
+            projects,
+            kb,
+            batch_size,
+            fresh,
+            delay_ms,
+        } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
+        Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
+        Command::IngestKb {
+            kb,
+            max_files,
+            dry_run,
+        } => run_ingest_kb(kb, max_files, dry_run).await,
+        _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }
 }
 
@@ -383,6 +382,16 @@ async fn run_index_cmd(
 async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
     let count = index::index_file(path, batch_size).await?;
     eprintln!("Indexed {} chunks from {}", count, path.display());
+    Ok(())
+}
+
+async fn run_ingest_kb(kb: Option<PathBuf>, max_files: Option<usize>, dry_run: bool) -> Result<()> {
+    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
+    let summary = kb_ingest::ingest_kb_dir(&kb_dir, max_files, dry_run).await?;
+    println!(
+        "KB ingest: files={} sections={} facts={} inserted={} merged={}",
+        summary.files, summary.sections, summary.facts, summary.inserted, summary.merged
+    );
     Ok(())
 }
 

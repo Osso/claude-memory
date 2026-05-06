@@ -69,6 +69,7 @@ Produces two binaries:
 claude-memory index              # Index all sources
 claude-memory index --fresh      # Re-index everything from scratch
 claude-memory index-file <path>  # Index a single conversation file
+claude-memory ingest-kb          # Extract KB Markdown facts into memory units
 claude-memory search <q>                 # Search memories by default
 claude-memory search --type prompts <q>  # Search user prompts and KB
 claude-memory search --type answers <q>  # Search assistant responses
