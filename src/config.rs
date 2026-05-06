@@ -5,6 +5,7 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 #[derive(Debug)]
 pub struct Config {
     pub graph: GraphConfig,
+    pub search: SearchConfig,
 }
 
 #[derive(Debug)]
@@ -12,10 +13,16 @@ pub struct GraphConfig {
     pub enabled: bool,
 }
 
+#[derive(Debug)]
+pub struct SearchConfig {
+    pub enabled: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             graph: GraphConfig { enabled: false },
+            search: SearchConfig { enabled: false },
         }
     }
 }
@@ -26,6 +33,10 @@ pub fn load() -> &'static Config {
 
 pub fn graph_enabled() -> bool {
     load().graph.enabled
+}
+
+pub fn search_enabled() -> bool {
+    load().search.enabled
 }
 
 fn load_inner() -> Config {
@@ -46,21 +57,27 @@ fn load_inner() -> Config {
 
 fn parse_config(raw: &str) -> Config {
     match toml::from_str::<toml::Table>(raw) {
-        Ok(table) => {
-            let enabled = table
-                .get("graph")
-                .and_then(|v| v.get("enabled"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            Config {
-                graph: GraphConfig { enabled },
-            }
-        }
+        Ok(table) => Config {
+            graph: GraphConfig {
+                enabled: table_enabled(&table, "graph"),
+            },
+            search: SearchConfig {
+                enabled: table_enabled(&table, "search"),
+            },
+        },
         Err(e) => {
             log_warn(&format!("config parse error: {e}"));
             Config::default()
         }
     }
+}
+
+fn table_enabled(table: &toml::Table, section: &str) -> bool {
+    table
+        .get(section)
+        .and_then(|v| v.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 fn log_warn(msg: &str) {
@@ -86,9 +103,21 @@ mod tests {
     }
 
     #[test]
+    fn default_search_disabled() {
+        let cfg = Config::default();
+        assert!(!cfg.search.enabled);
+    }
+
+    #[test]
     fn parse_graph_enabled_true() {
         let cfg = parse_config("[graph]\nenabled = true");
         assert!(cfg.graph.enabled);
+    }
+
+    #[test]
+    fn parse_search_enabled_true() {
+        let cfg = parse_config("[search]\nenabled = true");
+        assert!(cfg.search.enabled);
     }
 
     #[test]

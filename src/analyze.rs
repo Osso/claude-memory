@@ -320,6 +320,7 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
+    let source = memory_unit_source_from_path(session_path).to_string();
 
     let client = Qdrant::from_url(crate::index::QDRANT_URL)
         .build()
@@ -393,8 +394,11 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
                 let unit = MemoryUnit {
                     text: candidate,
                     created_at: Utc::now(),
+                    source: source.clone(),
                     source_session: session_id.clone(),
                     source_turn: turn_index,
+                    category: None,
+                    project: None,
                     seen_in_sessions: vec![session_id.clone()],
                 };
 
@@ -448,4 +452,34 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
     }
 
     Ok(outcomes)
+}
+
+fn memory_unit_source_from_path(session_path: &Path) -> &'static str {
+    let path = session_path.to_string_lossy();
+    if path.ends_with(".jsonl.zst") {
+        "archive"
+    } else {
+        "session"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_unit_source_uses_session_for_live_jsonl() {
+        assert_eq!(
+            memory_unit_source_from_path(Path::new("/tmp/session.jsonl")),
+            "session"
+        );
+    }
+
+    #[test]
+    fn memory_unit_source_uses_archive_for_zst_jsonl_archive() {
+        assert_eq!(
+            memory_unit_source_from_path(Path::new("/tmp/session.jsonl.zst")),
+            "archive"
+        );
+    }
 }

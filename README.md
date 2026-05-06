@@ -69,8 +69,9 @@ Produces two binaries:
 claude-memory index              # Index all sources
 claude-memory index --fresh      # Re-index everything from scratch
 claude-memory index-file <path>  # Index a single conversation file
-claude-memory search-prompts <q> # Search user prompts and KB
-claude-memory search-answers <q> # Search assistant responses
+claude-memory search <q>                 # Search memories by default
+claude-memory search --type prompts <q>  # Search user prompts and KB
+claude-memory search --type answers <q>  # Search assistant responses
 claude-memory build-graph        # Extract entities/relationships from memories
 claude-memory build-graph --kb   # Also extract from KB files
 claude-memory graph-dump         # Show graph contents
@@ -126,6 +127,16 @@ For prompt enrichment, add a `UserPromptSubmit` hook in `~/.claude/settings.json
 ```
 
 This injects relevant memory context into every prompt automatically.
+
+### Optional Semantic Search
+
+Semantic search depends on Ollama embeddings and is disabled by default. Enable
+it in `~/.config/claude-memory/config.toml` when Ollama is available:
+
+```toml
+[search]
+enabled = true
+```
 
 ## How search works
 

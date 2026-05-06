@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use walkdir::WalkDir;
 
+use crate::config;
 use crate::embed::Embedder;
 use crate::extract::{
     IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary,
@@ -19,9 +20,7 @@ use crate::extract::{
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
 mod search_results;
-use search_results::build_search_results;
-#[cfg(test)]
-use search_results::get_string;
+use search_results::{build_search_results, get_string};
 
 pub const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
@@ -514,12 +513,67 @@ pub async fn search_answers(
     search_collection(query, limit, source, COLLECTION_ANSWERS).await
 }
 
+/// Search manually stored memories by substring without requiring embeddings.
+pub async fn search_memories(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
+
+    let filter = Filter::must([Condition::matches("source", "memory".to_string())]);
+    let needle = query.to_lowercase();
+    let mut matches = Vec::new();
+    let mut offset: Option<qdrant_client::qdrant::PointId> = None;
+
+    while matches.len() < limit {
+        let mut scroll = ScrollPointsBuilder::new(COLLECTION_PROMPTS)
+            .limit(100)
+            .with_payload(true)
+            .filter(filter.clone());
+
+        if let Some(point_id) = offset {
+            scroll = scroll.offset(point_id);
+        }
+
+        let result = client
+            .scroll(scroll)
+            .await
+            .context("memory search scroll failed")?;
+
+        for point in result.result {
+            let text = get_string(&point.payload, "text");
+            if text.to_lowercase().contains(&needle) {
+                matches.push(SearchResult {
+                    text,
+                    source: "memory".to_string(),
+                    path: get_string(&point.payload, "project"),
+                    score: 1.0,
+                });
+            }
+            if matches.len() >= limit {
+                break;
+            }
+        }
+
+        offset = result.next_page_offset;
+        if offset.is_none() {
+            break;
+        }
+    }
+
+    Ok(matches)
+}
+
 async fn search_collection(
     query: &str,
     limit: usize,
     source: Option<&str>,
     collection: &str,
 ) -> Result<Vec<SearchResult>> {
+    if !config::search_enabled() {
+        return Ok(Vec::new());
+    }
+
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;

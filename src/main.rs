@@ -1,11 +1,43 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use claude_memory::{analyze, backfill, config, graph, index, memory_unit};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
 mod dedup;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
+
+#[cfg(test)]
+mod search_cli_tests {
+    use super::*;
+
+    #[test]
+    fn search_defaults_to_memories() {
+        let cli = Cli::parse_from(["claude-memory", "search", "ollama"]);
+        let Command::Search { target, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(target, SearchTarget::Memories);
+    }
+
+    #[test]
+    fn search_accepts_prompt_type() {
+        let cli = Cli::parse_from(["claude-memory", "search", "--type", "prompts", "ollama"]);
+        let Command::Search { target, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(target, SearchTarget::Prompts);
+    }
+
+    #[test]
+    fn search_accepts_answer_type() {
+        let cli = Cli::parse_from(["claude-memory", "search", "--type", "answers", "ollama"]);
+        let Command::Search { target, .. } = cli.command else {
+            panic!("expected search command");
+        };
+        assert_eq!(target, SearchTarget::Answers);
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "claude-memory", about = "Semantic memory for Claude Code")]
@@ -53,8 +85,8 @@ enum Command {
         batch_size: usize,
     },
 
-    /// Search prompts (user messages, KB)
-    SearchPrompts {
+    /// Search memories by default, or prompts/answers with --type
+    Search {
         /// Query text
         query: String,
 
@@ -62,23 +94,9 @@ enum Command {
         #[arg(short, long, default_value = "5")]
         limit: usize,
 
-        /// Filter by source (archive, session, summary, kb, memory)
-        #[arg(long)]
-        source: Option<String>,
-    },
-
-    /// Search answers (assistant responses)
-    SearchAnswers {
-        /// Query text
-        query: String,
-
-        /// Maximum results
-        #[arg(short, long, default_value = "5")]
-        limit: usize,
-
-        /// Filter by source (archive, session)
-        #[arg(long)]
-        source: Option<String>,
+        /// Search target
+        #[arg(long = "type", value_enum, default_value_t = SearchTarget::Memories)]
+        target: SearchTarget,
     },
 
     /// Deduplicate existing memory entries (merge similar ones via LLM)
@@ -133,23 +151,9 @@ enum Command {
         session_jsonl: PathBuf,
     },
 
-    /// List stored memory units (id, source, text)
-    MemoryList {
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-        #[arg(long)]
-        offset: Option<u64>,
-        /// Case-insensitive substring filter on memory text
-        #[arg(long)]
-        substring: Option<String>,
-        /// Semantic similarity search (returns top-K by cosine score)
-        #[arg(long)]
-        query: Option<String>,
-    },
-
     /// Delete a memory unit by its numeric Qdrant point ID
     MemoryDelete {
-        /// Point ID returned by `memory-list`
+        /// Point ID returned by `search`
         id: u64,
     },
 
@@ -186,6 +190,13 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SearchTarget {
+    Memories,
+    Prompts,
+    Answers,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -199,7 +210,7 @@ fn init_tracing() {
 }
 
 async fn run_command(command: Command) -> Result<()> {
-    use Command::{GraphClean, SearchAnswers, SearchPrompts};
+    use Command::GraphClean;
 
     match command {
         Command::Index {
@@ -211,16 +222,11 @@ async fn run_command(command: Command) -> Result<()> {
             delay_ms,
         } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
-        SearchPrompts {
+        Command::Search {
             query,
             limit,
-            source,
-        } => run_search_prompts(query, limit, source).await,
-        SearchAnswers {
-            query,
-            limit,
-            source,
-        } => run_search_answers(query, limit, source).await,
+            target,
+        } => run_search(query, limit, target).await,
         Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
         Command::BuildGraph { kb, fresh } => run_build_graph(kb, fresh).await,
         GraphClean {
@@ -231,12 +237,6 @@ async fn run_command(command: Command) -> Result<()> {
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
-        Command::MemoryList {
-            limit,
-            offset,
-            substring,
-            query,
-        } => run_memory_list(limit, offset, substring, query).await,
         Command::MemoryDelete { id } => run_memory_delete(id).await,
         Command::MemoryWrite { text } => run_memory_write(text).await,
         Command::Backfill {
@@ -247,6 +247,28 @@ async fn run_command(command: Command) -> Result<()> {
             max_sessions,
         } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
     }
+}
+
+async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result<()> {
+    match target {
+        SearchTarget::Memories => run_search_memories(&query, limit).await,
+        SearchTarget::Prompts => run_search_prompts(query, limit, None).await,
+        SearchTarget::Answers => run_search_answers(query, limit, None).await,
+    }
+}
+
+async fn run_search_memories(query: &str, limit: usize) -> Result<()> {
+    let units = memory_unit::list(limit, None, Some(query), None).await?;
+
+    if units.is_empty() {
+        println!("(no memories found)");
+        return Ok(());
+    }
+
+    for unit in units {
+        print_memory_unit(&unit);
+    }
+    Ok(())
 }
 
 async fn run_backfill_cmd(
@@ -273,32 +295,6 @@ async fn run_backfill_cmd(
     .await
 }
 
-async fn run_memory_list(
-    limit: usize,
-    offset: Option<u64>,
-    substring: Option<String>,
-    query: Option<String>,
-) -> Result<()> {
-    let memories =
-        memory_unit::list(limit, offset, substring.as_deref(), query.as_deref()).await?;
-    if memories.is_empty() {
-        println!("(no memory units stored)");
-        return Ok(());
-    }
-    for m in memories {
-        let preview = if m.text.len() > 200 {
-            format!("{}…", &m.text[..200])
-        } else {
-            m.text.clone()
-        };
-        println!(
-            "{}  seen={}  src={}#{}  {}\n  {}\n",
-            m.id, m.seen_count, m.source_session, m.source_turn, m.created_at, preview
-        );
-    }
-    Ok(())
-}
-
 async fn run_memory_delete(id: u64) -> Result<()> {
     memory_unit::delete(id).await?;
     println!("deleted memory unit {id}");
@@ -306,9 +302,9 @@ async fn run_memory_delete(id: u64) -> Result<()> {
 }
 
 async fn run_memory_write(text: String) -> Result<()> {
+    use chrono::Utc;
     use claude_memory::embed::Embedder;
     use claude_memory::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
-    use chrono::Utc;
     use qdrant_client::Qdrant;
 
     let trimmed = text.trim();
@@ -323,8 +319,11 @@ async fn run_memory_write(text: String) -> Result<()> {
     let unit = MemoryUnit {
         text: trimmed.to_string(),
         created_at: Utc::now(),
+        source: "memory".to_string(),
         source_session: "manual".to_string(),
         source_turn: 0,
+        category: None,
+        project: None,
         seen_in_sessions: vec!["manual".to_string()],
     };
     match upsert_with_dedup(&client, &embedder, unit).await? {
@@ -405,6 +404,24 @@ fn print_results(results: &[index::SearchResult]) -> Result<()> {
         println!();
     }
     Ok(())
+}
+
+fn print_memory_unit(memory: &memory_unit::StoredMemory) {
+    let preview = if memory.text.len() > 200 {
+        format!("{}...", &memory.text[..200])
+    } else {
+        memory.text.clone()
+    };
+    println!(
+        "memory-unit {}  seen={}  [{}] {}#{}  {}\n   {}\n",
+        memory.id,
+        memory.seen_count,
+        memory.source,
+        memory.source_session,
+        memory.source_turn,
+        memory.created_at,
+        preview
+    );
 }
 
 async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
@@ -557,16 +574,8 @@ async fn run_enrich(limit: usize) -> Result<()> {
 
     let mut sections = Vec::new();
 
-    // Vector search across curated memories (prompts collection, source="memory")
-    // and auto-extracted memory units (claude-memory-units collection)
+    // Vector search across manual, KB-derived, and auto-extracted memory units.
     const MIN_SCORE: f32 = 0.65;
-    let curated = match index::search_prompts(prompt, limit, Some("memory")).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("enrich: prompts search failed: {e:#}");
-            Vec::new()
-        }
-    };
     let units = match memory_unit::search(prompt, limit).await {
         Ok(r) => r,
         Err(e) => {
@@ -575,21 +584,8 @@ async fn run_enrich(limit: usize) -> Result<()> {
         }
     };
 
-    let curated_relevant: Vec<&index::SearchResult> =
-        curated.iter().filter(|r| r.score >= MIN_SCORE).collect();
-    if !curated_relevant.is_empty() {
-        sections.push(format_memory_results(&curated_relevant));
-    }
-
-    let units_relevant: Vec<&index::SearchResult> = units
-        .iter()
-        .filter(|r| r.score >= MIN_SCORE)
-        .filter(|r| {
-            !curated_relevant
-                .iter()
-                .any(|c| c.text.trim() == r.text.trim())
-        })
-        .collect();
+    let units_relevant: Vec<&index::SearchResult> =
+        units.iter().filter(|r| r.score >= MIN_SCORE).collect();
     if !units_relevant.is_empty() {
         sections.push(format_memory_unit_results(&units_relevant));
     }
@@ -619,20 +615,6 @@ fn read_hook_stdin() -> Result<serde_json::Value> {
     let mut buf = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
     serde_json::from_str(&buf).context("failed to parse hook input")
-}
-
-fn format_memory_results(results: &[&index::SearchResult]) -> String {
-    let mut out = String::from("Relevant memories:");
-    for r in results {
-        let text = r.text.replace('\n', " ");
-        let text = if text.len() > 300 {
-            format!("{}...", &text[..300])
-        } else {
-            text
-        };
-        out.push_str(&format!("\n- ({:.2}) {}", r.score, text));
-    }
-    out
 }
 
 fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {

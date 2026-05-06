@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::config;
 use crate::embed::Embedder;
 use crate::index::{QDRANT_URL, SearchResult};
 use crate::qdrant_hybrid::ensure_hybrid_collection;
@@ -24,8 +25,11 @@ const DEDUP_TOP_K: u64 = 5;
 pub struct MemoryUnit {
     pub text: String,
     pub created_at: DateTime<Utc>,
+    pub source: String,
     pub source_session: String,
     pub source_turn: u32,
+    pub category: Option<String>,
+    pub project: Option<String>,
     pub seen_in_sessions: Vec<String>,
 }
 
@@ -138,8 +142,11 @@ pub async fn upsert_with_dedup(
 
     let payload: HashMap<String, Value> = [
         ("text", unit.text.clone().into()),
+        ("source", unit.source.clone().into()),
         ("created_at", unit.created_at.to_rfc3339().into()),
         ("source_session", unit.source_session.clone().into()),
+        ("category", unit.category.clone().unwrap_or_default().into()),
+        ("project", unit.project.clone().unwrap_or_default().into()),
         (
             "source_turn",
             Value {
@@ -168,6 +175,10 @@ pub async fn upsert_with_dedup(
 
 /// Search the memory-units collection by semantic similarity.
 pub async fn search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    if !config::search_enabled() {
+        return Ok(Vec::new());
+    }
+
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
@@ -188,16 +199,7 @@ pub async fn search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
     Ok(results
         .result
         .into_iter()
-        .map(|p| {
-            let text = string_field(&p.payload, "text");
-            let session = string_field(&p.payload, "source_session");
-            SearchResult {
-                text,
-                source: "memory-unit".to_string(),
-                path: session,
-                score: p.score,
-            }
-        })
+        .map(|p| payload_to_search_result(&p.payload, p.score))
         .collect())
 }
 
@@ -205,8 +207,11 @@ pub async fn search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
 pub struct StoredMemory {
     pub id: u64,
     pub text: String,
+    pub source: String,
     pub source_session: String,
     pub source_turn: u32,
+    pub category: String,
+    pub project: String,
     pub created_at: String,
     pub seen_count: usize,
 }
@@ -224,6 +229,10 @@ pub async fn list(
     ensure_memory_units_collection(&client).await?;
 
     if let Some(q) = query {
+        if !config::search_enabled() {
+            return Ok(Vec::new());
+        }
+
         let embedder = Embedder::new();
         let vec = embedder.embed(q).await?;
         let search = SearchPointsBuilder::new(COLLECTION_MEMORY_UNITS, vec, limit as u64)
@@ -269,10 +278,7 @@ pub async fn list(
         .collect())
 }
 
-fn point_to_stored_memory(
-    id: Option<&PointId>,
-    payload: &HashMap<String, Value>,
-) -> StoredMemory {
+fn point_to_stored_memory(id: Option<&PointId>, payload: &HashMap<String, Value>) -> StoredMemory {
     let id_num = match id.and_then(|i| i.point_id_options.as_ref()) {
         Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => *n,
         _ => 0,
@@ -287,7 +293,10 @@ fn point_to_stored_memory(
     StoredMemory {
         id: id_num,
         text: string_field(payload, "text"),
+        source: source_field(payload),
         source_session: string_field(payload, "source_session"),
+        category: string_field(payload, "category"),
+        project: string_field(payload, "project"),
         source_turn: payload
             .get("source_turn")
             .and_then(|v| match &v.kind {
@@ -297,6 +306,75 @@ fn point_to_stored_memory(
             .unwrap_or(0),
         created_at: string_field(payload, "created_at"),
         seen_count,
+    }
+}
+
+pub async fn list_manual_entries(
+    category: Option<&str>,
+    project: Option<&str>,
+) -> Result<Vec<(String, String, String)>> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    ensure_memory_units_collection(&client).await?;
+
+    let mut entries = Vec::new();
+    let mut offset: Option<PointId> = None;
+    loop {
+        let mut scroll = ScrollPointsBuilder::new(COLLECTION_MEMORY_UNITS)
+            .limit(100)
+            .with_payload(true);
+        if let Some(point_id) = offset {
+            scroll = scroll.offset(point_id);
+        }
+
+        let result = client
+            .scroll(scroll)
+            .await
+            .context("memory-units scroll failed")?;
+        for point in &result.result {
+            let memory = point_to_stored_memory(point.id.as_ref(), &point.payload);
+            if is_matching_manual_memory(&memory, category, project) {
+                entries.push((memory.category, memory.project, memory.text));
+            }
+        }
+
+        offset = result.next_page_offset;
+        if offset.is_none() {
+            break;
+        }
+    }
+    Ok(entries)
+}
+
+fn is_matching_manual_memory(
+    memory: &StoredMemory,
+    category: Option<&str>,
+    project: Option<&str>,
+) -> bool {
+    memory.source == "memory"
+        && category.is_none_or(|expected| memory.category == expected)
+        && project.is_none_or(|expected| memory.project == expected)
+}
+
+fn payload_to_search_result(payload: &HashMap<String, Value>, score: f32) -> SearchResult {
+    SearchResult {
+        text: string_field(payload, "text"),
+        source: source_field(payload),
+        path: string_field(payload, "source_session"),
+        score,
+    }
+}
+
+fn source_field(payload: &HashMap<String, Value>) -> String {
+    let source = string_field(payload, "source");
+    if !source.is_empty() {
+        return source;
+    }
+
+    match string_field(payload, "source_session").as_str() {
+        "manual" => "memory".to_string(),
+        _ => "session".to_string(),
     }
 }
 
@@ -322,4 +400,94 @@ fn string_field(payload: &HashMap<String, Value>, key: &str) -> String {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qdrant_client::qdrant::value::Kind;
+
+    fn string_value(text: &str) -> Value {
+        Value {
+            kind: Some(Kind::StringValue(text.to_string())),
+        }
+    }
+
+    #[test]
+    fn memory_unit_has_existing_source_vocabulary_field() {
+        let unit = MemoryUnit {
+            text: "Manual preload".to_string(),
+            created_at: Utc::now(),
+            source: "memory".to_string(),
+            source_session: "manual".to_string(),
+            source_turn: 0,
+            category: None,
+            project: None,
+            seen_in_sessions: vec!["manual".to_string()],
+        };
+
+        assert_eq!(unit.source, "memory");
+    }
+
+    #[test]
+    fn stored_memory_reads_source_from_payload() {
+        let payload = [
+            ("text".to_string(), string_value("Analyzer preload")),
+            ("source".to_string(), string_value("archive")),
+            (
+                "source_session".to_string(),
+                string_value("session.jsonl.zst"),
+            ),
+            (
+                "created_at".to_string(),
+                string_value("2026-05-06T00:00:00Z"),
+            ),
+        ]
+        .into();
+
+        let memory = point_to_stored_memory(None, &payload);
+
+        assert_eq!(memory.source, "archive");
+    }
+
+    #[test]
+    fn search_result_uses_payload_source() {
+        let payload = [
+            ("text".to_string(), string_value("Analyzer preload")),
+            ("source".to_string(), string_value("session")),
+            ("source_session".to_string(), string_value("session.jsonl")),
+        ]
+        .into();
+
+        let result = payload_to_search_result(&payload, 0.7);
+
+        assert_eq!(result.source, "session");
+        assert_eq!(result.path, "session.jsonl");
+    }
+
+    #[test]
+    fn manual_memory_filter_matches_category_and_project() {
+        let memory = StoredMemory {
+            id: 0,
+            text: "Manual preload".to_string(),
+            source: "memory".to_string(),
+            source_session: "manual".to_string(),
+            source_turn: 0,
+            category: "preference".to_string(),
+            project: "claude-memory".to_string(),
+            created_at: "2026-05-06T00:00:00Z".to_string(),
+            seen_count: 1,
+        };
+
+        assert!(is_matching_manual_memory(
+            &memory,
+            Some("preference"),
+            Some("claude-memory")
+        ));
+        assert!(!is_matching_manual_memory(
+            &memory,
+            Some("decision"),
+            Some("claude-memory")
+        ));
+    }
 }

@@ -2,15 +2,16 @@
 
 use anyhow::{Context, Result};
 use claude_memory::chunk::chunk_text;
+use claude_memory::config;
 use claude_memory::daily::{append_daily, append_kb_memory};
 use claude_memory::embed::Embedder;
 use claude_memory::graph;
 use claude_memory::llm::{self, RawResult};
-use claude_memory::qdrant_hybrid::{BM25_MODEL, build_named_vectors, ensure_hybrid_collection};
+use claude_memory::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
+use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
-    Condition, Document, Filter, Fusion, PointStruct, PrefetchQueryBuilder, Query,
-    QueryPointsBuilder, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
+    Condition, Document, Filter, Fusion, PrefetchQueryBuilder, Query, QueryPointsBuilder,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -21,7 +22,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::OnceCell;
 
 fn log(msg: &str) {
@@ -59,21 +59,13 @@ async fn get_qdrant() -> Result<&'static Qdrant> {
             log("get_qdrant: prompts collection ok");
             ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
             log("get_qdrant: answers collection ok");
+            claude_memory::memory_unit::ensure_memory_units_collection(&client).await?;
+            log("get_qdrant: memory-units collection ok");
             Ok(client)
         })
         .await;
     log("get_qdrant: done");
     result
-}
-
-/// Build a payload HashMap from a list of key-value pairs.
-fn build_payload(
-    fields: Vec<(&str, qdrant_client::qdrant::Value)>,
-) -> HashMap<String, qdrant_client::qdrant::Value> {
-    fields
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
 }
 
 /// Build the prefetch+RRF hybrid QueryPointsBuilder.
@@ -131,7 +123,6 @@ fn get_payload_str(payload: &HashMap<String, qdrant_client::qdrant::Value>, key:
 #[derive(Clone)]
 pub struct MemoryService {
     embedder: Arc<Embedder>,
-    next_id: Arc<AtomicU64>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -139,7 +130,6 @@ impl MemoryService {
     fn new() -> Self {
         Self {
             embedder: Arc::new(Embedder::new()),
-            next_id: Arc::new(AtomicU64::new(0)),
             tool_router: Self::tool_router(),
         }
     }
@@ -258,12 +248,9 @@ impl MemoryService {
         let client = get_qdrant().await?;
         let (mut indexed, mut merged) = (0u32, 0u32);
         for chunk in &chunks {
-            match self
-                .try_dedup_or_insert(client, chunk, &params.category, &params.project)
-                .await
-            {
-                Ok(true) => merged += 1,
-                Ok(false) => indexed += 1,
+            match self.store_memory_unit(client, &chunk.text, &params).await {
+                Ok(DedupOutcome::Inserted(_)) => indexed += 1,
+                Ok(DedupOutcome::Merged(_)) => merged += 1,
                 Err(e) => log(&format!("memory_write chunk error: {e}")),
             }
         }
@@ -274,99 +261,31 @@ impl MemoryService {
         Ok(format_write_result(indexed, merged))
     }
 
-    /// Try to merge with an existing similar memory. Returns Ok(true) if merged, Ok(false) if inserted new.
-    async fn try_dedup_or_insert(
+    async fn store_memory_unit(
         &self,
         client: &Qdrant,
-        chunk: &claude_memory::chunk::Chunk,
-        category: &Option<String>,
-        project: &Option<String>,
-    ) -> Result<bool> {
-        const DEDUP_THRESHOLD: f32 = 0.88;
-        if let Some((existing_id, existing_text, score)) = self
-            .find_similar_memory(client, &chunk.text, COLLECTION_PROMPTS)
-            .await?
-        {
-            if score >= DEDUP_THRESHOLD {
-                if let Some(merged_text) = llm::merge_memories(&existing_text, &chunk.text).await {
-                    log(&format!(
-                        "dedup: merging with point {existing_id} (score {score:.3})"
-                    ));
-                    return self
-                        .replace_memory_point(client, existing_id, &merged_text, category, project)
-                        .await
-                        .map(|()| true);
-                }
-            }
-        }
-        let point = self.build_memory_point(chunk, category, project).await?;
-        client
-            .upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
-            .await
-            .context("failed to index")?;
-        Ok(false)
-    }
-
-    /// Replace an existing memory point with merged content.
-    async fn replace_memory_point(
-        &self,
-        client: &Qdrant,
-        id: u64,
         text: &str,
-        category: &Option<String>,
-        project: &Option<String>,
-    ) -> Result<()> {
-        let embedding = self
-            .embedder
-            .embed(text)
-            .await
-            .context("embedding failed")?;
-        let named = build_named_vectors(embedding, text);
-        let path = format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md"));
-        let payload = build_payload(vec![
-            ("text", text.to_string().into()),
-            ("source", "memory".to_string().into()),
-            ("path", path.into()),
-            ("category", category.clone().unwrap_or_default().into()),
-            ("project", project.clone().unwrap_or_default().into()),
-            ("hash", claude_memory::chunk::hash_text(text).into()),
-        ]);
-        let point = PointStruct::new(id, named, payload);
-        client
-            .upsert_points(UpsertPointsBuilder::new(COLLECTION_PROMPTS, vec![point]))
-            .await
-            .context("failed to replace point")?;
-        Ok(())
-    }
-
-    async fn build_memory_point(
-        &self,
-        chunk: &claude_memory::chunk::Chunk,
-        category: &Option<String>,
-        project: &Option<String>,
-    ) -> Result<PointStruct> {
-        let embedding = self
-            .embedder
-            .embed(&chunk.text)
-            .await
-            .context("embedding failed")?;
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let path = format!("daily/{}", chrono::Local::now().format("%Y-%m-%d.md"));
-        let named = build_named_vectors(embedding, &chunk.text);
-        let payload = build_payload(vec![
-            ("text", chunk.text.clone().into()),
-            ("source", "memory".to_string().into()),
-            ("path", path.into()),
-            ("category", category.clone().unwrap_or_default().into()),
-            ("project", project.clone().unwrap_or_default().into()),
-            ("hash", chunk.hash.clone().into()),
-        ]);
-        Ok(PointStruct::new(id, named, payload))
+        params: &MemoryWriteParams,
+    ) -> Result<DedupOutcome> {
+        let unit = MemoryUnit {
+            text: text.to_string(),
+            created_at: chrono::Utc::now(),
+            source: "memory".to_string(),
+            source_session: "manual".to_string(),
+            source_turn: 0,
+            category: params.category.clone(),
+            project: params.project.clone(),
+            seen_in_sessions: vec!["manual".to_string()],
+        };
+        upsert_with_dedup(client, &self.embedder, unit).await
     }
 
     async fn do_memory_list(&self, params: MemoryListParams) -> Result<String> {
-        let filter = build_memory_filter(&params);
-        let entries = scroll_all_entries(filter).await?;
+        let entries = claude_memory::memory_unit::list_manual_entries(
+            params.category.as_deref(),
+            params.project.as_deref(),
+        )
+        .await?;
         if entries.is_empty() {
             return Ok("No entries found.".to_string());
         }
@@ -419,6 +338,10 @@ impl MemoryService {
         collection: &str,
         params: &SearchParams,
     ) -> Result<Vec<qdrant_client::qdrant::ScoredPoint>> {
+        if !config::search_enabled() {
+            return Ok(Vec::new());
+        }
+
         let query_vec = self.embedder.embed(&params.query).await?;
         let points = self
             .run_hybrid_search(
@@ -432,36 +355,6 @@ impl MemoryService {
             .await?;
         log_scores("raw", &points);
         Ok(points)
-    }
-
-    /// Find a similar existing memory for deduplication. Returns (id, text, score).
-    async fn find_similar_memory(
-        &self,
-        client: &Qdrant,
-        text: &str,
-        collection: &str,
-    ) -> Result<Option<(u64, String, f32)>> {
-        let embedding = self.embedder.embed(text).await?;
-        let search = SearchPointsBuilder::new(collection, embedding, 1)
-            .vector_name("dense")
-            .with_payload(true)
-            .filter(Filter::must([Condition::matches(
-                "source",
-                "memory".to_string(),
-            )]));
-        let results = client.search_points(search).await?;
-        let Some(point) = results.result.into_iter().next() else {
-            return Ok(None);
-        };
-        let id = match point.id.and_then(|p| p.point_id_options) {
-            Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) => n,
-            _ => return Ok(None),
-        };
-        Ok(Some((
-            id,
-            get_payload_str(&point.payload, "text"),
-            point.score,
-        )))
     }
 }
 
@@ -575,45 +468,6 @@ async fn enrich_with_graph(query: &str) -> Vec<String> {
         return vec![];
     }
     graph::query_related(&entities).unwrap_or_default()
-}
-
-fn build_memory_filter(params: &MemoryListParams) -> qdrant_client::qdrant::Filter {
-    let mut conditions = vec![Condition::matches("source", "memory".to_string())];
-    if let Some(cat) = &params.category {
-        conditions.push(Condition::matches("category", cat.clone()));
-    }
-    if let Some(proj) = &params.project {
-        conditions.push(Condition::matches("project", proj.clone()));
-    }
-    Filter::must(conditions)
-}
-
-async fn scroll_all_entries(filter: Filter) -> Result<Vec<(String, String, String)>> {
-    let client = get_qdrant().await?;
-    let mut entries = Vec::new();
-    let mut offset: Option<qdrant_client::qdrant::PointId> = None;
-    loop {
-        let mut scroll = ScrollPointsBuilder::new(COLLECTION_PROMPTS)
-            .limit(100)
-            .with_payload(true)
-            .filter(filter.clone());
-        if let Some(off) = offset {
-            scroll = scroll.offset(off);
-        }
-        let result = client.scroll(scroll).await.context("scroll failed")?;
-        for point in &result.result {
-            entries.push((
-                get_payload_str(&point.payload, "category"),
-                get_payload_str(&point.payload, "project"),
-                get_payload_str(&point.payload, "text"),
-            ));
-        }
-        offset = result.next_page_offset;
-        if offset.is_none() {
-            break;
-        }
-    }
-    Ok(entries)
 }
 
 fn format_entries(entries: &[(String, String, String)]) -> String {
