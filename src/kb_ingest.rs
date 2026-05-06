@@ -1,10 +1,11 @@
 //! KB Markdown fact ingestion into memory units.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{Local, Utc};
 use qdrant_client::Qdrant;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use walkdir::WalkDir;
 
 use crate::embed::Embedder;
@@ -184,9 +185,21 @@ async fn extract_section_facts(section: &KbSection) -> Vec<String> {
         "Path: {}\nHeading: {}\n\nMarkdown section:\n{}",
         section.path, section.heading, section.text
     );
+    eprintln!("    [{}] LLM start", timestamp());
+    let started = Instant::now();
     match llm::complete(FACT_EXTRACT_SYSTEM, &user, 700, 60).await {
-        Ok(raw) => parse_fact_json(&raw).unwrap_or_else(|_| fallback_facts(section)),
-        Err(_) => fallback_facts(section),
+        Ok(raw) => {
+            eprintln!("    [{}] LLM done ({:.1?})", timestamp(), started.elapsed());
+            parse_fact_json(&raw).unwrap_or_else(|_| fallback_facts(section))
+        }
+        Err(error) => {
+            eprintln!(
+                "    [{}] LLM failed ({:.1?}): {error}",
+                timestamp(),
+                started.elapsed()
+            );
+            fallback_facts(section)
+        }
     }
 }
 
@@ -196,6 +209,8 @@ async fn upsert_kb_fact(
     section: &KbSection,
     fact: String,
 ) -> Result<DedupOutcome> {
+    eprintln!("    [{}] embed/upsert start", timestamp());
+    let started = Instant::now();
     let unit = MemoryUnit {
         text: format!("{}: {fact}", section.heading),
         created_at: Utc::now(),
@@ -206,7 +221,17 @@ async fn upsert_kb_fact(
         project: None,
         seen_in_sessions: vec![section.path.clone()],
     };
-    upsert_with_dedup(client, embedder, unit).await
+    let outcome = upsert_with_dedup(client, embedder, unit).await;
+    eprintln!(
+        "    [{}] embed/upsert done ({:.1?})",
+        timestamp(),
+        started.elapsed()
+    );
+    outcome
+}
+
+fn timestamp() -> String {
+    Local::now().format("%H:%M:%S%.3f").to_string()
 }
 
 fn collect_markdown_files(kb_dir: &Path, max_files: Option<usize>) -> Vec<PathBuf> {
