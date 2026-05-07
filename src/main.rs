@@ -7,7 +7,10 @@ use tracing_subscriber::EnvFilter;
 mod dedup;
 mod indexing_cmds;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
-use indexing_cmds::{run_index_cmd, run_index_file_cmd, run_ingest_kb, run_page_index};
+use indexing_cmds::{
+    run_index_cmd, run_index_file_cmd, run_ingest_kb, run_kb_page_index_build,
+    run_kb_page_index_query, run_page_index,
+};
 
 #[cfg(test)]
 #[path = "main_tests.rs"]
@@ -99,6 +102,12 @@ enum Command {
         /// Stop after indexing this many sessions
         #[arg(long)]
         max_sessions: Option<usize>,
+    },
+
+    /// Build or query the persistent KB PageIndex
+    KbPageIndex {
+        #[command(subcommand)]
+        command: KbPageIndexCommand,
     },
 
     /// Search memories by default, or prompts/answers with --type
@@ -213,6 +222,38 @@ enum SearchTarget {
     Answers,
 }
 
+#[derive(Subcommand)]
+enum KbPageIndexCommand {
+    /// Build the persistent KB PageIndex
+    Build {
+        /// Knowledge base directory (default: /syncthing/Sync/KB)
+        #[arg(long)]
+        kb: Option<PathBuf>,
+
+        /// Output directory (default: ~/.cache/claude-memory/kb-page-index)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Query the persistent KB PageIndex
+    Query {
+        /// Query text
+        query: String,
+
+        /// Maximum results
+        #[arg(short, long, default_value = "5")]
+        limit: usize,
+
+        /// Knowledge base directory used for stale-index checks
+        #[arg(long)]
+        kb: Option<PathBuf>,
+
+        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
+        #[arg(long)]
+        index: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum MemorySearchMode {
     Semantic,
@@ -245,6 +286,7 @@ async fn run_command(command: Command) -> Result<()> {
         | Command::IndexFile { .. }
         | Command::IngestKb { .. }
         | Command::PageIndex { .. } => run_indexing_command(command).await,
+        Command::KbPageIndex { command } => run_kb_page_index_command(command),
         Command::Search {
             query,
             limit,
@@ -269,6 +311,18 @@ async fn run_command(command: Command) -> Result<()> {
             min_user_turns,
             max_sessions,
         } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
+    }
+}
+
+fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
+    match command {
+        KbPageIndexCommand::Build { kb, output } => run_kb_page_index_build(kb, output),
+        KbPageIndexCommand::Query {
+            query,
+            limit,
+            kb,
+            index,
+        } => run_kb_page_index_query(&query, limit, kb, index),
     }
 }
 

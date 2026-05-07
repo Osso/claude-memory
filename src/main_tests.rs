@@ -97,3 +97,56 @@ fn page_index_accepts_projects_archive_output_and_limit() {
     assert_eq!(output, Some(PathBuf::from("/tmp/page-index")));
     assert_eq!(max_sessions, Some(5));
 }
+
+#[test]
+fn kb_page_index_accepts_build_paths() {
+    let cli = Cli::parse_from([
+        "claude-memory",
+        "kb-page-index",
+        "build",
+        "--kb",
+        "/tmp/kb",
+        "--output",
+        "/tmp/kb-index",
+    ]);
+    let Command::KbPageIndex {
+        command: KbPageIndexCommand::Build { kb, output },
+    } = cli.command
+    else {
+        panic!("expected kb-page-index build command");
+    };
+    assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
+    assert_eq!(output, Some(PathBuf::from("/tmp/kb-index")));
+}
+
+#[test]
+fn kb_page_index_accepts_query_paths_and_limit() {
+    let cli = Cli::parse_from([
+        "claude-memory",
+        "kb-page-index",
+        "query",
+        "frontend design",
+        "--limit",
+        "2",
+        "--kb",
+        "/tmp/kb",
+        "--index",
+        "/tmp/kb-index",
+    ]);
+    let Command::KbPageIndex {
+        command:
+            KbPageIndexCommand::Query {
+                query,
+                limit,
+                kb,
+                index,
+            },
+    } = cli.command
+    else {
+        panic!("expected kb-page-index query command");
+    };
+    assert_eq!(query, "frontend design");
+    assert_eq!(limit, 2);
+    assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
+    assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
+}

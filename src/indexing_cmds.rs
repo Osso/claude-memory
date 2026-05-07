@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use claude_memory::{index, kb_ingest, page_index};
+use claude_memory::{index, kb_ingest, kb_search, page_index};
 use std::path::PathBuf;
 
 pub async fn run_index_cmd(
@@ -42,6 +42,46 @@ pub async fn run_ingest_kb(
         "KB ingest: files={} sections={} facts={} inserted={} merged={}",
         summary.files, summary.sections, summary.facts, summary.inserted, summary.merged
     );
+    Ok(())
+}
+
+pub fn run_kb_page_index_build(kb: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+    let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
+    let output_dir = output.unwrap_or_else(kb_search::default_index_dir);
+    let summary = kb_search::build_index(&kb_dir, &output_dir)?;
+    println!(
+        "KB PageIndex: files={} nodes={} output={}",
+        summary.files,
+        summary.nodes,
+        summary.index_path.display()
+    );
+    Ok(())
+}
+
+pub fn run_kb_page_index_query(
+    query: &str,
+    limit: usize,
+    kb: Option<PathBuf>,
+    index: Option<PathBuf>,
+) -> Result<()> {
+    let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
+    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
+    let results = kb_search::search_or_build(&kb_dir, &index_dir, query, limit)?;
+    if results.is_empty() {
+        println!("(no KB notes found)");
+        return Ok(());
+    }
+
+    for (index, result) in results.iter().enumerate() {
+        println!(
+            "{}. [kb] {} > {} (score: {})",
+            index + 1,
+            result.path,
+            result.heading,
+            result.score
+        );
+        println!("   {}\n", result.text.replace('\n', " "));
+    }
     Ok(())
 }
 

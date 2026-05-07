@@ -109,7 +109,7 @@ fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
 }
 
 fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
-    let mut out = String::from("## Relevant KB notes (raw structured search)");
+    let mut out = String::from("## Relevant KB notes (KB PageIndex)");
     for result in results {
         let text = result.text.replace('\n', " ");
         out.push_str(&format!(
