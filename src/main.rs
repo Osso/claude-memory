@@ -256,7 +256,7 @@ async fn run_command(command: Command) -> Result<()> {
             max_passes,
             dry_run,
         } => run_graph_clean_cmd(max_passes, dry_run),
-        Command::Enrich { limit } => run_enrich(limit).await,
+        Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
@@ -608,88 +608,6 @@ fn run_graph_dump(limit: usize) -> Result<()> {
     Ok(())
 }
 
-// --- Enrich command (UserPromptSubmit hook) ---
-
-async fn run_enrich(limit: usize) -> Result<()> {
-    let input: serde_json::Value = read_hook_stdin()?;
-    let prompt = input["prompt"].as_str().unwrap_or("");
-    if prompt.is_empty() {
-        print_hook_output("");
-        return Ok(());
-    }
-
-    let mut sections = Vec::new();
-
-    // Vector search across manual, KB-derived, and auto-extracted memory units.
-    const MIN_SCORE: f32 = 0.65;
-    let units = match memory_unit::search(prompt, limit).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("enrich: memory-units search failed: {e:#}");
-            Vec::new()
-        }
-    };
-
-    let units_relevant: Vec<&index::SearchResult> =
-        units.iter().filter(|r| r.score >= MIN_SCORE).collect();
-    if !units_relevant.is_empty() {
-        sections.push(format_memory_unit_results(&units_relevant));
-    }
-
-    // Graph: extract entities from prompt, query relationships
-    if config::graph_enabled() {
-        let entities = graph::find_concepts(prompt).await;
-        if !entities.is_empty() {
-            if let Ok(related) = graph::query_related(&entities) {
-                if !related.is_empty() {
-                    let graph_text = format_graph_results(&related);
-                    sections.push(graph_text);
-                }
-            }
-        }
-    }
-
-    if sections.is_empty() {
-        print_hook_output("");
-    } else {
-        print_hook_output(&sections.join("\n\n"));
-    }
-    Ok(())
-}
-
-fn read_hook_stdin() -> Result<serde_json::Value> {
-    let mut buf = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
-    serde_json::from_str(&buf).context("failed to parse hook input")
-}
-
-fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
-    let mut out = String::from(
-        "## Possibly-useful preloads (from prior sessions, may be stale or wrong; treat as hints, not facts)",
-    );
-    for r in results {
-        let text = r.text.replace('\n', " ");
-        let text = if text.len() > 300 {
-            format!("{}...", &text[..300])
-        } else {
-            text
-        };
-        out.push_str(&format!("\n- ({:.2}) {}", r.score, text));
-    }
-    out
-}
-
-fn format_graph_results(related: &[String]) -> String {
-    let mut out = String::from("Graph context:");
-    for r in related.iter().take(20) {
-        out.push_str(&format!("\n- {r}"));
-    }
-    if related.len() > 20 {
-        out.push_str(&format!("\n  ...and {} more", related.len() - 20));
-    }
-    out
-}
-
 async fn run_analyze(session_jsonl: &PathBuf) -> Result<()> {
     use analyze::AnalysisOutcome;
 
@@ -730,18 +648,4 @@ async fn run_analyze(session_jsonl: &PathBuf) -> Result<()> {
         outcomes.len()
     );
     Ok(())
-}
-
-fn print_hook_output(context: &str) {
-    if context.is_empty() {
-        println!("{{}}");
-        return;
-    }
-    let output = serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": context,
-        }
-    });
-    println!("{}", output);
 }
