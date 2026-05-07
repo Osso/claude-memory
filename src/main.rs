@@ -80,9 +80,17 @@ enum Command {
         #[arg(long)]
         projects: Option<PathBuf>,
 
-        /// Archive directory of .jsonl.zst files
+        /// Claude archive directory (default: ~/.claude/archive)
         #[arg(long)]
         archive: Option<PathBuf>,
+
+        /// Codex sessions directory (default: ~/.codex/sessions)
+        #[arg(long)]
+        codex_sessions: Option<PathBuf>,
+
+        /// Codex archived sessions directory (default: ~/.codex/archived_sessions)
+        #[arg(long)]
+        codex_archive: Option<PathBuf>,
 
         /// Output directory (default: ~/.cache/claude-memory/page-index)
         #[arg(long)]
@@ -265,6 +273,10 @@ async fn run_command(command: Command) -> Result<()> {
 }
 
 async fn run_indexing_command(command: Command) -> Result<()> {
+    if let Command::PageIndex { .. } = command {
+        return run_page_index_from_command(command).await;
+    }
+
     match command {
         Command::Index {
             archive,
@@ -280,14 +292,32 @@ async fn run_indexing_command(command: Command) -> Result<()> {
             max_files,
             dry_run,
         } => run_ingest_kb(kb, max_files, dry_run).await,
-        Command::PageIndex {
-            projects,
-            archive,
-            output,
-            max_sessions,
-        } => run_page_index(projects, archive, output, max_sessions).await,
-        _ => unreachable!("non-indexing command passed to run_indexing_command"),
+        _ => unreachable!("non-page-index command passed to run_indexing_command"),
     }
+}
+
+async fn run_page_index_from_command(command: Command) -> Result<()> {
+    let Command::PageIndex {
+        projects,
+        archive,
+        codex_sessions,
+        codex_archive,
+        output,
+        max_sessions,
+    } = command
+    else {
+        unreachable!("non-page-index command passed to run_page_index_from_command");
+    };
+
+    run_page_index(
+        projects,
+        archive,
+        codex_sessions,
+        codex_archive,
+        output,
+        max_sessions,
+    )
+    .await
 }
 
 async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result<()> {

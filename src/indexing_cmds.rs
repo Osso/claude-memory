@@ -48,14 +48,24 @@ pub async fn run_ingest_kb(
 pub async fn run_page_index(
     projects: Option<PathBuf>,
     archive: Option<PathBuf>,
+    codex_sessions: Option<PathBuf>,
+    codex_archive: Option<PathBuf>,
     output: Option<PathBuf>,
     max_sessions: Option<usize>,
 ) -> Result<()> {
     let home = dirs::home_dir().context("no home directory")?;
     let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
+    let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
+    let codex_sessions_dir = codex_sessions.unwrap_or_else(|| home.join(".codex/sessions"));
+    let codex_archive_dir = codex_archive.unwrap_or_else(|| home.join(".codex/archived_sessions"));
     let output_dir = output.unwrap_or_else(page_index::default_output_dir);
-    let summary =
-        page_index::build_page_index(&projects_dir, archive.as_deref(), &output_dir, max_sessions)?;
+    let sources = page_index::PageIndexSources {
+        claude_projects_dir: &projects_dir,
+        claude_archive_dir: &archive_dir,
+        codex_sessions_dir: &codex_sessions_dir,
+        codex_archive_dir: &codex_archive_dir,
+    };
+    let summary = page_index::build_page_index(&sources, &output_dir, max_sessions)?;
     println!(
         "PageIndex: sessions={} nodes={} output={}",
         summary.sessions,

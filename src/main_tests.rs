@@ -70,6 +70,10 @@ fn page_index_accepts_projects_archive_output_and_limit() {
         "/tmp/projects",
         "--archive",
         "/tmp/archive",
+        "--codex-sessions",
+        "/tmp/codex/sessions",
+        "--codex-archive",
+        "/tmp/codex/archive",
         "--output",
         "/tmp/page-index",
         "--max-sessions",
@@ -78,6 +82,8 @@ fn page_index_accepts_projects_archive_output_and_limit() {
     let Command::PageIndex {
         projects,
         archive,
+        codex_sessions,
+        codex_archive,
         output,
         max_sessions,
     } = cli.command
@@ -86,6 +92,8 @@ fn page_index_accepts_projects_archive_output_and_limit() {
     };
     assert_eq!(projects, Some(PathBuf::from("/tmp/projects")));
     assert_eq!(archive, Some(PathBuf::from("/tmp/archive")));
+    assert_eq!(codex_sessions, Some(PathBuf::from("/tmp/codex/sessions")));
+    assert_eq!(codex_archive, Some(PathBuf::from("/tmp/codex/archive")));
     assert_eq!(output, Some(PathBuf::from("/tmp/page-index")));
     assert_eq!(max_sessions, Some(5));
 }
