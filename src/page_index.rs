@@ -164,15 +164,28 @@ fn node_title(turn: &Turn) -> String {
 }
 
 fn node_summary(turns: &[Turn]) -> String {
-    let user_count = turns
+    let user_text_count = turns
         .iter()
-        .filter(|turn| matches!(turn.role, Role::User))
+        .filter(|turn| matches!(turn.role, Role::User) && !turn.text.trim().is_empty())
         .count();
-    let assistant_count = turns
+    let assistant_text_count = turns
+        .iter()
+        .filter(|turn| matches!(turn.role, Role::Assistant) && !turn.text.trim().is_empty())
+        .count();
+    let tool_call_count: u32 = turns
         .iter()
         .filter(|turn| matches!(turn.role, Role::Assistant))
-        .count();
-    format!("{user_count} user turn(s), {assistant_count} assistant turn(s)")
+        .map(|turn| turn.tool_call_count)
+        .sum();
+
+    let mut parts = vec![
+        format!("{user_text_count} user text turn(s)"),
+        format!("{assistant_text_count} assistant text turn(s)"),
+    ];
+    if tool_call_count > 0 {
+        parts.push(format!("{tool_call_count} tool call(s)"));
+    }
+    parts.join(", ")
 }
 
 fn format_turn(turn: &Turn) -> String {
@@ -180,6 +193,9 @@ fn format_turn(turn: &Turn) -> String {
         Role::User => "User",
         Role::Assistant => "Assistant",
     };
+    if turn.text.trim().is_empty() && turn.tool_call_count > 0 {
+        return format!("{role}: <{} tool call(s)>", turn.tool_call_count);
+    }
     format!("{role}: {}", turn.text)
 }
 
@@ -300,5 +316,27 @@ mod tests {
 
         assert!(text.contains("User: How do we deploy?"));
         assert!(text.contains("Assistant: Run the deploy script."));
+    }
+
+    #[test]
+    fn summary_separates_text_turns_from_tool_calls() {
+        let turns = vec![
+            turn(Role::User, "Please inspect the repo.", 0),
+            Turn {
+                role: Role::Assistant,
+                text: String::new(),
+                turn_index: 1,
+                has_tool_use: true,
+                tool_call_count: 3,
+            },
+            turn(Role::Assistant, "Done.", 2),
+        ];
+
+        let index = build_session_index(Path::new("session.jsonl"), &turns);
+
+        assert_eq!(
+            index.nodes[0].summary,
+            "1 user text turn(s), 1 assistant text turn(s), 3 tool call(s)"
+        );
     }
 }
