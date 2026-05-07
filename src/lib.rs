@@ -10,4 +10,5 @@ pub mod index;
 pub mod kb_ingest;
 pub mod llm;
 pub mod memory_unit;
+pub mod page_index;
 pub mod qdrant_hybrid;

@@ -60,3 +60,32 @@ fn ingest_kb_accepts_dry_run_and_limit() {
     assert_eq!(max_files, Some(3));
     assert!(dry_run);
 }
+
+#[test]
+fn page_index_accepts_projects_archive_output_and_limit() {
+    let cli = Cli::parse_from([
+        "claude-memory",
+        "page-index",
+        "--projects",
+        "/tmp/projects",
+        "--archive",
+        "/tmp/archive",
+        "--output",
+        "/tmp/page-index",
+        "--max-sessions",
+        "5",
+    ]);
+    let Command::PageIndex {
+        projects,
+        archive,
+        output,
+        max_sessions,
+    } = cli.command
+    else {
+        panic!("expected page-index command");
+    };
+    assert_eq!(projects, Some(PathBuf::from("/tmp/projects")));
+    assert_eq!(archive, Some(PathBuf::from("/tmp/archive")));
+    assert_eq!(output, Some(PathBuf::from("/tmp/page-index")));
+    assert_eq!(max_sessions, Some(5));
+}

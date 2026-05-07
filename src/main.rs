@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use claude_memory::{analyze, backfill, config, graph, index, kb_ingest, memory_unit};
+use claude_memory::{analyze, backfill, config, graph, index, memory_unit};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
 mod dedup;
+mod indexing_cmds;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
+use indexing_cmds::{run_index_cmd, run_index_file_cmd, run_ingest_kb, run_page_index};
 
 #[cfg(test)]
 #[path = "main_tests.rs"]
@@ -70,6 +72,25 @@ enum Command {
         /// Extract facts without writing memory units
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Build local PageIndex trees over raw prompt/answer sessions
+    PageIndex {
+        /// Projects directory (default: ~/.claude/projects)
+        #[arg(long)]
+        projects: Option<PathBuf>,
+
+        /// Archive directory of .jsonl.zst files
+        #[arg(long)]
+        archive: Option<PathBuf>,
+
+        /// Output directory (default: ~/.cache/claude-memory/page-index)
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Stop after indexing this many sessions
+        #[arg(long)]
+        max_sessions: Option<usize>,
     },
 
     /// Search memories by default, or prompts/answers with --type
@@ -212,9 +233,10 @@ fn init_tracing() {
 
 async fn run_command(command: Command) -> Result<()> {
     match command {
-        Command::Index { .. } | Command::IndexFile { .. } | Command::IngestKb { .. } => {
-            run_indexing_command(command).await
-        }
+        Command::Index { .. }
+        | Command::IndexFile { .. }
+        | Command::IngestKb { .. }
+        | Command::PageIndex { .. } => run_indexing_command(command).await,
         Command::Search {
             query,
             limit,
@@ -258,6 +280,12 @@ async fn run_indexing_command(command: Command) -> Result<()> {
             max_files,
             dry_run,
         } => run_ingest_kb(kb, max_files, dry_run).await,
+        Command::PageIndex {
+            projects,
+            archive,
+            output,
+            max_sessions,
+        } => run_page_index(projects, archive, output, max_sessions).await,
         _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }
 }
@@ -370,45 +398,6 @@ fn run_graph_clean_cmd(max_passes: usize, dry_run: bool) -> Result<()> {
         stats.relationships_removed,
         stats.relationships_rewritten,
         stats.entities_removed
-    );
-    Ok(())
-}
-
-async fn run_index_cmd(
-    archive: Option<PathBuf>,
-    projects: Option<PathBuf>,
-    kb: Option<PathBuf>,
-    batch_size: usize,
-    fresh: bool,
-    delay_ms: u64,
-) -> Result<()> {
-    let home = dirs::home_dir().expect("no home directory");
-    let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
-    let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
-    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-    index::run_index(
-        &archive_dir,
-        &projects_dir,
-        &kb_dir,
-        batch_size,
-        fresh,
-        delay_ms,
-    )
-    .await
-}
-
-async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
-    let count = index::index_file(path, batch_size).await?;
-    eprintln!("Indexed {} chunks from {}", count, path.display());
-    Ok(())
-}
-
-async fn run_ingest_kb(kb: Option<PathBuf>, max_files: Option<usize>, dry_run: bool) -> Result<()> {
-    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-    let summary = kb_ingest::ingest_kb_dir(&kb_dir, max_files, dry_run).await?;
-    println!(
-        "KB ingest: files={} sections={} facts={} inserted={} merged={}",
-        summary.files, summary.sections, summary.facts, summary.inserted, summary.merged
     );
     Ok(())
 }
