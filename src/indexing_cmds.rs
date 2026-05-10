@@ -137,3 +137,56 @@ pub async fn run_page_index(
     );
     Ok(())
 }
+
+pub fn run_transcript_page_index_document(doc: &str, index: Option<PathBuf>) -> Result<()> {
+    let index_dir = index.unwrap_or_else(page_index::default_output_dir);
+    let metadata = page_index::document_metadata(&index_dir, Path::new(doc))?;
+    println!("{}", serde_json::to_string_pretty(&metadata)?);
+    Ok(())
+}
+
+pub fn run_transcript_page_index_structure(doc: &str, index: Option<PathBuf>) -> Result<()> {
+    let index_dir = index.unwrap_or_else(page_index::default_output_dir);
+    let structure = page_index::document_structure(&index_dir, Path::new(doc))?;
+    println!("{}", serde_json::to_string_pretty(&structure)?);
+    Ok(())
+}
+
+pub fn run_transcript_page_index_content(
+    doc: &str,
+    locator: &str,
+    index: Option<PathBuf>,
+) -> Result<()> {
+    let index_dir = index.unwrap_or_else(page_index::default_output_dir);
+    let content = page_index::document_content(&index_dir, Path::new(doc), locator)?;
+    print!("{}", content.text);
+    Ok(())
+}
+
+pub fn run_transcript_page_index_query(
+    query: &str,
+    limit: usize,
+    index: Option<PathBuf>,
+) -> Result<()> {
+    let index_dir = index.unwrap_or_else(page_index::default_output_dir);
+    let results = page_index::query_index(&index_dir, query, limit)?;
+    if results.is_empty() {
+        println!("(no transcript notes found)");
+        return Ok(());
+    }
+
+    for (index, result) in results.iter().enumerate() {
+        println!(
+            "{}. [transcript] {}#{} > {} (score: {})",
+            index + 1,
+            result.doc_id,
+            result.node_id,
+            result.title,
+            result.score
+        );
+        println!("   source: {}", result.source_path);
+        println!("   reason: {}", result.reason);
+        println!("   next: {}\n", result.next_content_command);
+    }
+    Ok(())
+}

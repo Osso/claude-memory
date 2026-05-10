@@ -6,12 +6,16 @@ use tracing_subscriber::EnvFilter;
 
 mod dedup;
 mod indexing_cmds;
+mod transcript_page_index_cli;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 use indexing_cmds::{
     run_index_cmd, run_index_file_cmd, run_ingest_kb, run_kb_page_index_build,
     run_kb_page_index_content, run_kb_page_index_document, run_kb_page_index_query,
-    run_kb_page_index_structure, run_page_index,
+    run_kb_page_index_structure, run_page_index, run_transcript_page_index_content,
+    run_transcript_page_index_document, run_transcript_page_index_query,
+    run_transcript_page_index_structure,
 };
+use transcript_page_index_cli::TranscriptPageIndexCommand;
 
 #[cfg(test)]
 #[path = "main_tests.rs"]
@@ -81,29 +85,8 @@ enum Command {
     /// Build local transcript outline PageIndex trees for Claude/Codex sessions
     #[command(name = "transcript-page-index")]
     TranscriptPageIndex {
-        /// Projects directory (default: ~/.claude/projects)
-        #[arg(long)]
-        projects: Option<PathBuf>,
-
-        /// Claude archive directory (default: ~/.claude/archive)
-        #[arg(long)]
-        archive: Option<PathBuf>,
-
-        /// Codex sessions directory (default: ~/.codex/sessions)
-        #[arg(long)]
-        codex_sessions: Option<PathBuf>,
-
-        /// Codex archived sessions directory (default: ~/.codex/archived_sessions)
-        #[arg(long)]
-        codex_archive: Option<PathBuf>,
-
-        /// Output directory (default: ~/.cache/claude-memory/transcript-page-index)
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// Stop after indexing this many sessions
-        #[arg(long)]
-        max_sessions: Option<usize>,
+        #[command(subcommand)]
+        command: TranscriptPageIndexCommand,
     },
 
     /// Build or query the persistent KB PageIndex
@@ -317,10 +300,12 @@ fn init_tracing() {
 
 async fn run_command(command: Command) -> Result<()> {
     match command {
-        Command::Index { .. }
-        | Command::IndexFile { .. }
-        | Command::IngestKb { .. }
-        | Command::TranscriptPageIndex { .. } => run_indexing_command(command).await,
+        Command::Index { .. } | Command::IndexFile { .. } | Command::IngestKb { .. } => {
+            run_indexing_command(command).await
+        }
+        Command::TranscriptPageIndex { command } => {
+            run_transcript_page_index_command(command).await
+        }
         Command::KbPageIndex { command } => run_kb_page_index_command(command),
         Command::Search {
             query,
@@ -349,6 +334,52 @@ async fn run_command(command: Command) -> Result<()> {
     }
 }
 
+async fn run_transcript_page_index_command(command: TranscriptPageIndexCommand) -> Result<()> {
+    match command {
+        TranscriptPageIndexCommand::Build { .. } => run_transcript_page_index_build(command).await,
+        TranscriptPageIndexCommand::Document { doc, index } => {
+            run_transcript_page_index_document(&doc, index)
+        }
+        TranscriptPageIndexCommand::Structure { doc, index } => {
+            run_transcript_page_index_structure(&doc, index)
+        }
+        TranscriptPageIndexCommand::Content {
+            doc,
+            locator,
+            index,
+        } => run_transcript_page_index_content(&doc, &locator, index),
+        TranscriptPageIndexCommand::Query {
+            query,
+            limit,
+            index,
+        } => run_transcript_page_index_query(&query, limit, index),
+    }
+}
+
+async fn run_transcript_page_index_build(command: TranscriptPageIndexCommand) -> Result<()> {
+    let TranscriptPageIndexCommand::Build {
+        projects,
+        archive,
+        codex_sessions,
+        codex_archive,
+        output,
+        max_sessions,
+    } = command
+    else {
+        unreachable!("non-build command passed to run_transcript_page_index_build");
+    };
+
+    run_page_index(
+        projects,
+        archive,
+        codex_sessions,
+        codex_archive,
+        output,
+        max_sessions,
+    )
+    .await
+}
+
 fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
     match command {
         KbPageIndexCommand::Build { kb, output } => run_kb_page_index_build(kb, output),
@@ -369,10 +400,6 @@ fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
 }
 
 async fn run_indexing_command(command: Command) -> Result<()> {
-    if let Command::TranscriptPageIndex { .. } = command {
-        return run_transcript_page_index_from_command(command).await;
-    }
-
     match command {
         Command::Index {
             archive,
@@ -390,32 +417,6 @@ async fn run_indexing_command(command: Command) -> Result<()> {
         } => run_ingest_kb(kb, max_files, dry_run).await,
         _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }
-}
-
-async fn run_transcript_page_index_from_command(command: Command) -> Result<()> {
-    let Command::TranscriptPageIndex {
-        projects,
-        archive,
-        codex_sessions,
-        codex_archive,
-        output,
-        max_sessions,
-    } = command
-    else {
-        unreachable!(
-            "non-transcript-page-index command passed to run_transcript_page_index_from_command"
-        );
-    };
-
-    run_page_index(
-        projects,
-        archive,
-        codex_sessions,
-        codex_archive,
-        output,
-        max_sessions,
-    )
-    .await
 }
 
 async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result<()> {

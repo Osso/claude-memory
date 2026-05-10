@@ -1,6 +1,6 @@
 //! Local PageIndex-style outline tree for raw Claude/Codex transcript history.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::File;
@@ -48,6 +48,57 @@ pub struct PageIndexSources<'a> {
     pub codex_archive_dir: &'a Path,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageIndexDocMetadata {
+    pub doc_id: String,
+    pub doc_name: String,
+    pub doc_description: Option<String>,
+    pub source_family: String,
+    pub source_path: String,
+    pub turn_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageIndexDocStructure {
+    pub doc_id: String,
+    pub doc_name: String,
+    pub doc_description: Option<String>,
+    pub source_family: String,
+    pub source_path: String,
+    pub turn_count: usize,
+    pub nodes: Vec<PageIndexNodeStructure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageIndexNodeStructure {
+    pub node_id: String,
+    pub title: String,
+    pub summary: String,
+    pub source_locator: String,
+    pub start_turn: u32,
+    pub end_turn: u32,
+    pub nodes: Vec<PageIndexNodeStructure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageIndexDocContent {
+    pub doc_id: String,
+    pub source_path: String,
+    pub locator: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageIndexQueryResult {
+    pub doc_id: String,
+    pub source_path: String,
+    pub node_id: String,
+    pub title: String,
+    pub score: usize,
+    pub reason: String,
+    pub next_content_command: String,
+}
+
 impl PageIndexDoc {
     pub fn outline(&self) -> String {
         let mut lines = vec![format!("{} — {}", self.doc_id, self.doc_name)];
@@ -62,6 +113,51 @@ impl PageIndexDoc {
 
     pub fn node_text(&self, node_id: &str) -> Option<String> {
         find_node(&self.nodes, node_id).map(|node| node.text.clone())
+    }
+
+    pub fn metadata(&self) -> PageIndexDocMetadata {
+        PageIndexDocMetadata {
+            doc_id: self.doc_id.clone(),
+            doc_name: self.doc_name.clone(),
+            doc_description: self.doc_description.clone(),
+            source_family: self.source_family.clone(),
+            source_path: self.source_path.clone(),
+            turn_count: self.turn_count,
+        }
+    }
+
+    pub fn structure_without_text(&self) -> PageIndexDocStructure {
+        PageIndexDocStructure {
+            doc_id: self.doc_id.clone(),
+            doc_name: self.doc_name.clone(),
+            doc_description: self.doc_description.clone(),
+            source_family: self.source_family.clone(),
+            source_path: self.source_path.clone(),
+            turn_count: self.turn_count,
+            nodes: self
+                .nodes
+                .iter()
+                .map(PageIndexNode::structure_without_text)
+                .collect(),
+        }
+    }
+}
+
+impl PageIndexNode {
+    pub fn structure_without_text(&self) -> PageIndexNodeStructure {
+        PageIndexNodeStructure {
+            node_id: self.node_id.clone(),
+            title: self.title.clone(),
+            summary: self.summary.clone(),
+            source_locator: self.source_locator.clone(),
+            start_turn: self.start_turn,
+            end_turn: self.end_turn,
+            nodes: self
+                .nodes
+                .iter()
+                .map(PageIndexNode::structure_without_text)
+                .collect(),
+        }
     }
 }
 
@@ -135,6 +231,69 @@ pub fn build_page_index(
     })
 }
 
+pub fn document_metadata(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+) -> Result<PageIndexDocMetadata> {
+    Ok(load_document(index_dir, doc_selector)?.metadata())
+}
+
+pub fn document_structure(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+) -> Result<PageIndexDocStructure> {
+    Ok(load_document(index_dir, doc_selector)?.structure_without_text())
+}
+
+pub fn document_content(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+    locator: &str,
+) -> Result<PageIndexDocContent> {
+    let doc = load_document(index_dir, doc_selector)?;
+    let text = content_for_locator(&doc, locator)?;
+    Ok(PageIndexDocContent {
+        doc_id: doc.doc_id,
+        source_path: doc.source_path,
+        locator: locator.to_string(),
+        text,
+    })
+}
+
+pub fn query_index(
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<PageIndexQueryResult>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let query_terms = query_terms(query);
+    if query_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut results = Vec::new();
+    for doc in load_documents(index_dir)? {
+        for node in flatten_nodes(&doc.nodes) {
+            if let Some(result) = score_query_node(&doc, node, &query_terms) {
+                results.push(result);
+            }
+        }
+    }
+
+    results.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+    results.truncate(limit);
+    Ok(results)
+}
+
 fn build_exchange_nodes(turns: &[Turn]) -> Vec<PageIndexNode> {
     let mut nodes = Vec::new();
     let mut start = 0;
@@ -194,6 +353,155 @@ fn count_nodes(nodes: &[PageIndexNode]) -> usize {
 
 fn format_node_id(position: usize) -> String {
     format!("{position:06}")
+}
+
+fn load_document(index_dir: &Path, selector: impl AsRef<Path>) -> Result<PageIndexDoc> {
+    let selector = selector.as_ref();
+    let candidates = document_candidates(index_dir, selector);
+    for path in candidates {
+        if path.exists() {
+            return read_document_file(&path);
+        }
+    }
+    bail!(
+        "document not found in transcript PageIndex: {}",
+        selector.display()
+    )
+}
+
+fn load_documents(index_dir: &Path) -> Result<Vec<PageIndexDoc>> {
+    if !index_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths: Vec<PathBuf> = WalkDir::new(index_dir)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    paths.sort();
+    paths.iter().map(|path| read_document_file(path)).collect()
+}
+
+fn document_candidates(index_dir: &Path, selector: &Path) -> Vec<PathBuf> {
+    let selector_text = selector.to_string_lossy();
+    let doc_id = selector
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(&selector_text);
+    vec![
+        index_dir.join(selector),
+        index_dir.join(format!("{selector_text}.json")),
+        index_dir.join(format!("{}.json", sanitize_doc_id(&selector_text))),
+        index_dir.join(format!("{}.json", sanitize_doc_id(doc_id))),
+    ]
+}
+
+fn read_document_file(path: &Path) -> Result<PageIndexDoc> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn content_for_locator(doc: &PageIndexDoc, locator: &str) -> Result<String> {
+    if let Some(node) = find_node(&doc.nodes, locator) {
+        return Ok(format_content_text(&node.text));
+    }
+
+    if let Some((start, end)) = parse_turn_range(locator) {
+        return content_for_turn_range(doc, start, end);
+    }
+
+    bail!(
+        "locator must be a node id or inclusive turn range like 4-8: {}",
+        locator
+    )
+}
+
+fn parse_turn_range(locator: &str) -> Option<(usize, usize)> {
+    let locator = locator.strip_prefix("turns:").unwrap_or(locator);
+    let (start, end) = locator.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    if end < start {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn content_for_turn_range(doc: &PageIndexDoc, start: usize, end: usize) -> Result<String> {
+    let turns = doc.text.split("\n\n").collect::<Vec<_>>();
+    if start >= turns.len() {
+        bail!(
+            "turn range starts after end of transcript: {} has {} turns",
+            doc.doc_id,
+            turns.len()
+        );
+    }
+
+    let end = end.min(turns.len().saturating_sub(1));
+    Ok(format_content_text(&turns[start..=end].join("\n\n")))
+}
+
+fn format_content_text(text: &str) -> String {
+    if text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
+}
+
+fn flatten_nodes(nodes: &[PageIndexNode]) -> Vec<&PageIndexNode> {
+    let mut flattened = Vec::new();
+    for node in nodes {
+        flattened.push(node);
+        flattened.extend(flatten_nodes(&node.nodes));
+    }
+    flattened
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|term| term.len() > 1)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn score_query_node(
+    doc: &PageIndexDoc,
+    node: &PageIndexNode,
+    query_terms: &[String],
+) -> Option<PageIndexQueryResult> {
+    let searchable = format!(
+        "{}\n{}\n{}\n{}",
+        doc.doc_id, node.title, node.summary, node.text
+    );
+    let searchable = searchable.to_lowercase();
+    let matched_terms: Vec<&str> = query_terms
+        .iter()
+        .map(String::as_str)
+        .filter(|term| searchable.contains(term))
+        .collect();
+    if matched_terms.is_empty() {
+        return None;
+    }
+
+    let score = matched_terms.len() * 10;
+    Some(PageIndexQueryResult {
+        doc_id: doc.doc_id.clone(),
+        source_path: doc.source_path.clone(),
+        node_id: node.node_id.clone(),
+        title: node.title.clone(),
+        score,
+        reason: format!("matched query terms: {}", matched_terms.join(", ")),
+        next_content_command: format!(
+            "claude-memory transcript-page-index content {} {}",
+            doc.doc_id, node.node_id
+        ),
+    })
 }
 
 fn node_title(turn: &Turn) -> String {
@@ -413,158 +721,5 @@ fn codex_text_block(block: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::extract::{Role, Turn};
-    use std::path::Path;
-
-    fn turn(role: Role, text: &str, turn_index: u32) -> Turn {
-        Turn {
-            role,
-            text: text.to_string(),
-            turn_index,
-            has_tool_use: false,
-            tool_call_count: 0,
-        }
-    }
-
-    #[test]
-    fn session_index_uses_nested_document_model() {
-        let turns = vec![
-            turn(Role::User, "How do we deploy?", 0),
-            turn(Role::Assistant, "Run the deploy script.", 1),
-            turn(Role::User, "How do we test?", 2),
-        ];
-
-        let index = build_session_index(Path::new("/tmp/session.jsonl"), &turns);
-
-        assert_eq!(index.doc_id, "session");
-        assert_eq!(index.doc_name, "session");
-        assert_eq!(index.source_family, "transcript");
-        assert_eq!(index.source_path, "/tmp/session.jsonl");
-        assert_eq!(index.turn_count, 3);
-        assert!(index.text.contains("User: How do we deploy?"));
-        assert_eq!(index.nodes.len(), 2);
-
-        let first_node = &index.nodes[0];
-        assert_eq!(first_node.node_id, "000001");
-        assert_eq!(first_node.source_locator, "turns:0-1");
-        assert_eq!(first_node.nodes.len(), 0);
-        assert!(
-            first_node
-                .text
-                .contains("Assistant: Run the deploy script.")
-        );
-    }
-
-    #[test]
-    fn session_index_groups_prompt_and_answer_in_one_node() {
-        let turns = vec![
-            turn(Role::User, "How do we deploy?", 0),
-            turn(Role::Assistant, "Run the deploy script.", 1),
-            turn(Role::User, "How do we test?", 2),
-        ];
-
-        let index = build_session_index(Path::new("session.jsonl"), &turns);
-
-        assert_eq!(index.nodes.len(), 2);
-        assert_eq!(index.nodes[0].node_id, "000001");
-        assert_eq!(index.nodes[0].start_turn, 0);
-        assert_eq!(index.nodes[0].end_turn, 1);
-    }
-
-    #[test]
-    fn outline_exposes_node_ids_and_titles() {
-        let turns = vec![turn(Role::User, "How do we deploy safely?", 0)];
-        let index = build_session_index(Path::new("session.jsonl"), &turns);
-
-        let outline = index.outline();
-
-        assert!(outline.contains("000001. How do we deploy safely?"));
-    }
-
-    #[test]
-    fn node_text_returns_prompt_and_answer() {
-        let turns = vec![
-            turn(Role::User, "How do we deploy?", 0),
-            turn(Role::Assistant, "Run the deploy script.", 1),
-        ];
-        let index = build_session_index(Path::new("session.jsonl"), &turns);
-
-        let text = index.node_text("000001").unwrap();
-
-        assert!(text.contains("User: How do we deploy?"));
-        assert!(text.contains("Assistant: Run the deploy script."));
-    }
-
-    #[test]
-    fn summary_separates_text_turns_from_tool_calls() {
-        let turns = vec![
-            turn(Role::User, "Please inspect the repo.", 0),
-            Turn {
-                role: Role::Assistant,
-                text: String::new(),
-                turn_index: 1,
-                has_tool_use: true,
-                tool_call_count: 3,
-            },
-            turn(Role::Assistant, "Done.", 2),
-        ];
-
-        let index = build_session_index(Path::new("session.jsonl"), &turns);
-
-        assert_eq!(
-            index.nodes[0].summary,
-            "1 user text turn(s), 1 assistant text turn(s), 3 tool call(s)"
-        );
-    }
-
-    #[test]
-    fn codex_parser_keeps_only_user_and_assistant_messages() {
-        let input = r##"{"type":"session_meta","payload":{"id":"ignored"}}
-{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /tmp/repo\nrules"}]}}
-{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"try it"}]}}
-{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}"}}
-{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
-"##;
-
-        let turns = read_codex_turns_from(BufReader::new(input.as_bytes())).unwrap();
-
-        assert_eq!(turns.len(), 3);
-        assert_eq!(turns[0].role, Role::User);
-        assert_eq!(turns[0].text, "try it");
-        assert_eq!(turns[1].tool_call_count, 1);
-        assert_eq!(turns[2].role, Role::Assistant);
-        assert_eq!(turns[2].text, "done");
-    }
-
-    #[test]
-    fn page_index_sources_collect_claude_archive_and_codex_sessions() {
-        let root = std::env::temp_dir().join(format!("page-index-sources-{}", std::process::id()));
-        let claude_projects = root.join("claude/projects");
-        let claude_archive = root.join("claude/archive");
-        let codex_sessions = root.join("codex/sessions/2026/05/06");
-        let codex_archive = root.join("codex/archived_sessions");
-        std::fs::create_dir_all(&claude_projects).unwrap();
-        std::fs::create_dir_all(&claude_archive).unwrap();
-        std::fs::create_dir_all(&codex_sessions).unwrap();
-        std::fs::create_dir_all(&codex_archive).unwrap();
-        std::fs::write(claude_projects.join("live.jsonl"), "").unwrap();
-        std::fs::write(claude_archive.join("archive.jsonl.zst"), "").unwrap();
-        std::fs::write(codex_sessions.join("codex-live.jsonl"), "").unwrap();
-        std::fs::write(codex_archive.join("codex-archive.jsonl"), "").unwrap();
-
-        let sources = PageIndexSources {
-            claude_projects_dir: &claude_projects,
-            claude_archive_dir: &claude_archive,
-            codex_sessions_dir: &root.join("codex/sessions"),
-            codex_archive_dir: &codex_archive,
-        };
-
-        let files = collect_session_files(&sources);
-
-        assert_eq!(files.len(), 4);
-        let _ = std::fs::remove_dir_all(root);
-    }
-}
+#[path = "page_index_tests.rs"]
+mod tests;

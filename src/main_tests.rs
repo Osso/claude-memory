@@ -66,6 +66,7 @@ fn transcript_page_index_accepts_projects_archive_output_and_limit() {
     let cli = Cli::parse_from([
         "claude-memory",
         "transcript-page-index",
+        "build",
         "--projects",
         "/tmp/projects",
         "--archive",
@@ -80,12 +81,15 @@ fn transcript_page_index_accepts_projects_archive_output_and_limit() {
         "5",
     ]);
     let Command::TranscriptPageIndex {
-        projects,
-        archive,
-        codex_sessions,
-        codex_archive,
-        output,
-        max_sessions,
+        command:
+            TranscriptPageIndexCommand::Build {
+                projects,
+                archive,
+                codex_sessions,
+                codex_archive,
+                output,
+                max_sessions,
+            },
     } = cli.command
     else {
         panic!("expected transcript-page-index command");
@@ -96,6 +100,92 @@ fn transcript_page_index_accepts_projects_archive_output_and_limit() {
     assert_eq!(codex_archive, Some(PathBuf::from("/tmp/codex/archive")));
     assert_eq!(output, Some(PathBuf::from("/tmp/transcript-page-index")));
     assert_eq!(max_sessions, Some(5));
+}
+
+#[test]
+fn transcript_page_index_accepts_document_structure_content_and_query_commands() {
+    let document = Cli::parse_from([
+        "claude-memory",
+        "transcript-page-index",
+        "document",
+        "session",
+        "--index",
+        "/tmp/transcript-index",
+    ]);
+    let Command::TranscriptPageIndex {
+        command: TranscriptPageIndexCommand::Document { doc, index },
+    } = document.command
+    else {
+        panic!("expected transcript-page-index document command");
+    };
+    assert_eq!(doc, "session");
+    assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
+
+    let structure = Cli::parse_from([
+        "claude-memory",
+        "transcript-page-index",
+        "structure",
+        "session",
+        "--index",
+        "/tmp/transcript-index",
+    ]);
+    let Command::TranscriptPageIndex {
+        command: TranscriptPageIndexCommand::Structure { doc, index },
+    } = structure.command
+    else {
+        panic!("expected transcript-page-index structure command");
+    };
+    assert_eq!(doc, "session");
+    assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
+
+    let content = Cli::parse_from([
+        "claude-memory",
+        "transcript-page-index",
+        "content",
+        "session",
+        "000001",
+        "--index",
+        "/tmp/transcript-index",
+    ]);
+    let Command::TranscriptPageIndex {
+        command:
+            TranscriptPageIndexCommand::Content {
+                doc,
+                locator,
+                index,
+            },
+    } = content.command
+    else {
+        panic!("expected transcript-page-index content command");
+    };
+    assert_eq!(doc, "session");
+    assert_eq!(locator, "000001");
+    assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
+
+    let query = Cli::parse_from([
+        "claude-memory",
+        "transcript-page-index",
+        "query",
+        "deploy script",
+        "--index",
+        "/tmp/transcript-index",
+        "--limit",
+        "2",
+    ]);
+    let Command::TranscriptPageIndex {
+        command:
+            TranscriptPageIndexCommand::Query {
+                query,
+                limit,
+                index,
+            },
+    } = query.command
+    else {
+        panic!("expected transcript-page-index query command");
+    };
+    assert_eq!(query, "deploy script");
+    assert_eq!(limit, 2);
+    assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
 }
 
 #[test]
