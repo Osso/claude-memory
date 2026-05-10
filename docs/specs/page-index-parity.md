@@ -41,6 +41,7 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 - [x] Preserve assistant tool-call counts in transcript node summaries.
 - [x] Fetch exact turn text for a node id or turn range.
 - [x] Transcript PageIndex must not write memory units and must not replace friction-driven memory creation.
+- [x] Keep Transcript PageIndex CLI-only until query quality and full-corpus build cost justify an MCP tool.
 
 ### CLI and retrieval surfaces
 
@@ -54,6 +55,7 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 - [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
 - [x] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
 - [x] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
+- [ ] Expose Transcript PageIndex through MCP only after query-quality and corpus-scale build benchmarks improve.
 
 ### Agentic tree-walk retrieval
 
@@ -134,6 +136,7 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
 - Cloud PageIndex API/MCP compatibility.
+- Transcript PageIndex MCP tool exposure before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents.
 - Replacing prompt/answer vector history.
 - Replacing friction-driven memory creation.

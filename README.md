@@ -116,7 +116,8 @@ returns no usable fetch plan, it falls back to the labeled lexical mode.
 
 Use Transcript PageIndex for local navigation of Claude and Codex session
 history. It does not create durable memory units and is not injected into prompts
-by default:
+by default. It is intentionally CLI-only until query quality and full-corpus
+build cost justify adding an MCP tool:
 
 ```bash
 claude-memory transcript-page-index build \
