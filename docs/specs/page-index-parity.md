@@ -61,6 +61,7 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 - [x] Use the project `llm` backend abstraction for any model calls; do not add direct external API calls.
 - [x] Include the retrieval path in query output or logs so the selected document, node ids, and fetched ranges are auditable.
 - [x] Keep deterministic lexical search available as a debug/fallback mode and label it clearly when used.
+- [x] Treat Transcript PageIndex query as usable with deterministic traceable results first; agentic retrieval is optional parity behavior, not a prerequisite for transcript CLI usability.
 
 ### Enrich integration
 
