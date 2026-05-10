@@ -401,42 +401,80 @@ fn collect_markdown_files(kb_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn split_markdown_sections(path: &str, markdown: &str) -> Vec<MarkdownSection> {
-    let mut heading_stack: Vec<String> = Vec::new();
-    let mut id_stack: Vec<String> = Vec::new();
-    let mut current: Option<SectionBuilder> = None;
-    let mut sections = Vec::new();
-    let mut heading_count = 0usize;
-    let mut in_code_fence = false;
+    let mut state = MarkdownSplitState::new(path);
 
     for (line_index, line) in markdown.lines().enumerate() {
-        let line_number = line_index + 1;
+        state.process_line(line_index + 1, line);
+    }
+
+    state.finish()
+}
+
+struct MarkdownSplitState<'a> {
+    path: &'a str,
+    heading_stack: Vec<String>,
+    id_stack: Vec<String>,
+    current: Option<SectionBuilder>,
+    sections: Vec<MarkdownSection>,
+    heading_count: usize,
+    in_code_fence: bool,
+}
+
+impl<'a> MarkdownSplitState<'a> {
+    fn new(path: &'a str) -> Self {
+        Self {
+            path,
+            heading_stack: Vec::new(),
+            id_stack: Vec::new(),
+            current: None,
+            sections: Vec::new(),
+            heading_count: 0,
+            in_code_fence: false,
+        }
+    }
+
+    fn process_line(&mut self, line_number: usize, line: &str) {
         if is_fence_line(line) {
-            in_code_fence = !in_code_fence;
-            push_markdown_line(path, &mut current, &mut heading_count, line_number, line);
-            continue;
+            self.in_code_fence = !self.in_code_fence;
+            self.push_markdown_line(line_number, line);
+            return;
         }
 
-        let heading_started = !in_code_fence
-            && try_start_heading_section(
-                line,
-                line_number,
-                &mut heading_stack,
-                &mut id_stack,
-                &mut heading_count,
-                &mut current,
-                &mut sections,
-            );
-        if heading_started {
-            continue;
+        if !self.in_code_fence && self.try_start_heading_section(line, line_number) {
+            return;
         }
 
-        push_markdown_line(path, &mut current, &mut heading_count, line_number, line);
+        self.push_markdown_line(line_number, line);
     }
 
-    if let Some(section) = current {
-        section.push(&mut sections);
+    fn try_start_heading_section(&mut self, line: &str, line_number: usize) -> bool {
+        try_start_heading_section(
+            line,
+            line_number,
+            &mut self.heading_stack,
+            &mut self.id_stack,
+            &mut self.heading_count,
+            &mut self.current,
+            &mut self.sections,
+        )
     }
-    sections
+
+    fn push_markdown_line(&mut self, line_number: usize, line: &str) {
+        push_markdown_line(
+            self.path,
+            &mut self.current,
+            &mut self.heading_count,
+            line_number,
+            line,
+        );
+    }
+
+    fn finish(mut self) -> Vec<MarkdownSection> {
+        if let Some(section) = self.current {
+            section.push(&mut self.sections);
+        }
+        self.sections
+    }
 }
 
 fn try_start_heading_section(
