@@ -1,5 +1,10 @@
 Prompt and answer history indexing stores raw user prompts separately from assistant responses so each can be searched for its own purpose. Prompt history answers "what did I ask or discuss?", while answer history answers "how did the assistant solve or explain something?"; implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
 
+Decision: legacy KB Markdown chunks remain in prompt search as a broad vector
+fallback and compatibility path. KB PageIndex is the primary structured KB
+retrieval surface for exact Markdown context, heading structure, and follow-up
+content fetches.
+
 ## What it must do
 
 ### Data separation
@@ -19,7 +24,7 @@ Prompt and answer history indexing stores raw user prompts separately from assis
 - [ ] Index active Claude session answers.
 - [ ] Index archived Claude session answers.
 - [ ] Index project summaries into prompt search.
-- [ ] Index Markdown KB chunks into prompt search as legacy/vector-search fallback.
+- [x] Index Markdown KB chunks into prompt search as legacy/vector-search fallback.
 - [ ] Support indexing a single conversation file into both prompt and answer collections.
 
 ### CLI and MCP search
@@ -70,11 +75,11 @@ Prompt and answer history indexing stores raw user prompts separately from assis
 
 - [ ] Add integration tests proving prompt and answer collections receive different content from the same fixture session.
 - [ ] Add CLI or MCP tests proving prompt and answer searches target the intended collection.
-- [ ] Decide whether legacy KB chunks should remain in prompt search now that KB PageIndex exists.
+- [x] Decide whether legacy KB chunks should remain in prompt search now that KB PageIndex exists.
 
 ## Out of scope
 
 - Memory-unit storage and retrieval; see [memory-units.md](memory-units.md).
 - Friction-driven memory creation; see [friction-memory-creation.md](friction-memory-creation.md).
-- KB PageIndex retrieval; see [kb-page-index.md](kb-page-index.md).
+- Replacing KB PageIndex retrieval; prompt-search KB chunks are only a fallback. See [kb-page-index.md](kb-page-index.md).
 - Transcript outline PageIndex retrieval; this is a separate local navigation/audit surface, not prompt/answer vector history and not memory creation.
