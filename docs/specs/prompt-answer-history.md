@@ -77,3 +77,4 @@ Prompt and answer history indexing stores raw user prompts separately from assis
 - Memory-unit storage and retrieval; see [memory-units.md](memory-units.md).
 - Friction-driven memory creation; see [friction-memory-creation.md](friction-memory-creation.md).
 - KB PageIndex retrieval; see [kb-page-index.md](kb-page-index.md).
+- Transcript outline PageIndex retrieval; this is a separate local navigation/audit surface, not prompt/answer vector history and not memory creation.

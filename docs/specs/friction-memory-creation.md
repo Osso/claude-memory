@@ -65,3 +65,4 @@ Friction-driven memory creation analyzes completed transcripts to create memory 
 - Manual memory writes; see [memory-units.md](memory-units.md).
 - Raw prompt and answer indexing; see [prompt-answer-history.md](prompt-answer-history.md).
 - KB PageIndex retrieval; see [kb-page-index.md](kb-page-index.md).
+- Transcript outline PageIndex retrieval; it may help locate source sessions but does not create durable memory units.

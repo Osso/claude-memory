@@ -107,7 +107,7 @@ pub async fn run_page_index(
     };
     let summary = page_index::build_page_index(&sources, &output_dir, max_sessions)?;
     println!(
-        "PageIndex: sessions={} nodes={} output={}",
+        "Transcript PageIndex: sessions={} nodes={} output={}",
         summary.sessions,
         summary.nodes,
         summary.output_dir.display()

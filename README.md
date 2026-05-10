@@ -70,7 +70,7 @@ claude-memory index              # Index all sources
 claude-memory index --fresh      # Re-index everything from scratch
 claude-memory index-file <path>  # Index a single conversation file
 claude-memory ingest-kb          # Extract KB Markdown facts into memory units
-claude-memory page-index         # Build PageIndex trees for Claude/Codex sessions
+claude-memory transcript-page-index     # Build transcript outline PageIndex trees
 claude-memory kb-page-index build      # Build the persistent KB PageIndex
 claude-memory kb-page-index query <q>  # Query KB notes through PageIndex
 claude-memory search <q>                 # Search memories by default

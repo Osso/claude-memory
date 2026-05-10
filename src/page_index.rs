@@ -1,4 +1,4 @@
-//! Local PageIndex-style tree for raw prompt/answer transcript history.
+//! Local PageIndex-style outline tree for raw Claude/Codex transcript history.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ pub fn collect_session_files(sources: &PageIndexSources<'_>) -> Vec<PathBuf> {
 pub fn default_output_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("claude-memory/page-index")
+        .join("claude-memory/transcript-page-index")
 }
 
 pub fn build_page_index(

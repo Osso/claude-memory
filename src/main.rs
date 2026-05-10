@@ -77,8 +77,9 @@ enum Command {
         dry_run: bool,
     },
 
-    /// Build local PageIndex trees over raw prompt/answer sessions
-    PageIndex {
+    /// Build local transcript outline PageIndex trees for Claude/Codex sessions
+    #[command(name = "transcript-page-index")]
+    TranscriptPageIndex {
         /// Projects directory (default: ~/.claude/projects)
         #[arg(long)]
         projects: Option<PathBuf>,
@@ -95,7 +96,7 @@ enum Command {
         #[arg(long)]
         codex_archive: Option<PathBuf>,
 
-        /// Output directory (default: ~/.cache/claude-memory/page-index)
+        /// Output directory (default: ~/.cache/claude-memory/transcript-page-index)
         #[arg(long)]
         output: Option<PathBuf>,
 
@@ -285,7 +286,7 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Index { .. }
         | Command::IndexFile { .. }
         | Command::IngestKb { .. }
-        | Command::PageIndex { .. } => run_indexing_command(command).await,
+        | Command::TranscriptPageIndex { .. } => run_indexing_command(command).await,
         Command::KbPageIndex { command } => run_kb_page_index_command(command),
         Command::Search {
             query,
@@ -327,8 +328,8 @@ fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
 }
 
 async fn run_indexing_command(command: Command) -> Result<()> {
-    if let Command::PageIndex { .. } = command {
-        return run_page_index_from_command(command).await;
+    if let Command::TranscriptPageIndex { .. } = command {
+        return run_transcript_page_index_from_command(command).await;
     }
 
     match command {
@@ -346,12 +347,12 @@ async fn run_indexing_command(command: Command) -> Result<()> {
             max_files,
             dry_run,
         } => run_ingest_kb(kb, max_files, dry_run).await,
-        _ => unreachable!("non-page-index command passed to run_indexing_command"),
+        _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }
 }
 
-async fn run_page_index_from_command(command: Command) -> Result<()> {
-    let Command::PageIndex {
+async fn run_transcript_page_index_from_command(command: Command) -> Result<()> {
+    let Command::TranscriptPageIndex {
         projects,
         archive,
         codex_sessions,
@@ -360,7 +361,9 @@ async fn run_page_index_from_command(command: Command) -> Result<()> {
         max_sessions,
     } = command
     else {
-        unreachable!("non-page-index command passed to run_page_index_from_command");
+        unreachable!(
+            "non-transcript-page-index command passed to run_transcript_page_index_from_command"
+        );
     };
 
     run_page_index(

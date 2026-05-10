@@ -62,10 +62,10 @@ fn ingest_kb_accepts_dry_run_and_limit() {
 }
 
 #[test]
-fn page_index_accepts_projects_archive_output_and_limit() {
+fn transcript_page_index_accepts_projects_archive_output_and_limit() {
     let cli = Cli::parse_from([
         "claude-memory",
-        "page-index",
+        "transcript-page-index",
         "--projects",
         "/tmp/projects",
         "--archive",
@@ -75,11 +75,11 @@ fn page_index_accepts_projects_archive_output_and_limit() {
         "--codex-archive",
         "/tmp/codex/archive",
         "--output",
-        "/tmp/page-index",
+        "/tmp/transcript-page-index",
         "--max-sessions",
         "5",
     ]);
-    let Command::PageIndex {
+    let Command::TranscriptPageIndex {
         projects,
         archive,
         codex_sessions,
@@ -88,13 +88,13 @@ fn page_index_accepts_projects_archive_output_and_limit() {
         max_sessions,
     } = cli.command
     else {
-        panic!("expected page-index command");
+        panic!("expected transcript-page-index command");
     };
     assert_eq!(projects, Some(PathBuf::from("/tmp/projects")));
     assert_eq!(archive, Some(PathBuf::from("/tmp/archive")));
     assert_eq!(codex_sessions, Some(PathBuf::from("/tmp/codex/sessions")));
     assert_eq!(codex_archive, Some(PathBuf::from("/tmp/codex/archive")));
-    assert_eq!(output, Some(PathBuf::from("/tmp/page-index")));
+    assert_eq!(output, Some(PathBuf::from("/tmp/transcript-page-index")));
     assert_eq!(max_sessions, Some(5));
 }
 
