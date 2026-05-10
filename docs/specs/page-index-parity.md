@@ -1,5 +1,9 @@
 PageIndex parity defines the contract for matching the useful architecture of `VectifyAI/PageIndex` reference commit `f50e529` inside `claude-memory`. The target is not a line-for-line port; it is a Rust-native PageIndex surface for local KB Markdown and Claude/Codex transcript history with the same core retrieval model: document metadata, structure without full text, exact content fetch, and optional agentic tree-walk retrieval. Implementation details belong in [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md).
 
+Decision: PDF parsing and OCR support stay out of scope until there is a
+concrete need for document formats beyond Markdown KB notes and transcript
+history. Do not add PDF/OCR dependencies speculatively.
+
 ## What it must do
 
 ### Reference baseline
@@ -73,8 +77,8 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 ### Non-goals and bounded parity
 
-- [ ] Do not implement PDF parsing parity in this cycle.
-- [ ] Do not implement OCR or PageIndex cloud/API parity in this cycle.
+- [x] Do not implement PDF parsing parity in this cycle.
+- [x] Do not implement OCR or PageIndex cloud/API parity in this cycle.
 - [ ] Do not claim FinanceBench or other reference benchmark parity.
 - [ ] Do not replace friction-driven memory creation with Transcript PageIndex.
 
