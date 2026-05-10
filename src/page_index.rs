@@ -13,8 +13,12 @@ use crate::extract::{Role, Turn, read_session_turns};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageIndexDoc {
     pub doc_id: String,
+    pub doc_name: String,
+    pub doc_description: Option<String>,
+    pub source_family: String,
     pub source_path: String,
-    pub title: String,
+    pub turn_count: usize,
+    pub text: String,
     pub nodes: Vec<PageIndexNode>,
 }
 
@@ -23,9 +27,11 @@ pub struct PageIndexNode {
     pub node_id: String,
     pub title: String,
     pub summary: String,
+    pub source_locator: String,
     pub start_turn: u32,
     pub end_turn: u32,
-    pub children: Vec<PageIndexNode>,
+    pub text: String,
+    pub nodes: Vec<PageIndexNode>,
 }
 
 #[derive(Debug)]
@@ -44,7 +50,7 @@ pub struct PageIndexSources<'a> {
 
 impl PageIndexDoc {
     pub fn outline(&self) -> String {
-        let mut lines = vec![format!("{} — {}", self.doc_id, self.title)];
+        let mut lines = vec![format!("{} — {}", self.doc_id, self.doc_name)];
         for node in &self.nodes {
             lines.push(format!(
                 "{}. {} [{}-{}] — {}",
@@ -54,24 +60,21 @@ impl PageIndexDoc {
         lines.join("\n")
     }
 
-    pub fn node_text(&self, node_id: &str, turns: &[Turn]) -> Option<String> {
-        let node = self.nodes.iter().find(|node| node.node_id == node_id)?;
-        let mut lines = Vec::new();
-        for turn in turns {
-            if turn.turn_index < node.start_turn || turn.turn_index > node.end_turn {
-                continue;
-            }
-            lines.push(format_turn(turn));
-        }
-        Some(lines.join("\n\n"))
+    pub fn node_text(&self, node_id: &str) -> Option<String> {
+        find_node(&self.nodes, node_id).map(|node| node.text.clone())
     }
 }
 
 pub fn build_session_index(path: &Path, turns: &[Turn]) -> PageIndexDoc {
     let doc_id = session_id(path);
+    let text = format_turns(turns);
     PageIndexDoc {
-        title: doc_id.clone(),
+        doc_name: doc_id.clone(),
+        doc_description: turns.first().map(node_title),
+        source_family: "transcript".to_string(),
         source_path: path.to_string_lossy().to_string(),
+        turn_count: turns.len(),
+        text,
         doc_id,
         nodes: build_exchange_nodes(turns),
     }
@@ -120,7 +123,7 @@ pub fn build_page_index(
             continue;
         }
         let index = build_session_index(&path, &turns);
-        nodes += index.nodes.len();
+        nodes += count_nodes(&index.nodes);
         write_session_index(output_dir, &index)?;
         indexed += 1;
     }
@@ -158,13 +161,39 @@ fn build_node(position: usize, turns: &[Turn]) -> PageIndexNode {
     let first_turn = turns.first().expect("node must have at least one turn");
     let last_turn = turns.last().expect("node must have at least one turn");
     PageIndexNode {
-        node_id: position.to_string(),
+        node_id: format_node_id(position),
         title: node_title(first_turn),
         summary: node_summary(turns),
+        source_locator: format!("turns:{}-{}", first_turn.turn_index, last_turn.turn_index),
         start_turn: first_turn.turn_index,
         end_turn: last_turn.turn_index,
-        children: Vec::new(),
+        text: format_turns(turns),
+        nodes: Vec::new(),
     }
+}
+
+fn find_node<'a>(nodes: &'a [PageIndexNode], node_id: &str) -> Option<&'a PageIndexNode> {
+    for node in nodes {
+        if node.node_id == node_id {
+            return Some(node);
+        }
+        if let Some(child) = find_node(&node.nodes, node_id) {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn count_nodes(nodes: &[PageIndexNode]) -> usize {
+    nodes.len()
+        + nodes
+            .iter()
+            .map(|node| count_nodes(&node.nodes))
+            .sum::<usize>()
+}
+
+fn format_node_id(position: usize) -> String {
+    format!("{position:06}")
 }
 
 fn node_title(turn: &Turn) -> String {
@@ -206,6 +235,14 @@ fn format_turn(turn: &Turn) -> String {
         return format!("{role}: <{} tool call(s)>", turn.tool_call_count);
     }
     format!("{role}: {}", turn.text)
+}
+
+fn format_turns(turns: &[Turn]) -> String {
+    turns
+        .iter()
+        .map(format_turn)
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -392,6 +429,35 @@ mod tests {
     }
 
     #[test]
+    fn session_index_uses_nested_document_model() {
+        let turns = vec![
+            turn(Role::User, "How do we deploy?", 0),
+            turn(Role::Assistant, "Run the deploy script.", 1),
+            turn(Role::User, "How do we test?", 2),
+        ];
+
+        let index = build_session_index(Path::new("/tmp/session.jsonl"), &turns);
+
+        assert_eq!(index.doc_id, "session");
+        assert_eq!(index.doc_name, "session");
+        assert_eq!(index.source_family, "transcript");
+        assert_eq!(index.source_path, "/tmp/session.jsonl");
+        assert_eq!(index.turn_count, 3);
+        assert!(index.text.contains("User: How do we deploy?"));
+        assert_eq!(index.nodes.len(), 2);
+
+        let first_node = &index.nodes[0];
+        assert_eq!(first_node.node_id, "000001");
+        assert_eq!(first_node.source_locator, "turns:0-1");
+        assert_eq!(first_node.nodes.len(), 0);
+        assert!(
+            first_node
+                .text
+                .contains("Assistant: Run the deploy script.")
+        );
+    }
+
+    #[test]
     fn session_index_groups_prompt_and_answer_in_one_node() {
         let turns = vec![
             turn(Role::User, "How do we deploy?", 0),
@@ -402,7 +468,7 @@ mod tests {
         let index = build_session_index(Path::new("session.jsonl"), &turns);
 
         assert_eq!(index.nodes.len(), 2);
-        assert_eq!(index.nodes[0].node_id, "1");
+        assert_eq!(index.nodes[0].node_id, "000001");
         assert_eq!(index.nodes[0].start_turn, 0);
         assert_eq!(index.nodes[0].end_turn, 1);
     }
@@ -414,7 +480,7 @@ mod tests {
 
         let outline = index.outline();
 
-        assert!(outline.contains("1. How do we deploy safely?"));
+        assert!(outline.contains("000001. How do we deploy safely?"));
     }
 
     #[test]
@@ -425,7 +491,7 @@ mod tests {
         ];
         let index = build_session_index(Path::new("session.jsonl"), &turns);
 
-        let text = index.node_text("1", &turns).unwrap();
+        let text = index.node_text("000001").unwrap();
 
         assert!(text.contains("User: How do we deploy?"));
         assert!(text.contains("Assistant: Run the deploy script."));
