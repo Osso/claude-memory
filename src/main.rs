@@ -6,6 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 mod dedup;
 mod indexing_cmds;
+mod kb_page_index_cli;
 mod transcript_page_index_cli;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 use indexing_cmds::{
@@ -15,6 +16,7 @@ use indexing_cmds::{
     run_transcript_page_index_document, run_transcript_page_index_query,
     run_transcript_page_index_structure,
 };
+use kb_page_index_cli::KbPageIndexCommand;
 use transcript_page_index_cli::TranscriptPageIndexCommand;
 
 #[cfg(test)]
@@ -207,71 +209,6 @@ enum SearchTarget {
     Answers,
 }
 
-#[derive(Subcommand)]
-enum KbPageIndexCommand {
-    /// Build the persistent KB PageIndex
-    Build {
-        /// Knowledge base directory (default: /syncthing/Sync/KB)
-        #[arg(long)]
-        kb: Option<PathBuf>,
-
-        /// Output directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Query the persistent KB PageIndex
-    Query {
-        /// Query text
-        query: String,
-
-        /// Maximum results
-        #[arg(short, long, default_value = "5")]
-        limit: usize,
-
-        /// Knowledge base directory used for stale-index checks
-        #[arg(long)]
-        kb: Option<PathBuf>,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-
-    /// Print document metadata from the persistent KB PageIndex
-    Document {
-        /// Document id or source path
-        doc: String,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-
-    /// Print nested document structure without node text
-    Structure {
-        /// Document id or source path
-        doc: String,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-
-    /// Print exact indexed text for a node id or line range
-    Content {
-        /// Document id or source path
-        doc: String,
-
-        /// Node id or inclusive line range like 4-8
-        locator: String,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-}
-
 #[derive(Debug, Eq, PartialEq)]
 enum MemorySearchMode {
     Semantic,
@@ -306,7 +243,7 @@ async fn run_command(command: Command) -> Result<()> {
         Command::TranscriptPageIndex { command } => {
             run_transcript_page_index_command(command).await
         }
-        Command::KbPageIndex { command } => run_kb_page_index_command(command),
+        Command::KbPageIndex { command } => run_kb_page_index_command(command).await,
         Command::Search {
             query,
             limit,
@@ -352,7 +289,8 @@ async fn run_transcript_page_index_command(command: TranscriptPageIndexCommand) 
             query,
             limit,
             index,
-        } => run_transcript_page_index_query(&query, limit, index),
+            mode,
+        } => run_transcript_page_index_query(&query, limit, index, mode).await,
     }
 }
 
@@ -380,7 +318,7 @@ async fn run_transcript_page_index_build(command: TranscriptPageIndexCommand) ->
     .await
 }
 
-fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
+async fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
     match command {
         KbPageIndexCommand::Build { kb, output } => run_kb_page_index_build(kb, output),
         KbPageIndexCommand::Query {
@@ -388,7 +326,8 @@ fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
             limit,
             kb,
             index,
-        } => run_kb_page_index_query(&query, limit, kb, index),
+            mode,
+        } => run_kb_page_index_query(&query, limit, kb, index, mode).await,
         KbPageIndexCommand::Document { doc, index } => run_kb_page_index_document(&doc, index),
         KbPageIndexCommand::Structure { doc, index } => run_kb_page_index_structure(&doc, index),
         KbPageIndexCommand::Content {
@@ -707,7 +646,7 @@ fn run_graph_dump(limit: usize) -> Result<()> {
     Ok(())
 }
 
-async fn run_analyze(session_jsonl: &PathBuf) -> Result<()> {
+async fn run_analyze(session_jsonl: &Path) -> Result<()> {
     use analyze::AnalysisOutcome;
 
     println!("Analyzing: {}", session_jsonl.display());

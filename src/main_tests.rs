@@ -1,4 +1,5 @@
 use super::*;
+use claude_memory::page_index_agentic;
 
 #[test]
 fn search_defaults_to_memories() {
@@ -178,6 +179,7 @@ fn transcript_page_index_accepts_document_structure_content_and_query_commands()
                 query,
                 limit,
                 index,
+                mode,
             },
     } = query.command
     else {
@@ -186,6 +188,23 @@ fn transcript_page_index_accepts_document_structure_content_and_query_commands()
     assert_eq!(query, "deploy script");
     assert_eq!(limit, 2);
     assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
+    assert_eq!(mode, page_index_agentic::RetrievalMode::Lexical);
+
+    let agentic_query = Cli::parse_from([
+        "claude-memory",
+        "transcript-page-index",
+        "query",
+        "deploy script",
+        "--mode",
+        "agentic",
+    ]);
+    let Command::TranscriptPageIndex {
+        command: TranscriptPageIndexCommand::Query { mode, .. },
+    } = agentic_query.command
+    else {
+        panic!("expected transcript-page-index query command");
+    };
+    assert_eq!(mode, page_index_agentic::RetrievalMode::Agentic);
 }
 
 #[test]
@@ -230,6 +249,7 @@ fn kb_page_index_accepts_query_paths_and_limit() {
                 limit,
                 kb,
                 index,
+                mode,
             },
     } = cli.command
     else {
@@ -239,6 +259,7 @@ fn kb_page_index_accepts_query_paths_and_limit() {
     assert_eq!(limit, 2);
     assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
     assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
+    assert_eq!(mode, page_index_agentic::RetrievalMode::Lexical);
 }
 
 #[test]

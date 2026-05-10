@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use claude_memory::{index, kb_ingest, kb_search, page_index};
+use claude_memory::{index, kb_ingest, kb_search, page_index, page_index_agentic};
 use std::path::{Path, PathBuf};
 
 pub async fn run_index_cmd(
@@ -25,7 +25,7 @@ pub async fn run_index_cmd(
     .await
 }
 
-pub async fn run_index_file_cmd(path: &PathBuf, batch_size: usize) -> Result<()> {
+pub async fn run_index_file_cmd(path: &Path, batch_size: usize) -> Result<()> {
     let count = index::index_file(path, batch_size).await?;
     eprintln!("Indexed {} chunks from {}", count, path.display());
     Ok(())
@@ -58,14 +58,22 @@ pub fn run_kb_page_index_build(kb: Option<PathBuf>, output: Option<PathBuf>) -> 
     Ok(())
 }
 
-pub fn run_kb_page_index_query(
+pub async fn run_kb_page_index_query(
     query: &str,
     limit: usize,
     kb: Option<PathBuf>,
     index: Option<PathBuf>,
+    mode: page_index_agentic::RetrievalMode,
 ) -> Result<()> {
     let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
     let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
+    if mode == page_index_agentic::RetrievalMode::Agentic {
+        let corpus = page_index_agentic::KbTreeWalkCorpus::new(&kb_dir, &index_dir);
+        let response = page_index_agentic::retrieve_with_llm(query, &corpus, limit).await?;
+        print_tree_walk_response(&response);
+        return Ok(());
+    }
+
     let results = kb_search::search_or_build(&kb_dir, &index_dir, query, limit)?;
     if results.is_empty() {
         println!("(no KB notes found)");
@@ -163,12 +171,20 @@ pub fn run_transcript_page_index_content(
     Ok(())
 }
 
-pub fn run_transcript_page_index_query(
+pub async fn run_transcript_page_index_query(
     query: &str,
     limit: usize,
     index: Option<PathBuf>,
+    mode: page_index_agentic::RetrievalMode,
 ) -> Result<()> {
     let index_dir = index.unwrap_or_else(page_index::default_output_dir);
+    if mode == page_index_agentic::RetrievalMode::Agentic {
+        let corpus = page_index_agentic::TranscriptTreeWalkCorpus::new(&index_dir);
+        let response = page_index_agentic::retrieve_with_llm(query, &corpus, limit).await?;
+        print_tree_walk_response(&response);
+        return Ok(());
+    }
+
     let results = page_index::query_index(&index_dir, query, limit)?;
     if results.is_empty() {
         println!("(no transcript notes found)");
@@ -189,4 +205,19 @@ pub fn run_transcript_page_index_query(
         println!("   next: {}\n", result.next_content_command);
     }
     Ok(())
+}
+
+fn print_tree_walk_response(response: &page_index_agentic::TreeWalkResponse) {
+    println!("PageIndex retrieval mode: {:?}", response.mode);
+    println!("Answer:\n{}", response.answer);
+    println!("\nReferences:");
+    for reference in &response.references {
+        println!("- {}#{}", reference.doc_id, reference.locator);
+    }
+    println!("\nRetrieval path:");
+    for step in &response.steps {
+        let doc = step.doc_id.as_deref().unwrap_or("-");
+        let locator = step.locator.as_deref().unwrap_or("-");
+        println!("- {} doc={} locator={}", step.action, doc, locator);
+    }
 }
