@@ -1,6 +1,6 @@
 //! Persistent heading-aware PageIndex for the local Markdown knowledge base.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -11,7 +11,8 @@ mod kb_search_model;
 #[path = "kb_search_text.rs"]
 mod kb_search_text;
 pub use kb_search_model::{
-    KbDocStructure, KbIndexedDoc, KbIndexedFile, KbIndexedNode, KbNodeStructure, KbPageIndex,
+    KbDocContent, KbDocMetadata, KbDocStructure, KbIndexedDoc, KbIndexedFile, KbIndexedNode,
+    KbNodeStructure, KbPageIndex,
 };
 use kb_search_text::{build_snippet, token_counts, tokenize};
 
@@ -22,10 +23,16 @@ const MIN_SCORE: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbSearchResult {
+    pub doc_id: String,
     pub path: String,
     pub heading: String,
     pub text: String,
     pub score: usize,
+    pub node_id: String,
+    pub title: String,
+    pub reason: String,
+    pub content_command: String,
+    pub next_content_command: String,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +145,64 @@ pub fn search_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<K
     Ok(results)
 }
 
+pub fn document_metadata(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+) -> Result<KbDocMetadata> {
+    let index = load_index(index_dir)?;
+    let doc = find_doc(&index, doc_selector.as_ref())?;
+    Ok(doc.metadata())
+}
+
+pub fn document_structure(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+) -> Result<KbDocStructure> {
+    let index = load_index(index_dir)?;
+    let doc = find_doc(&index, doc_selector.as_ref())?;
+    Ok(doc.structure_without_text())
+}
+
+pub fn document_content(
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+    locator: &str,
+) -> Result<KbDocContent> {
+    let index = load_index(index_dir)?;
+    let doc = find_doc(&index, doc_selector.as_ref())?;
+    let text = content_for_locator(doc, locator)?;
+    Ok(KbDocContent {
+        doc_id: doc.doc_id.clone(),
+        source_path: doc.source_path.clone(),
+        locator: locator.to_string(),
+        text,
+    })
+}
+
+pub fn query_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
+    search_index(index_dir, query, limit)
+}
+
+pub fn load_document(
+    kb_dir: &Path,
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+) -> Result<KbIndexedDoc> {
+    ensure_fresh_index(kb_dir, index_dir)?;
+    let index = load_index(index_dir)?;
+    Ok(find_doc(&index, doc_selector.as_ref())?.clone())
+}
+
+pub fn load_content(
+    kb_dir: &Path,
+    index_dir: &Path,
+    doc_selector: impl AsRef<Path>,
+    locator: &str,
+) -> Result<String> {
+    ensure_fresh_index(kb_dir, index_dir)?;
+    Ok(document_content(index_dir, doc_selector, locator)?.text)
+}
+
 fn ensure_fresh_index(kb_dir: &Path, index_dir: &Path) -> Result<()> {
     if !index_path(index_dir).exists() {
         build_index(kb_dir, index_dir)?;
@@ -156,6 +221,96 @@ fn load_index(index_dir: &Path) -> Result<KbPageIndex> {
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn find_doc<'a>(index: &'a KbPageIndex, selector: &Path) -> Result<&'a KbIndexedDoc> {
+    let normalized = normalize_doc_selector(&index.source_dir, selector);
+    let with_extension = ensure_markdown_extension(&normalized);
+    index
+        .docs
+        .iter()
+        .find(|doc| doc.doc_id == normalized || doc.source_path == normalized)
+        .or_else(|| {
+            index
+                .docs
+                .iter()
+                .find(|doc| doc.doc_id == with_extension || doc.source_path == with_extension)
+        })
+        .with_context(|| format!("document not found in KB PageIndex: {}", selector.display()))
+}
+
+fn normalize_doc_selector(source_dir: &str, selector: &Path) -> String {
+    let source_root = Path::new(source_dir);
+    let path = selector.strip_prefix(source_root).unwrap_or(selector);
+    path.to_string_lossy().to_string()
+}
+
+fn ensure_markdown_extension(selector: &str) -> String {
+    if selector.ends_with(".md") {
+        selector.to_string()
+    } else {
+        format!("{selector}.md")
+    }
+}
+
+fn content_for_locator(doc: &KbIndexedDoc, locator: &str) -> Result<String> {
+    if let Some(node) = find_node(&doc.nodes, locator) {
+        return Ok(format_content_text(&node.text));
+    }
+
+    if let Some((start, end)) = parse_line_range(locator) {
+        return content_for_line_range(doc, start, end);
+    }
+
+    bail!(
+        "locator must be a node id or inclusive line range like 4-8: {}",
+        locator
+    )
+}
+
+fn find_node<'a>(nodes: &'a [KbIndexedNode], node_id: &str) -> Option<&'a KbIndexedNode> {
+    for node in nodes {
+        if node.node_id == node_id {
+            return Some(node);
+        }
+        if let Some(child) = find_node(&node.nodes, node_id) {
+            return Some(child);
+        }
+    }
+    None
+}
+
+fn parse_line_range(locator: &str) -> Option<(usize, usize)> {
+    let (start, end) = locator.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    if start == 0 || end < start {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn content_for_line_range(doc: &KbIndexedDoc, start: usize, end: usize) -> Result<String> {
+    let lines = doc.text.lines().collect::<Vec<_>>();
+    if start > lines.len() {
+        bail!(
+            "line range starts after end of document: {} has {} lines",
+            doc.doc_id,
+            lines.len()
+        );
+    }
+
+    let end = end.min(lines.len());
+    let selected = lines[start - 1..end].join("\n");
+    Ok(format_content_text(&selected))
+}
+
+fn format_content_text(text: &str) -> String {
+    if text.ends_with('\n') {
+        text.to_string()
+    } else {
+        format!("{text}\n")
+    }
 }
 
 fn index_is_stale(kb_dir: &Path, index: &KbPageIndex) -> Result<bool> {
@@ -188,6 +343,7 @@ fn build_doc(kb_dir: &Path, path: &Path) -> Result<KbIndexedDoc> {
         doc_description,
         source_path: rel_path,
         line_count: text.lines().count(),
+        text,
         nodes,
     })
 }
@@ -289,6 +445,9 @@ fn try_start_heading_section(
         parent,
         line_number,
     ));
+    if let Some(section) = current {
+        section.push_line(line);
+    }
     true
 }
 
@@ -412,6 +571,7 @@ struct NodeMatchStats {
     matched: usize,
     occurrences: usize,
     structural_matches: usize,
+    terms: Vec<String>,
 }
 
 fn score_node(
@@ -437,11 +597,24 @@ fn score_node(
     }
 
     Some(KbSearchResult {
+        doc_id: doc.doc_id.clone(),
         path: doc.source_path.clone(),
         heading: node.heading_path.clone(),
         text: build_snippet(&node.text, query_tokens),
         score,
+        node_id: node.node_id.clone(),
+        title: node.title.clone(),
+        reason: format!("matched query terms: {}", stats.terms.join(", ")),
+        content_command: content_command(doc, node),
+        next_content_command: content_command(doc, node),
     })
+}
+
+fn content_command(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
+    format!(
+        "claude-memory kb-page-index content {} {}",
+        doc.doc_id, node.node_id
+    )
 }
 
 fn node_match_stats(
@@ -468,10 +641,15 @@ fn node_match_stats(
 
     matched_tokens.sort_unstable();
     matched_tokens.dedup();
+    let terms = matched_tokens
+        .iter()
+        .map(|token| (*token).to_string())
+        .collect();
     NodeMatchStats {
         matched: matched_tokens.len(),
         occurrences,
         structural_matches,
+        terms,
     }
 }
 
@@ -532,145 +710,5 @@ fn required_match_count(query_token_count: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn build_and_search_persisted_kb_index() {
-        let root = unique_temp_dir("kb-page-index-search");
-        let kb_dir = root.join("kb");
-        let index_dir = root.join("index");
-        std::fs::create_dir_all(kb_dir.join("memory")).unwrap();
-        std::fs::write(
-            kb_dir.join("memory/corrections.md"),
-            "# Corrections\n\n## Process\nLoad frontend design skill immediately.\n",
-        )
-        .unwrap();
-
-        let summary = build_index(&kb_dir, &index_dir).unwrap();
-        let results =
-            search_index(&index_dir, "frontend design skill load immediately", 3).unwrap();
-
-        assert_eq!(summary.files, 1);
-        assert_eq!(summary.nodes, 2);
-        assert_eq!(results[0].path, "memory/corrections.md");
-        assert_eq!(results[0].heading, "Corrections > Process");
-    }
-
-    #[test]
-    fn search_or_build_refreshes_stale_index() {
-        let root = unique_temp_dir("kb-page-index-refresh");
-        let kb_dir = root.join("kb");
-        let index_dir = root.join("index");
-        std::fs::create_dir_all(&kb_dir).unwrap();
-        let path = kb_dir.join("notes.md");
-        std::fs::write(&path, "# Notes\nOld content.\n").unwrap();
-        build_index(&kb_dir, &index_dir).unwrap();
-
-        std::fs::write(&path, "# Notes\nUse uv instead of pip.\n").unwrap();
-        let results = search_or_build(&kb_dir, &index_dir, "uv instead pip", 3).unwrap();
-
-        assert_eq!(results[0].path, "notes.md");
-        assert!(results[0].text.contains("uv instead of pip"));
-    }
-
-    #[test]
-    fn build_doc_uses_nested_page_index_document_model() {
-        let markdown = "# Router\nLocal network router note.\n\n## DHCP\nLease reservations.\n\n### Static leases\nPin important devices.\n\n## Firewall\nWAN block rules.\n";
-        let doc = build_doc_from_text("state/router.md", markdown);
-
-        assert_eq!(doc.doc_id, "state/router.md");
-        assert_eq!(doc.doc_name, "router");
-        assert_eq!(doc.doc_description.as_deref(), Some("Router"));
-        assert_eq!(doc.source_path, "state/router.md");
-        assert_eq!(doc.line_count, 11);
-        assert_eq!(doc.nodes.len(), 1);
-
-        let root = &doc.nodes[0];
-        assert_eq!(root.node_id, "000001");
-        assert_eq!(root.title, "Router");
-        assert_eq!(root.heading_path, "Router");
-        assert_eq!(root.source_line, 1);
-        assert_eq!(root.nodes.len(), 2);
-        assert!(root.text.contains("Local network router note."));
-
-        let dhcp = &root.nodes[0];
-        assert_eq!(dhcp.node_id, "000002");
-        assert_eq!(dhcp.title, "DHCP");
-        assert_eq!(dhcp.heading_path, "Router > DHCP");
-        assert_eq!(dhcp.nodes[0].node_id, "000003");
-        assert_eq!(dhcp.nodes[0].heading_path, "Router > DHCP > Static leases");
-        assert!(dhcp.nodes[0].text.contains("Pin important devices."));
-    }
-
-    #[test]
-    fn structure_view_omits_internal_node_text() {
-        let markdown = "# Router\nSecret body text.\n\n## DHCP\nLease reservations.\n";
-        let doc = build_doc_from_text("state/router.md", markdown);
-
-        let structure = doc.structure_without_text();
-        let json = serde_json::to_string(&structure).unwrap();
-
-        assert!(json.contains("Router"));
-        assert!(json.contains("000002"));
-        assert!(!json.contains("Secret body text"));
-        assert!(!json.contains("Lease reservations"));
-        assert!(!json.contains("token_counts"));
-    }
-
-    #[test]
-    fn search_or_build_refreshes_added_and_deleted_markdown_files() {
-        let root = unique_temp_dir("kb-page-index-add-delete-refresh");
-        let kb_dir = root.join("kb");
-        let index_dir = root.join("index");
-        std::fs::create_dir_all(&kb_dir).unwrap();
-        let old_path = kb_dir.join("old.md");
-        let new_path = kb_dir.join("new.md");
-        std::fs::write(&old_path, "# Old\nRemove me after first build.\n").unwrap();
-        build_index(&kb_dir, &index_dir).unwrap();
-
-        std::fs::remove_file(&old_path).unwrap();
-        std::fs::write(&new_path, "# New\nFresh page index content.\n").unwrap();
-
-        let fresh_results = search_or_build(&kb_dir, &index_dir, "fresh page index content", 3)
-            .expect("new file should trigger refresh");
-        let old_results = search_index(&index_dir, "remove me after first build", 3)
-            .expect("refreshed index should remain readable");
-
-        assert_eq!(fresh_results[0].path, "new.md");
-        assert!(old_results.is_empty());
-    }
-
-    #[test]
-    fn long_queries_require_three_distinct_terms() {
-        let markdown = "# Notes\n\nDesign links and profession skill points.\n";
-        let doc = build_doc_from_text("bookmarks.md", markdown);
-        let query = "frontend design skill load immediately";
-
-        let result = score_node(&doc, &doc.nodes[0], query, &tokenize(query));
-
-        assert!(result.is_none());
-    }
-
-    fn build_doc_from_text(path: &str, markdown: &str) -> KbIndexedDoc {
-        let sections = split_markdown_sections(path, markdown);
-        let doc_description = sections.first().map(|section| section.title.clone());
-        KbIndexedDoc {
-            doc_id: path.to_string(),
-            doc_name: fallback_heading(path),
-            doc_description,
-            source_path: path.to_string(),
-            line_count: markdown.lines().count(),
-            nodes: build_nested_nodes(&sections, None),
-        }
-    }
-
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
-    }
-}
+#[path = "kb_search_tests.rs"]
+mod tests;

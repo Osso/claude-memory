@@ -149,10 +149,18 @@ mod tests {
     #[test]
     fn kb_results_include_source_path_and_heading() {
         let results = vec![kb_search::KbSearchResult {
+            doc_id: "memory/corrections.md".to_string(),
             path: "memory/corrections.md".to_string(),
             heading: "Corrections > Process".to_string(),
             text: "Load frontend design skill immediately.".to_string(),
             score: 44,
+            node_id: "000002".to_string(),
+            title: "Process".to_string(),
+            reason: "matched 4 query terms".to_string(),
+            content_command: "claude-memory kb-page-index content memory/corrections.md 000002"
+                .to_string(),
+            next_content_command:
+                "claude-memory kb-page-index content memory/corrections.md 000002".to_string(),
         }];
 
         let formatted = format_kb_results(&results);

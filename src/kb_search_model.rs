@@ -23,6 +23,7 @@ pub struct KbIndexedDoc {
     pub doc_description: Option<String>,
     pub source_path: String,
     pub line_count: usize,
+    pub text: String,
     pub nodes: Vec<KbIndexedNode>,
 }
 
@@ -58,7 +59,34 @@ pub struct KbNodeStructure {
     pub nodes: Vec<KbNodeStructure>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbDocMetadata {
+    pub doc_id: String,
+    pub doc_name: String,
+    pub doc_description: Option<String>,
+    pub source_path: String,
+    pub line_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbDocContent {
+    pub doc_id: String,
+    pub source_path: String,
+    pub locator: String,
+    pub text: String,
+}
+
 impl KbIndexedDoc {
+    pub fn metadata(&self) -> KbDocMetadata {
+        KbDocMetadata {
+            doc_id: self.doc_id.clone(),
+            doc_name: self.doc_name.clone(),
+            doc_description: self.doc_description.clone(),
+            source_path: self.source_path.clone(),
+            line_count: self.line_count,
+        }
+    }
+
     pub fn structure_without_text(&self) -> KbDocStructure {
         KbDocStructure {
             doc_id: self.doc_id.clone(),

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use claude_memory::{index, kb_ingest, kb_search, page_index};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub async fn run_index_cmd(
     archive: Option<PathBuf>,
@@ -74,14 +74,37 @@ pub fn run_kb_page_index_query(
 
     for (index, result) in results.iter().enumerate() {
         println!(
-            "{}. [kb] {} > {} (score: {})",
+            "{}. [kb] {}#{} > {} (score: {})",
             index + 1,
             result.path,
+            result.node_id,
             result.heading,
             result.score
         );
-        println!("   {}\n", result.text.replace('\n', " "));
+        println!("   reason: {}", result.reason);
+        println!("   next: {}\n", result.next_content_command);
     }
+    Ok(())
+}
+
+pub fn run_kb_page_index_document(doc: &str, index: Option<PathBuf>) -> Result<()> {
+    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
+    let metadata = kb_search::document_metadata(&index_dir, Path::new(doc))?;
+    println!("{}", serde_json::to_string_pretty(&metadata)?);
+    Ok(())
+}
+
+pub fn run_kb_page_index_structure(doc: &str, index: Option<PathBuf>) -> Result<()> {
+    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
+    let structure = kb_search::document_structure(&index_dir, Path::new(doc))?;
+    println!("{}", serde_json::to_string_pretty(&structure)?);
+    Ok(())
+}
+
+pub fn run_kb_page_index_content(doc: &str, locator: &str, index: Option<PathBuf>) -> Result<()> {
+    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
+    let content = kb_search::document_content(&index_dir, Path::new(doc), locator)?;
+    print!("{}", content.text);
     Ok(())
 }
 

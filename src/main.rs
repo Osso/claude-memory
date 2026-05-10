@@ -9,7 +9,8 @@ mod indexing_cmds;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 use indexing_cmds::{
     run_index_cmd, run_index_file_cmd, run_ingest_kb, run_kb_page_index_build,
-    run_kb_page_index_query, run_page_index,
+    run_kb_page_index_content, run_kb_page_index_document, run_kb_page_index_query,
+    run_kb_page_index_structure, run_page_index,
 };
 
 #[cfg(test)]
@@ -253,6 +254,39 @@ enum KbPageIndexCommand {
         #[arg(long)]
         index: Option<PathBuf>,
     },
+
+    /// Print document metadata from the persistent KB PageIndex
+    Document {
+        /// Document id or source path
+        doc: String,
+
+        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
+        #[arg(long)]
+        index: Option<PathBuf>,
+    },
+
+    /// Print nested document structure without node text
+    Structure {
+        /// Document id or source path
+        doc: String,
+
+        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
+        #[arg(long)]
+        index: Option<PathBuf>,
+    },
+
+    /// Print exact indexed text for a node id or line range
+    Content {
+        /// Document id or source path
+        doc: String,
+
+        /// Node id or inclusive line range like 4-8
+        locator: String,
+
+        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
+        #[arg(long)]
+        index: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -324,6 +358,13 @@ fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
             kb,
             index,
         } => run_kb_page_index_query(&query, limit, kb, index),
+        KbPageIndexCommand::Document { doc, index } => run_kb_page_index_document(&doc, index),
+        KbPageIndexCommand::Structure { doc, index } => run_kb_page_index_structure(&doc, index),
+        KbPageIndexCommand::Content {
+            doc,
+            locator,
+            index,
+        } => run_kb_page_index_content(&doc, &locator, index),
     }
 }
 
