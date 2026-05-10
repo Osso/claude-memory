@@ -6,6 +6,7 @@ use crate::{config, graph, index, kb_search, memory_unit};
 
 const MIN_MEMORY_SCORE: f32 = 0.65;
 const MAX_KB_RESULTS: usize = 3;
+const MAX_KB_RESULT_CHARS: usize = 500;
 
 pub async fn run_enrich(limit: usize) -> Result<()> {
     let prompt = read_prompt_from_hook()?;
@@ -58,10 +59,10 @@ async fn add_memory_section(prompt: &str, limit: usize, sections: &mut Vec<Strin
 
 fn add_kb_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
     let kb_limit = limit.min(MAX_KB_RESULTS);
-    match kb_search::search_default_kb(prompt, kb_limit) {
+    match kb_search::search_default_kb_context(prompt, kb_limit) {
         Ok(results) if !results.is_empty() => sections.push(format_kb_results(&results)),
         Ok(_) => {}
-        Err(error) => eprintln!("enrich: KB search failed: {error:#}"),
+        Err(error) => eprintln!("enrich: KB PageIndex search failed: {error:#}"),
     }
 }
 
@@ -111,10 +112,15 @@ fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
 fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
     let mut out = String::from("## Relevant KB notes (KB PageIndex)");
     for result in results {
-        let text = result.text.replace('\n', " ");
+        let text = preview_text(&result.text, MAX_KB_RESULT_CHARS);
         out.push_str(&format!(
-            "\n- ({}) {} > {}: {}",
-            result.score, result.path, result.heading, text
+            "\n- ({}) {} > {} [{}]: {}\n  next: {}",
+            result.score,
+            result.path,
+            result.heading,
+            result.node_id,
+            text,
+            result.next_content_command
         ));
     }
     out
@@ -168,5 +174,30 @@ mod tests {
         assert!(formatted.contains("Relevant KB notes"));
         assert!(formatted.contains("memory/corrections.md"));
         assert!(formatted.contains("Corrections > Process"));
+    }
+
+    #[test]
+    fn kb_results_are_capped_for_hook_output() {
+        let long_text = format!("{} tail marker", "a".repeat(700));
+        let results = vec![kb_search::KbSearchResult {
+            doc_id: "memory/corrections.md".to_string(),
+            path: "memory/corrections.md".to_string(),
+            heading: "Corrections > Process".to_string(),
+            text: long_text,
+            score: 44,
+            node_id: "000002".to_string(),
+            title: "Process".to_string(),
+            reason: "matched query terms: corrections".to_string(),
+            content_command: "claude-memory kb-page-index content memory/corrections.md 000002"
+                .to_string(),
+            next_content_command:
+                "claude-memory kb-page-index content memory/corrections.md 000002".to_string(),
+        }];
+
+        let formatted = format_kb_results(&results);
+
+        assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
+        assert!(!formatted.contains("tail marker"));
+        assert!(formatted.contains("..."));
     }
 }

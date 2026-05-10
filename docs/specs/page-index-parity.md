@@ -64,9 +64,9 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 ### Enrich integration
 
-- [ ] `claude-memory enrich` may include KB PageIndex output when it fits hook latency and output budgets.
-- [ ] `claude-memory enrich` must label KB PageIndex context as `KB PageIndex`.
-- [ ] `claude-memory enrich` must not inject Transcript PageIndex results by default.
+- [x] `claude-memory enrich` may include KB PageIndex output when it fits hook latency and output budgets.
+- [x] `claude-memory enrich` must label KB PageIndex context as `KB PageIndex`.
+- [x] `claude-memory enrich` must not inject Transcript PageIndex results by default.
 
 ### Non-goals and bounded parity
 

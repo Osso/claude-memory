@@ -30,10 +30,10 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 ### Enrich integration
 
 - [x] Format KB results under a distinct `Relevant KB notes` section.
-- [ ] Label enrich KB context as coming from `KB PageIndex`.
+- [x] Label enrich KB context as coming from `KB PageIndex`.
 - [ ] Include KB PageIndex results alongside memory-unit preloads when both are relevant.
-- [ ] Auto-build or refresh the KB PageIndex from enrich when the index is missing or stale.
-- [ ] Cap enrich KB output to a small number of results.
+- [x] Auto-build or refresh the KB PageIndex from enrich when the index is missing or stale.
+- [x] Cap enrich KB output to a small number of results.
 
 ## How it works
 
@@ -63,7 +63,7 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 ## Known gaps (current cycle)
 
 - [ ] Add tests for new-file and deleted-file stale-index refresh.
-- [ ] Add an integration-style test for `enrich` that proves KB PageIndex results are included and capped.
+- [x] Add an integration-style test for `enrich` that proves KB PageIndex results are included and capped.
 - [ ] Add a CLI output test or snapshot for query result formatting and no-results behavior.
 - [ ] Decide whether KB PageIndex should index repo-local `AGENTS.md` / persistent rules as a separate source.
 

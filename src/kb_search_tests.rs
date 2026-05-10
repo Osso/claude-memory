@@ -166,6 +166,30 @@ fn query_returns_traceable_node_hits_without_snippets() {
 }
 
 #[test]
+fn search_or_build_context_fetches_exact_node_content_for_enrich() {
+    let root = unique_temp_dir("kb-page-index-enrich-content");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(
+        kb_dir.join("agent.md"),
+        "# Agent Rules\nIntro text.\n\n## Frontend\nLoad the frontend design skill immediately before UI work.\n",
+    )
+    .unwrap();
+
+    let results =
+        search_or_build_context(&kb_dir, &index_dir, "frontend design skill immediately", 3)
+            .unwrap();
+
+    assert_eq!(results[0].path, "agent.md");
+    assert_eq!(results[0].node_id, "000002");
+    assert_eq!(
+        results[0].text,
+        "## Frontend\nLoad the frontend design skill immediately before UI work.\n"
+    );
+}
+
+#[test]
 fn search_or_build_refreshes_added_and_deleted_markdown_files() {
     let root = unique_temp_dir("kb-page-index-add-delete-refresh");
     let kb_dir = root.join("kb");

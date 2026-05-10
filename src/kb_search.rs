@@ -104,6 +104,15 @@ pub fn search_default_kb(query: &str, limit: usize) -> Result<Vec<KbSearchResult
     )
 }
 
+pub fn search_default_kb_context(query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
+    search_or_build_context(
+        Path::new(DEFAULT_KB_DIR),
+        &default_index_dir(),
+        query,
+        limit,
+    )
+}
+
 pub fn search_or_build(
     kb_dir: &Path,
     index_dir: &Path,
@@ -112,6 +121,23 @@ pub fn search_or_build(
 ) -> Result<Vec<KbSearchResult>> {
     ensure_fresh_index(kb_dir, index_dir)?;
     search_index(index_dir, query, limit)
+}
+
+pub fn search_or_build_context(
+    kb_dir: &Path,
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<KbSearchResult>> {
+    ensure_fresh_index(kb_dir, index_dir)?;
+    search_index(index_dir, query, limit)?
+        .into_iter()
+        .map(|mut result| {
+            let content = document_content(index_dir, Path::new(&result.doc_id), &result.node_id)?;
+            result.text = content.text;
+            Ok(result)
+        })
+        .collect()
 }
 
 pub fn search_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
