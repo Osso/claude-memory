@@ -141,6 +141,71 @@ fn query_returns_traceable_transcript_node_hits() {
 }
 
 #[test]
+fn fixture_transcripts_prove_structure_content_query_and_no_memory_units() {
+    let root = unique_temp_dir("transcript-page-index-fixtures");
+    let claude_projects = root.join(".claude/projects/example");
+    let claude_archive = root.join(".claude/archive");
+    let codex_sessions = root.join(".codex/sessions/2026/05/10");
+    let codex_archive = root.join(".codex/archived_sessions");
+    let output_dir = root.join("index");
+    std::fs::create_dir_all(&claude_projects).unwrap();
+    std::fs::create_dir_all(&claude_archive).unwrap();
+    std::fs::create_dir_all(&codex_sessions).unwrap();
+    std::fs::create_dir_all(&codex_archive).unwrap();
+    std::fs::write(
+        claude_projects.join("claude-live.jsonl"),
+        r#"{"type":"user","message":{"content":"How do we index markdown?"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Build nested headings."}]}}
+{"type":"user","message":{"content":"How do we query it?"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Fetch exact node content."}]}}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        codex_sessions.join("codex-live.jsonl"),
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"How should Codex cache commands?"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Use explicit cache directories."}]}}
+"#,
+    )
+    .unwrap();
+    let sources = PageIndexSources {
+        claude_projects_dir: &root.join(".claude/projects"),
+        claude_archive_dir: &claude_archive,
+        codex_sessions_dir: &root.join(".codex/sessions"),
+        codex_archive_dir: &codex_archive,
+    };
+
+    let summary = build_page_index(&sources, &output_dir, None).unwrap();
+
+    assert_eq!(summary.sessions, 2);
+    assert_eq!(summary.nodes, 3);
+    let claude_structure = document_structure(&output_dir, "claude-live").unwrap();
+    let claude_json = serde_json::to_string(&claude_structure).unwrap();
+    assert_eq!(claude_structure.nodes[1].node_id, "000002");
+    assert!(!claude_json.contains("Fetch exact node content."));
+
+    let claude_content = document_content(&output_dir, "claude-live", "000002").unwrap();
+    assert_eq!(
+        claude_content.text,
+        "User: How do we query it?\n\nAssistant: Fetch exact node content.\n"
+    );
+
+    let codex_results = query_index(&output_dir, "codex cache commands", 5).unwrap();
+    assert_eq!(codex_results[0].doc_id, "codex-live");
+    assert_eq!(codex_results[0].node_id, "000001");
+    assert_eq!(
+        codex_results[0].next_content_command,
+        "claude-memory transcript-page-index content codex-live 000001"
+    );
+
+    let output_files = std::fs::read_dir(&output_dir).unwrap().count();
+    assert_eq!(output_files, 2);
+    assert!(!output_dir.join("memory-units").exists());
+    assert!(!output_dir.join("memories").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn summary_separates_text_turns_from_tool_calls() {
     let turns = vec![
         turn(Role::User, "Please inspect the repo.", 0),

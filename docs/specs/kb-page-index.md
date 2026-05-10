@@ -53,6 +53,8 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 - `src/kb_search.rs`
   - `build_and_search_persisted_kb_index`
   - `search_or_build_refreshes_stale_index`
+  - `fixture_markdown_proves_nested_structure_content_and_query`
+  - `search_or_build_refreshes_added_and_deleted_markdown_files`
   - `long_queries_require_three_distinct_terms`
 - `src/enrich_cmd.rs`
   - `kb_results_include_source_path_and_heading`
@@ -62,7 +64,7 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 
 ## Known gaps (current cycle)
 
-- [ ] Add tests for new-file and deleted-file stale-index refresh.
+- [x] Add tests for new-file and deleted-file stale-index refresh.
 - [x] Add an integration-style test for `enrich` that proves KB PageIndex results are included and capped.
 - [ ] Add a CLI output test or snapshot for query result formatting and no-results behavior.
 - [ ] Decide whether KB PageIndex should index repo-local `AGENTS.md` / persistent rules as a separate source.

@@ -97,8 +97,11 @@ PageIndex parity defines the contract for matching the useful architecture of `V
   - `src/kb_search.rs`
     - `build_and_search_persisted_kb_index`
     - `search_or_build_refreshes_stale_index`
+    - `fixture_markdown_proves_nested_structure_content_and_query`
+    - `search_or_build_refreshes_added_and_deleted_markdown_files`
     - `long_queries_require_three_distinct_terms`
   - `src/page_index.rs`
+    - `fixture_transcripts_prove_structure_content_query_and_no_memory_units`
     - `session_index_groups_prompt_and_answer_in_one_node`
     - `outline_exposes_node_ids_and_titles`
     - `node_text_returns_prompt_and_answer`
@@ -111,12 +114,12 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 ## Known gaps (current cycle)
 
-- [ ] Add tests for the shared nested PageIndex document model.
-- [ ] Add tests for structure output that omits full node text.
-- [ ] Add tests for exact content fetch by node id and range.
-- [ ] Add tests for KB new-file, changed-file, and deleted-file refresh.
-- [ ] Add tests for transcript query returning traceable document/node references.
-- [ ] Add tests proving Transcript PageIndex does not create memory units.
+- [x] Add tests for the shared nested PageIndex document model.
+- [x] Add tests for structure output that omits full node text.
+- [x] Add tests for exact content fetch by node id and range.
+- [x] Add tests for KB new-file, changed-file, and deleted-file refresh.
+- [x] Add tests for transcript query returning traceable document/node references.
+- [x] Add tests proving Transcript PageIndex does not create memory units.
 - [ ] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
 - [ ] Benchmark build time, output size, and query quality against the current flat implementation and `rg`.
 

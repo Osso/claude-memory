@@ -141,6 +141,37 @@ fn content_fetch_returns_exact_node_or_line_range_text() {
 }
 
 #[test]
+fn fixture_markdown_proves_nested_structure_content_and_query() {
+    let root = unique_temp_dir("kb-page-index-fixture-parity");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("guides")).unwrap();
+    std::fs::write(
+        kb_dir.join("guides/router.md"),
+        "# Router\nRoot overview.\n\n## DHCP\nLease reservations.\n\n### Static leases\nPin important devices.\n",
+    )
+    .unwrap();
+
+    build_index(&kb_dir, &index_dir).unwrap();
+
+    let structure = document_structure(&index_dir, "guides/router.md").unwrap();
+    assert_eq!(structure.nodes[0].heading_path, "Router");
+    assert_eq!(
+        structure.nodes[0].nodes[0].nodes[0].heading_path,
+        "Router > DHCP > Static leases"
+    );
+    let structure_json = serde_json::to_string(&structure).unwrap();
+    assert!(!structure_json.contains("Pin important devices."));
+
+    let content = document_content(&index_dir, "guides/router.md", "000003").unwrap();
+    assert_eq!(content.text, "### Static leases\nPin important devices.\n");
+
+    let results = query_index(&index_dir, "static leases important devices", 3).unwrap();
+    assert_eq!(results[0].doc_id, "guides/router.md");
+    assert_eq!(results[0].node_id, "000003");
+}
+
+#[test]
 fn query_returns_traceable_node_hits_without_snippets() {
     let root = unique_temp_dir("kb-page-index-parity-query");
     let kb_dir = root.join("kb");

@@ -133,8 +133,8 @@ fn build_context_window(turns: &[Turn], target: u32, prior_n: usize) -> String {
     }
 
     selected
-        .iter()
-        .map(|t| format_turn(t))
+        .into_iter()
+        .map(format_turn)
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -142,7 +142,7 @@ fn build_context_window(turns: &[Turn], target: u32, prior_n: usize) -> String {
 fn full_session_text(turns: &[Turn]) -> String {
     turns
         .iter()
-        .map(|t| format_turn(t))
+        .map(format_turn)
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -176,7 +176,7 @@ fn eventual_resolution(turns: &[Turn], friction_turn: u32) -> String {
                 && t.turn_index <= friction_turn + window
                 && !t.text.trim().is_empty()
         })
-        .map(|t| format_turn(t))
+        .map(format_turn)
         .collect::<Vec<_>>()
         .join("\n\n")
 }
