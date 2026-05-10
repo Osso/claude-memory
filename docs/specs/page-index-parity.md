@@ -4,6 +4,11 @@ Decision: PDF parsing and OCR support stay out of scope until there is a
 concrete need for document formats beyond Markdown KB notes and transcript
 history. Do not add PDF/OCR dependencies speculatively.
 
+Decision: corpus-level PageIndex file-system routing stays out of scope until
+single-document query quality and corpus-scale build costs are proven good
+enough. Current routing remains explicit: KB PageIndex for Markdown KB,
+Transcript PageIndex for Claude/Codex sessions.
+
 ## What it must do
 
 ### Reference baseline
@@ -141,6 +146,6 @@ history. Do not add PDF/OCR dependencies speculatively.
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
 - Cloud PageIndex API/MCP compatibility.
 - Transcript PageIndex MCP tool exposure before query quality is proven.
-- Corpus-scale PageIndex file-system routing across millions of documents.
+- Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.
 - Replacing prompt/answer vector history.
 - Replacing friction-driven memory creation.
