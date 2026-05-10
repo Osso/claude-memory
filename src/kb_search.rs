@@ -439,23 +439,52 @@ fn score_node(
     query: &str,
     query_tokens: &[String],
 ) -> Option<KbSearchResult> {
-    let structural_text = format!(
-        "{}\n{}\n{}",
-        doc.source_path, doc.doc_name, node.heading_path
-    );
+    let structural_text = node_structural_text(doc, node);
     let stats = node_match_stats(node, query_tokens, &structural_text);
     if stats.matched < required_match_count(query_tokens.len()) {
         return None;
     }
 
     let combined_text = format!("{structural_text}\n{}", node.text);
-    let mut score = stats.matched * 10 + stats.occurrences + stats.structural_matches * 4;
-    score += phrase_score(&combined_text, query, query_tokens);
+    let score = score_node_match(&stats, &combined_text, query, query_tokens);
     if score < MIN_SCORE {
         return None;
     }
 
-    Some(KbSearchResult {
+    Some(search_result_for_node(
+        doc,
+        node,
+        query_tokens,
+        score,
+        stats,
+    ))
+}
+
+fn node_structural_text(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
+    format!(
+        "{}\n{}\n{}",
+        doc.source_path, doc.doc_name, node.heading_path
+    )
+}
+
+fn score_node_match(
+    stats: &NodeMatchStats,
+    combined_text: &str,
+    query: &str,
+    query_tokens: &[String],
+) -> usize {
+    let base_score = stats.matched * 10 + stats.occurrences + stats.structural_matches * 4;
+    base_score + phrase_score(combined_text, query, query_tokens)
+}
+
+fn search_result_for_node(
+    doc: &KbIndexedDoc,
+    node: &KbIndexedNode,
+    query_tokens: &[String],
+    score: usize,
+    stats: NodeMatchStats,
+) -> KbSearchResult {
+    KbSearchResult {
         doc_id: doc.doc_id.clone(),
         path: doc.source_path.clone(),
         heading: node.heading_path.clone(),
@@ -466,7 +495,7 @@ fn score_node(
         reason: format!("matched query terms: {}", stats.terms.join(", ")),
         content_command: content_command(doc, node),
         next_content_command: content_command(doc, node),
-    })
+    }
 }
 
 fn content_command(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
