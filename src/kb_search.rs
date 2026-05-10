@@ -1,18 +1,24 @@
 //! Persistent heading-aware PageIndex for the local Markdown knowledge base.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+#[path = "kb_search_model.rs"]
+mod kb_search_model;
+#[path = "kb_search_text.rs"]
+mod kb_search_text;
+pub use kb_search_model::{
+    KbDocStructure, KbIndexedDoc, KbIndexedFile, KbIndexedNode, KbNodeStructure, KbPageIndex,
+};
+use kb_search_text::{build_snippet, token_counts, tokenize};
 
 pub const DEFAULT_KB_DIR: &str = "/syncthing/Sync/KB";
 
 const INDEX_FILE_NAME: &str = "index.json";
 const MIN_SCORE: usize = 12;
-const SNIPPET_CHARS: usize = 420;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbSearchResult {
@@ -29,43 +35,14 @@ pub struct KbBuildSummary {
     pub index_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct KbPageIndex {
-    source_dir: String,
-    built_at: DateTime<Utc>,
-    files: Vec<KbIndexedFile>,
-    docs: Vec<KbIndexedDoc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct KbIndexedFile {
-    path: String,
-    fingerprint: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct KbIndexedDoc {
-    path: String,
-    title: String,
-    nodes: Vec<KbIndexedNode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct KbIndexedNode {
-    node_id: String,
-    heading: String,
-    level: usize,
-    parent: Option<String>,
-    text: String,
-    token_counts: HashMap<String, usize>,
-}
-
 #[derive(Debug, Clone)]
 struct MarkdownSection {
     node_id: String,
-    heading: String,
+    title: String,
+    heading_path: String,
     level: usize,
     parent: Option<String>,
+    source_line: usize,
     text: String,
 }
 
@@ -89,7 +66,7 @@ pub fn build_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
         .iter()
         .map(|path| build_doc(kb_dir, path))
         .collect::<Result<Vec<_>>>()?;
-    let node_count = docs.iter().map(|doc| doc.nodes.len()).sum();
+    let node_count = docs.iter().map(|doc| count_nodes(&doc.nodes)).sum();
     let index = KbPageIndex {
         source_dir: kb_dir.to_string_lossy().to_string(),
         built_at: Utc::now(),
@@ -143,7 +120,7 @@ pub fn search_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<K
     let index = load_index(index_dir)?;
     let mut results = Vec::new();
     for doc in &index.docs {
-        for node in &doc.nodes {
+        for node in flatten_nodes(&doc.nodes) {
             if let Some(result) = score_node(doc, node, query, &query_tokens) {
                 results.push(result);
             }
@@ -202,21 +179,15 @@ fn build_doc(kb_dir: &Path, path: &Path) -> Result<KbIndexedDoc> {
         .with_context(|| format!("failed to read {}", path.display()))?;
     let rel_path = relative_path(kb_dir, path);
     let sections = split_markdown_sections(&rel_path, &text);
-    let nodes = sections
-        .into_iter()
-        .map(|section| KbIndexedNode {
-            node_id: section.node_id,
-            heading: section.heading,
-            level: section.level,
-            parent: section.parent,
-            token_counts: token_counts(&section.text),
-            text: section.text,
-        })
-        .collect();
+    let doc_description = sections.first().map(|section| section.title.clone());
+    let nodes = build_nested_nodes(&sections, None);
 
     Ok(KbIndexedDoc {
-        title: fallback_heading(&rel_path),
-        path: rel_path,
+        doc_id: rel_path.clone(),
+        doc_name: fallback_heading(&rel_path),
+        doc_description,
+        source_path: rel_path,
+        line_count: text.lines().count(),
         nodes,
     })
 }
@@ -250,46 +221,103 @@ fn collect_markdown_files(kb_dir: &Path) -> Vec<PathBuf> {
 fn split_markdown_sections(path: &str, markdown: &str) -> Vec<MarkdownSection> {
     let mut heading_stack: Vec<String> = Vec::new();
     let mut id_stack: Vec<String> = Vec::new();
-    let mut current = SectionBuilder::new("0", &fallback_heading(path), 1, None);
+    let mut current: Option<SectionBuilder> = None;
     let mut sections = Vec::new();
     let mut heading_count = 0usize;
+    let mut in_code_fence = false;
 
-    for line in markdown.lines() {
-        if let Some((level, title)) = parse_heading(line) {
-            current.push_if_not_empty(&mut sections);
-            heading_count += 1;
-            heading_stack.truncate(level.saturating_sub(1));
-            id_stack.truncate(level.saturating_sub(1));
-            heading_stack.push(title);
-            let node_id = heading_count.to_string();
-            let parent = id_stack.last().cloned();
-            id_stack.push(node_id.clone());
-            current = SectionBuilder::new(&node_id, &heading_stack.join(" > "), level, parent);
+    for (line_index, line) in markdown.lines().enumerate() {
+        let line_number = line_index + 1;
+        if is_fence_line(line) {
+            in_code_fence = !in_code_fence;
+            push_markdown_line(path, &mut current, &mut heading_count, line_number, line);
             continue;
         }
 
-        current.push_line(line);
+        let heading_started = !in_code_fence
+            && try_start_heading_section(
+                line,
+                line_number,
+                &mut heading_stack,
+                &mut id_stack,
+                &mut heading_count,
+                &mut current,
+                &mut sections,
+            );
+        if heading_started {
+            continue;
+        }
+
+        push_markdown_line(path, &mut current, &mut heading_count, line_number, line);
     }
 
-    current.push_if_not_empty(&mut sections);
+    if let Some(section) = current {
+        section.push(&mut sections);
+    }
     sections
+}
+
+fn try_start_heading_section(
+    line: &str,
+    line_number: usize,
+    heading_stack: &mut Vec<String>,
+    id_stack: &mut Vec<String>,
+    heading_count: &mut usize,
+    current: &mut Option<SectionBuilder>,
+    sections: &mut Vec<MarkdownSection>,
+) -> bool {
+    let Some((level, title)) = parse_heading(line) else {
+        return false;
+    };
+
+    if let Some(section) = current.take() {
+        section.push(sections);
+    }
+    *heading_count += 1;
+    heading_stack.truncate(level.saturating_sub(1));
+    id_stack.truncate(level.saturating_sub(1));
+    heading_stack.push(title.clone());
+
+    let node_id = format_node_id(*heading_count);
+    let parent = id_stack.last().cloned();
+    id_stack.push(node_id.clone());
+    *current = Some(SectionBuilder::new(
+        &node_id,
+        &title,
+        &heading_stack.join(" > "),
+        level,
+        parent,
+        line_number,
+    ));
+    true
 }
 
 struct SectionBuilder {
     node_id: String,
-    heading: String,
+    title: String,
+    heading_path: String,
     level: usize,
     parent: Option<String>,
+    source_line: usize,
     text: String,
 }
 
 impl SectionBuilder {
-    fn new(node_id: &str, heading: &str, level: usize, parent: Option<String>) -> Self {
+    fn new(
+        node_id: &str,
+        title: &str,
+        heading_path: &str,
+        level: usize,
+        parent: Option<String>,
+        source_line: usize,
+    ) -> Self {
         Self {
             node_id: node_id.to_string(),
-            heading: heading.to_string(),
+            title: title.to_string(),
+            heading_path: heading_path.to_string(),
             level,
             parent,
+            source_line,
             text: String::new(),
         }
     }
@@ -299,20 +327,91 @@ impl SectionBuilder {
         self.text.push('\n');
     }
 
-    fn push_if_not_empty(&self, sections: &mut Vec<MarkdownSection>) {
-        let text = self.text.trim();
-        if text.is_empty() {
-            return;
-        }
-
+    fn push(self, sections: &mut Vec<MarkdownSection>) {
         sections.push(MarkdownSection {
-            node_id: self.node_id.clone(),
-            heading: self.heading.clone(),
+            node_id: self.node_id,
+            title: self.title,
+            heading_path: self.heading_path,
             level: self.level,
-            parent: self.parent.clone(),
-            text: text.to_string(),
+            parent: self.parent,
+            source_line: self.source_line,
+            text: self.text.trim().to_string(),
         });
     }
+}
+
+fn push_markdown_line(
+    path: &str,
+    current: &mut Option<SectionBuilder>,
+    heading_count: &mut usize,
+    line_number: usize,
+    line: &str,
+) {
+    if current.is_none() && line.trim().is_empty() {
+        return;
+    }
+
+    if current.is_none() {
+        *heading_count += 1;
+        let title = fallback_heading(path);
+        let node_id = format_node_id(*heading_count);
+        *current = Some(SectionBuilder::new(
+            &node_id,
+            &title,
+            &title,
+            1,
+            None,
+            line_number,
+        ));
+    }
+
+    if let Some(section) = current {
+        section.push_line(line);
+    }
+}
+
+fn build_nested_nodes(sections: &[MarkdownSection], parent: Option<&str>) -> Vec<KbIndexedNode> {
+    sections
+        .iter()
+        .filter(|section| section.parent.as_deref() == parent)
+        .map(|section| KbIndexedNode {
+            node_id: section.node_id.clone(),
+            title: section.title.clone(),
+            heading_path: section.heading_path.clone(),
+            level: section.level,
+            source_line: section.source_line,
+            token_counts: token_counts(&section.text),
+            text: section.text.clone(),
+            nodes: build_nested_nodes(sections, Some(&section.node_id)),
+        })
+        .collect()
+}
+
+fn flatten_nodes(nodes: &[KbIndexedNode]) -> Vec<&KbIndexedNode> {
+    let mut flattened = Vec::new();
+    for node in nodes {
+        flattened.push(node);
+        flattened.extend(flatten_nodes(&node.nodes));
+    }
+    flattened
+}
+
+fn count_nodes(nodes: &[KbIndexedNode]) -> usize {
+    nodes.len()
+        + nodes
+            .iter()
+            .map(|node| count_nodes(&node.nodes))
+            .sum::<usize>()
+}
+
+fn format_node_id(position: usize) -> String {
+    format!("{position:06}")
+}
+
+struct NodeMatchStats {
+    matched: usize,
+    occurrences: usize,
+    structural_matches: usize,
 }
 
 fn score_node(
@@ -321,8 +420,36 @@ fn score_node(
     query: &str,
     query_tokens: &[String],
 ) -> Option<KbSearchResult> {
-    let structural_text = format!("{}\n{}\n{}", doc.path, doc.title, node.heading);
-    let structural_counts = token_counts(&structural_text);
+    let structural_text = format!(
+        "{}\n{}\n{}",
+        doc.source_path, doc.doc_name, node.heading_path
+    );
+    let stats = node_match_stats(node, query_tokens, &structural_text);
+    if stats.matched < required_match_count(query_tokens.len()) {
+        return None;
+    }
+
+    let combined_text = format!("{structural_text}\n{}", node.text);
+    let mut score = stats.matched * 10 + stats.occurrences + stats.structural_matches * 4;
+    score += phrase_score(&combined_text, query, query_tokens);
+    if score < MIN_SCORE {
+        return None;
+    }
+
+    Some(KbSearchResult {
+        path: doc.source_path.clone(),
+        heading: node.heading_path.clone(),
+        text: build_snippet(&node.text, query_tokens),
+        score,
+    })
+}
+
+fn node_match_stats(
+    node: &KbIndexedNode,
+    query_tokens: &[String],
+    structural_text: &str,
+) -> NodeMatchStats {
+    let structural_counts = token_counts(structural_text);
     let mut matched_tokens = Vec::new();
     let mut occurrences = 0usize;
     let mut structural_matches = 0usize;
@@ -341,24 +468,11 @@ fn score_node(
 
     matched_tokens.sort_unstable();
     matched_tokens.dedup();
-    let matched = matched_tokens.len();
-    if matched < required_match_count(query_tokens.len()) {
-        return None;
+    NodeMatchStats {
+        matched: matched_tokens.len(),
+        occurrences,
+        structural_matches,
     }
-
-    let combined_text = format!("{structural_text}\n{}", node.text);
-    let mut score = matched * 10 + occurrences + structural_matches * 4;
-    score += phrase_score(&combined_text, query, query_tokens);
-    if score < MIN_SCORE {
-        return None;
-    }
-
-    Some(KbSearchResult {
-        path: doc.path.clone(),
-        heading: node.heading.clone(),
-        text: build_snippet(&node.text, query_tokens),
-        score,
-    })
 }
 
 fn phrase_score(text: &str, query: &str, query_tokens: &[String]) -> usize {
@@ -390,6 +504,11 @@ fn parse_heading(line: &str) -> Option<(usize, String)> {
     Some((level, title.trim_matches('#').trim().to_string()))
 }
 
+fn is_fence_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
 fn relative_path(base: &Path, path: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
@@ -404,116 +523,12 @@ fn fallback_heading(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-fn token_counts(text: &str) -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
-    for token in tokenize(text) {
-        *counts.entry(token).or_insert(0) += 1;
-    }
-    counts
-}
-
-fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-
-    for ch in text.chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '/' || ch == '.' {
-            current.push(ch);
-            continue;
-        }
-        push_token(&mut tokens, &mut current);
-    }
-    push_token(&mut tokens, &mut current);
-    tokens
-}
-
-fn push_token(tokens: &mut Vec<String>, current: &mut String) {
-    if current.len() > 1 && !is_stopword(current) {
-        let token = std::mem::take(current);
-        tokens.push(token.clone());
-        for part in token.split(['-', '/', '.']) {
-            if part.len() > 1 && !is_stopword(part) {
-                tokens.push(part.to_string());
-            }
-        }
-    } else {
-        current.clear();
-    }
-}
-
-fn is_stopword(token: &str) -> bool {
-    matches!(
-        token,
-        "the"
-            | "and"
-            | "or"
-            | "to"
-            | "of"
-            | "in"
-            | "for"
-            | "a"
-            | "an"
-            | "is"
-            | "are"
-            | "we"
-            | "it"
-            | "with"
-            | "on"
-            | "as"
-            | "by"
-            | "be"
-            | "this"
-            | "that"
-            | "use"
-    )
-}
-
-fn build_snippet(text: &str, query_tokens: &[String]) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let lower = compact.to_lowercase();
-    let start = query_tokens
-        .iter()
-        .filter_map(|token| lower.find(token))
-        .min()
-        .unwrap_or(0)
-        .saturating_sub(80);
-    let start = previous_char_boundary(&compact, start);
-    let start = previous_word_boundary(&compact, start);
-    truncate_chars(&compact[start..], SNIPPET_CHARS)
-}
-
 fn required_match_count(query_token_count: usize) -> usize {
     match query_token_count {
         0 | 1 => 1,
         2 | 3 => 2,
         _ => 3,
     }
-}
-
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let mut chars = text.chars();
-    let truncated: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
-    }
-}
-
-fn previous_char_boundary(text: &str, index: usize) -> usize {
-    let mut boundary = index.min(text.len());
-    while boundary > 0 && !text.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    boundary
-}
-
-fn previous_word_boundary(text: &str, index: usize) -> usize {
-    let mut boundary = index;
-    while boundary > 0 && !text[..boundary].ends_with(char::is_whitespace) {
-        boundary = previous_char_boundary(text, boundary.saturating_sub(1));
-    }
-    boundary
 }
 
 #[cfg(test)]
@@ -538,7 +553,7 @@ mod tests {
             search_index(&index_dir, "frontend design skill load immediately", 3).unwrap();
 
         assert_eq!(summary.files, 1);
-        assert_eq!(summary.nodes, 1);
+        assert_eq!(summary.nodes, 2);
         assert_eq!(results[0].path, "memory/corrections.md");
         assert_eq!(results[0].heading, "Corrections > Process");
     }
@@ -561,6 +576,73 @@ mod tests {
     }
 
     #[test]
+    fn build_doc_uses_nested_page_index_document_model() {
+        let markdown = "# Router\nLocal network router note.\n\n## DHCP\nLease reservations.\n\n### Static leases\nPin important devices.\n\n## Firewall\nWAN block rules.\n";
+        let doc = build_doc_from_text("state/router.md", markdown);
+
+        assert_eq!(doc.doc_id, "state/router.md");
+        assert_eq!(doc.doc_name, "router");
+        assert_eq!(doc.doc_description.as_deref(), Some("Router"));
+        assert_eq!(doc.source_path, "state/router.md");
+        assert_eq!(doc.line_count, 11);
+        assert_eq!(doc.nodes.len(), 1);
+
+        let root = &doc.nodes[0];
+        assert_eq!(root.node_id, "000001");
+        assert_eq!(root.title, "Router");
+        assert_eq!(root.heading_path, "Router");
+        assert_eq!(root.source_line, 1);
+        assert_eq!(root.nodes.len(), 2);
+        assert!(root.text.contains("Local network router note."));
+
+        let dhcp = &root.nodes[0];
+        assert_eq!(dhcp.node_id, "000002");
+        assert_eq!(dhcp.title, "DHCP");
+        assert_eq!(dhcp.heading_path, "Router > DHCP");
+        assert_eq!(dhcp.nodes[0].node_id, "000003");
+        assert_eq!(dhcp.nodes[0].heading_path, "Router > DHCP > Static leases");
+        assert!(dhcp.nodes[0].text.contains("Pin important devices."));
+    }
+
+    #[test]
+    fn structure_view_omits_internal_node_text() {
+        let markdown = "# Router\nSecret body text.\n\n## DHCP\nLease reservations.\n";
+        let doc = build_doc_from_text("state/router.md", markdown);
+
+        let structure = doc.structure_without_text();
+        let json = serde_json::to_string(&structure).unwrap();
+
+        assert!(json.contains("Router"));
+        assert!(json.contains("000002"));
+        assert!(!json.contains("Secret body text"));
+        assert!(!json.contains("Lease reservations"));
+        assert!(!json.contains("token_counts"));
+    }
+
+    #[test]
+    fn search_or_build_refreshes_added_and_deleted_markdown_files() {
+        let root = unique_temp_dir("kb-page-index-add-delete-refresh");
+        let kb_dir = root.join("kb");
+        let index_dir = root.join("index");
+        std::fs::create_dir_all(&kb_dir).unwrap();
+        let old_path = kb_dir.join("old.md");
+        let new_path = kb_dir.join("new.md");
+        std::fs::write(&old_path, "# Old\nRemove me after first build.\n").unwrap();
+        build_index(&kb_dir, &index_dir).unwrap();
+
+        std::fs::remove_file(&old_path).unwrap();
+        std::fs::write(&new_path, "# New\nFresh page index content.\n").unwrap();
+
+        let fresh_results = search_or_build(&kb_dir, &index_dir, "fresh page index content", 3)
+            .expect("new file should trigger refresh");
+        let old_results = search_index(&index_dir, "remove me after first build", 3)
+            .expect("refreshed index should remain readable");
+
+        assert_eq!(fresh_results[0].path, "new.md");
+        assert!(old_results.is_empty());
+    }
+
+    #[test]
     fn long_queries_require_three_distinct_terms() {
         let markdown = "# Notes\n\nDesign links and profession skill points.\n";
         let doc = build_doc_from_text("bookmarks.md", markdown);
@@ -572,21 +654,15 @@ mod tests {
     }
 
     fn build_doc_from_text(path: &str, markdown: &str) -> KbIndexedDoc {
-        let nodes = split_markdown_sections(path, markdown)
-            .into_iter()
-            .map(|section| KbIndexedNode {
-                node_id: section.node_id,
-                heading: section.heading,
-                level: section.level,
-                parent: section.parent,
-                token_counts: token_counts(&section.text),
-                text: section.text,
-            })
-            .collect();
+        let sections = split_markdown_sections(path, markdown);
+        let doc_description = sections.first().map(|section| section.title.clone());
         KbIndexedDoc {
-            path: path.to_string(),
-            title: fallback_heading(path),
-            nodes,
+            doc_id: path.to_string(),
+            doc_name: fallback_heading(path),
+            doc_description,
+            source_path: path.to_string(),
+            line_count: markdown.lines().count(),
+            nodes: build_nested_nodes(&sections, None),
         }
     }
 
