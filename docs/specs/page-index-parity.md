@@ -5,62 +5,62 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 ### Reference baseline
 
 - [ ] Record the reference implementation and commit being matched: `VectifyAI/PageIndex` at `f50e529`.
-- [ ] Match the reference architectural flow: index a document, inspect metadata, inspect structure without full text, fetch tight content ranges, answer with traceable references.
-- [ ] Keep the reference distinction between document structure and document content: structure output must not require dumping full node text.
-- [ ] Use stable node identifiers that are suitable for follow-up content fetches.
+- [x] Match the reference architectural flow: index a document, inspect metadata, inspect structure without full text, fetch tight content ranges, answer with traceable references.
+- [x] Keep the reference distinction between document structure and document content: structure output must not require dumping full node text.
+- [x] Use stable node identifiers that are suitable for follow-up content fetches.
 
 ### Supported source families
 
-- [ ] Support KB Markdown documents from `/syncthing/Sync/KB` as PageIndex documents.
-- [ ] Support live Claude transcripts from `~/.claude/projects` as PageIndex documents.
-- [ ] Support archived Claude transcripts from `~/.claude/archive` as PageIndex documents.
-- [ ] Support live Codex transcripts from `~/.codex/sessions` as PageIndex documents.
-- [ ] Support archived Codex transcripts from `~/.codex/archived_sessions` as PageIndex documents.
-- [ ] Keep KB PageIndex and Transcript PageIndex as separate surfaces with separate default output directories.
+- [x] Support KB Markdown documents from `/syncthing/Sync/KB` as PageIndex documents.
+- [x] Support live Claude transcripts from `~/.claude/projects` as PageIndex documents.
+- [x] Support archived Claude transcripts from `~/.claude/archive` as PageIndex documents.
+- [x] Support live Codex transcripts from `~/.codex/sessions` as PageIndex documents.
+- [x] Support archived Codex transcripts from `~/.codex/archived_sessions` as PageIndex documents.
+- [x] Keep KB PageIndex and Transcript PageIndex as separate surfaces with separate default output directories.
 
 ### Document model
 
-- [ ] Store document metadata: `doc_id`, source path, source family, document name/title, document description when available, and line/turn count.
-- [ ] Store nested `nodes` with stable zero-padded `node_id`, title, source locator, optional summary, optional children, and internal text/content references.
-- [ ] Preserve exact content internally so later fetch commands can return source text without re-reading the original file when the index is fresh.
-- [ ] Provide structure serialization without node text for low-token inspection.
-- [ ] Provide content serialization for specific node ids, line ranges, or turn ranges.
+- [x] Store document metadata: `doc_id`, source path, source family, document name/title, document description when available, and line/turn count.
+- [x] Store nested `nodes` with stable zero-padded `node_id`, title, source locator, optional summary, optional children, and internal text/content references.
+- [x] Preserve exact content internally so later fetch commands can return source text without re-reading the original file when the index is fresh.
+- [x] Provide structure serialization without node text for low-token inspection.
+- [x] Provide content serialization for specific node ids, line ranges, or turn ranges.
 
 ### KB Markdown behavior
 
-- [ ] Build nested KB nodes from Markdown heading hierarchy.
+- [x] Build nested KB nodes from Markdown heading hierarchy.
 - [ ] Ignore Markdown headings inside fenced code blocks.
-- [ ] Preserve heading source line numbers.
-- [ ] Preserve section text for exact content fetch.
-- [ ] Refresh or rebuild the persistent KB PageIndex when Markdown files are added, changed, or deleted.
+- [x] Preserve heading source line numbers.
+- [x] Preserve section text for exact content fetch.
+- [x] Refresh or rebuild the persistent KB PageIndex when Markdown files are added, changed, or deleted.
 
 ### Transcript behavior
 
-- [ ] Build transcript documents from Claude and Codex session JSONL formats.
-- [ ] Group turns into navigable exchange nodes with exact turn ranges.
-- [ ] Preserve assistant tool-call counts in transcript node summaries.
-- [ ] Fetch exact turn text for a node id or turn range.
-- [ ] Transcript PageIndex must not write memory units and must not replace friction-driven memory creation.
+- [x] Build transcript documents from Claude and Codex session JSONL formats.
+- [x] Group turns into navigable exchange nodes with exact turn ranges.
+- [x] Preserve assistant tool-call counts in transcript node summaries.
+- [x] Fetch exact turn text for a node id or turn range.
+- [x] Transcript PageIndex must not write memory units and must not replace friction-driven memory creation.
 
 ### CLI and retrieval surfaces
 
-- [ ] `claude-memory kb-page-index build` builds the KB PageIndex.
-- [ ] `claude-memory kb-page-index document <doc-id-or-path>` prints document metadata.
-- [ ] `claude-memory kb-page-index structure <doc-id-or-path>` prints nested structure without node text.
-- [ ] `claude-memory kb-page-index content <doc-id-or-path> <node-id-or-range>` prints exact KB source text.
-- [ ] `claude-memory kb-page-index query <query>` returns traceable KB references and uses structure/content retrieval rather than flat snippet-only search.
-- [ ] `claude-memory transcript-page-index` builds the transcript PageIndex.
-- [ ] `claude-memory transcript-page-index document <doc-id-or-path>` prints transcript metadata.
-- [ ] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
-- [ ] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
-- [ ] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
+- [x] `claude-memory kb-page-index build` builds the KB PageIndex.
+- [x] `claude-memory kb-page-index document <doc-id-or-path>` prints document metadata.
+- [x] `claude-memory kb-page-index structure <doc-id-or-path>` prints nested structure without node text.
+- [x] `claude-memory kb-page-index content <doc-id-or-path> <node-id-or-range>` prints exact KB source text.
+- [x] `claude-memory kb-page-index query <query>` returns traceable KB references and uses structure/content retrieval rather than flat snippet-only search.
+- [x] `claude-memory transcript-page-index build` builds the transcript PageIndex.
+- [x] `claude-memory transcript-page-index document <doc-id-or-path>` prints transcript metadata.
+- [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
+- [x] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
+- [x] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
 
 ### Agentic tree-walk retrieval
 
-- [ ] Provide a query mode that mirrors the reference tool loop: inspect document metadata, inspect structure, choose tight node/range targets, fetch content, answer from fetched content only.
-- [ ] Use the project `llm` backend abstraction for any model calls; do not add direct external API calls.
-- [ ] Include the retrieval path in query output or logs so the selected document, node ids, and fetched ranges are auditable.
-- [ ] Keep deterministic lexical search available as a debug/fallback mode and label it clearly when used.
+- [x] Provide a query mode that mirrors the reference tool loop: inspect document metadata, inspect structure, choose tight node/range targets, fetch content, answer from fetched content only.
+- [x] Use the project `llm` backend abstraction for any model calls; do not add direct external API calls.
+- [x] Include the retrieval path in query output or logs so the selected document, node ids, and fetched ranges are auditable.
+- [x] Keep deterministic lexical search available as a debug/fallback mode and label it clearly when used.
 
 ### Enrich integration
 
@@ -77,14 +77,15 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 ## How it works
 
-- [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md) will describe the Rust document model, persistent index layout, CLI/tool loop, and retrieval modes.
-- [docs/wiki/systems/kb-page-index.md](../wiki/systems/kb-page-index.md) describes the current KB PageIndex implementation.
-- [docs/wiki/systems/friction-memory-creation.md](../wiki/systems/friction-memory-creation.md) describes transcript mining for durable memory creation, which remains separate.
+- `src/kb_search.rs`, `src/page_index.rs`, and `src/page_index_agentic.rs` implement the Rust document model, persistent index layout, CLI/tool loop, and retrieval modes.
+- [kb-page-index.md](kb-page-index.md) describes the current KB PageIndex implementation.
+- [friction-memory-creation.md](friction-memory-creation.md) describes transcript mining for durable memory creation, which remains separate.
 
 ## Implementation inventory
 
-- `src/kb_search.rs` — current KB PageIndex builder/search path; to be refactored from flat section search into nested document structure and content fetch.
-- `src/page_index.rs` — current transcript outline builder for Claude/Codex sessions; to be refactored onto the shared PageIndex document model.
+- `src/kb_search.rs` — KB PageIndex builder/search path with nested document structure and content fetch.
+- `src/page_index.rs` — transcript outline builder for Claude/Codex sessions using the nested PageIndex document model.
+- `src/page_index_agentic.rs` — shared agentic/tree-walk retrieval mode and lexical fallback.
 - `src/indexing_cmds.rs` — CLI command handlers for PageIndex build/query/document/structure/content commands.
 - `src/enrich_cmd.rs` — prompt hook integration for KB PageIndex context.
 - `src/main.rs` — CLI declaration and dispatch for KB PageIndex and Transcript PageIndex commands.
@@ -93,7 +94,7 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 
 ## Tests asserting this spec
 
-- Current tests assert only partial pre-parity behavior:
+- Current tests assert the checked behavior above:
   - `src/kb_search.rs`
     - `build_and_search_persisted_kb_index`
     - `search_or_build_refreshes_stale_index`
@@ -109,8 +110,13 @@ PageIndex parity defines the contract for matching the useful architecture of `V
     - `page_index_sources_collect_claude_archive_and_codex_sessions`
   - `src/main_tests.rs`
     - `transcript_page_index_accepts_projects_archive_output_and_limit`
+    - `transcript_page_index_accepts_document_structure_content_and_query_commands`
     - `kb_page_index_accepts_build_paths`
     - `kb_page_index_accepts_query_paths_and_limit`
+    - `kb_page_index_accepts_document_structure_and_content_commands`
+  - `src/page_index_agentic.rs`
+    - `tree_walk_inspects_metadata_structure_then_fetches_content`
+    - `empty_agentic_plan_uses_labeled_lexical_fallback`
 
 ## Known gaps (current cycle)
 
@@ -120,8 +126,8 @@ PageIndex parity defines the contract for matching the useful architecture of `V
 - [x] Add tests for KB new-file, changed-file, and deleted-file refresh.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
-- [ ] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
-- [ ] Benchmark build time, output size, and query quality against the current flat implementation and `rg`.
+- [x] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
+- [x] Benchmark build time, output size, and query quality against the current flat implementation and `rg`.
 
 ## Out of scope
 

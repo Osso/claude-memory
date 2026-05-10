@@ -70,12 +70,13 @@ claude-memory index              # Index all sources
 claude-memory index --fresh      # Re-index everything from scratch
 claude-memory index-file <path>  # Index a single conversation file
 claude-memory ingest-kb          # Extract KB Markdown facts into memory units
-claude-memory transcript-page-index     # Build transcript outline PageIndex trees
-claude-memory kb-page-index build      # Build the persistent KB PageIndex
-claude-memory kb-page-index query <q>  # Query KB notes through PageIndex
 claude-memory search <q>                 # Search memories by default
 claude-memory search --type prompts <q>  # Search user prompts and KB
 claude-memory search --type answers <q>  # Search assistant responses
+claude-memory kb-page-index build        # Build the persistent KB PageIndex
+claude-memory kb-page-index query <q>    # Query KB notes through PageIndex
+claude-memory transcript-page-index build     # Build transcript PageIndex trees
+claude-memory transcript-page-index query <q>  # Query transcript outlines
 claude-memory build-graph        # Extract entities/relationships from memories
 claude-memory build-graph --kb   # Also extract from KB files
 claude-memory graph-dump         # Show graph contents
@@ -83,6 +84,58 @@ claude-memory deduplicate        # Merge similar memories via LLM
 claude-memory enrich             # Enrich prompt with context (hook use)
 claude-memory stats              # Show collection statistics
 ```
+
+## PageIndex commands
+
+PageIndex is the raw, traceable retrieval surface. It is separate from memory
+units and vector prompt/answer history.
+
+### KB PageIndex
+
+Use KB PageIndex for exact context from `/syncthing/Sync/KB` Markdown notes:
+
+```bash
+claude-memory kb-page-index build \
+  --kb /syncthing/Sync/KB \
+  --output ~/.cache/claude-memory/kb-page-index
+
+claude-memory kb-page-index query "rust graphics toolkit" --limit 3
+claude-memory kb-page-index query "rust graphics toolkit" --mode agentic
+claude-memory kb-page-index document research/rust-ui-libraries.md
+claude-memory kb-page-index structure research/rust-ui-libraries.md
+claude-memory kb-page-index content research/rust-ui-libraries.md 000002
+claude-memory kb-page-index content research/rust-ui-libraries.md 12-24
+```
+
+The default query mode is deterministic lexical search. `--mode agentic` uses
+the project `llm` backend to inspect metadata and structure, choose tight
+content fetches, and answer from fetched content. If the model call fails or
+returns no usable fetch plan, it falls back to the labeled lexical mode.
+
+### Transcript PageIndex
+
+Use Transcript PageIndex for local navigation of Claude and Codex session
+history. It does not create durable memory units and is not injected into prompts
+by default:
+
+```bash
+claude-memory transcript-page-index build \
+  --projects ~/.claude/projects \
+  --archive ~/.claude/archive \
+  --codex-sessions ~/.codex/sessions \
+  --codex-archive ~/.codex/archived_sessions \
+  --output ~/.cache/claude-memory/transcript-page-index
+
+claude-memory transcript-page-index query "deploy script" --limit 3
+claude-memory transcript-page-index query "deploy script" --mode agentic
+claude-memory transcript-page-index document <session-id-or-path>
+claude-memory transcript-page-index structure <session-id-or-path>
+claude-memory transcript-page-index content <session-id-or-path> 000001
+claude-memory transcript-page-index content <session-id-or-path> turns:4-8
+```
+
+Benchmarks for the current implementation are recorded in
+`docs/benchmarks/page-index-2026-05-10.md`.
 
 ## MCP tools
 
