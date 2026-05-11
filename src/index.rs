@@ -2,16 +2,12 @@
 
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
-use qdrant_client::qdrant::{
-    Condition, Filter, PointStruct, ScrollPointsBuilder, SearchPointsBuilder, UpsertPointsBuilder,
-    Value,
-};
+use qdrant_client::qdrant::{PointStruct, ScrollPointsBuilder, UpsertPointsBuilder, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use walkdir::WalkDir;
 
-use crate::config;
 use crate::embed::Embedder;
 use crate::extract::{
     IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary,
@@ -19,8 +15,12 @@ use crate::extract::{
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
+#[path = "index_search.rs"]
+mod index_search;
 mod search_results;
-use search_results::{build_search_results, get_string};
+pub use index_search::{search_answers, search_memories, search_prompts};
+#[cfg(test)]
+pub(crate) use search_results::{build_search_results, get_string};
 
 pub const QDRANT_URL: &str = "http://localhost:6334";
 const COLLECTION_PROMPTS: &str = "claude-memory";
@@ -479,10 +479,10 @@ async fn get_existing_hashes(client: &Qdrant, collection: &str) -> Result<HashSe
         let result = client.scroll(scroll).await.context("failed to scroll")?;
 
         for point in &result.result {
-            if let Some(hash) = point.payload.get("hash") {
-                if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &hash.kind {
-                    hashes.insert(s.clone());
-                }
+            if let Some(hash) = point.payload.get("hash")
+                && let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &hash.kind
+            {
+                hashes.insert(s.clone());
             }
         }
 
@@ -493,111 +493,6 @@ async fn get_existing_hashes(client: &Qdrant, collection: &str) -> Result<HashSe
     }
 
     Ok(hashes)
-}
-
-/// Search prompts (user messages, KB).
-pub async fn search_prompts(
-    query: &str,
-    limit: usize,
-    source: Option<&str>,
-) -> Result<Vec<SearchResult>> {
-    search_collection(query, limit, source, COLLECTION_PROMPTS).await
-}
-
-/// Search answers (assistant responses).
-pub async fn search_answers(
-    query: &str,
-    limit: usize,
-    source: Option<&str>,
-) -> Result<Vec<SearchResult>> {
-    search_collection(query, limit, source, COLLECTION_ANSWERS).await
-}
-
-/// Search manually stored memories by substring without requiring embeddings.
-pub async fn search_memories(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-    let client = Qdrant::from_url(QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
-    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
-
-    let filter = Filter::must([Condition::matches("source", "memory".to_string())]);
-    let needle = query.to_lowercase();
-    let mut matches = Vec::new();
-    let mut offset: Option<qdrant_client::qdrant::PointId> = None;
-
-    while matches.len() < limit {
-        let mut scroll = ScrollPointsBuilder::new(COLLECTION_PROMPTS)
-            .limit(100)
-            .with_payload(true)
-            .filter(filter.clone());
-
-        if let Some(point_id) = offset {
-            scroll = scroll.offset(point_id);
-        }
-
-        let result = client
-            .scroll(scroll)
-            .await
-            .context("memory search scroll failed")?;
-
-        for point in result.result {
-            let text = get_string(&point.payload, "text");
-            if text.to_lowercase().contains(&needle) {
-                matches.push(SearchResult {
-                    text,
-                    source: "memory".to_string(),
-                    path: get_string(&point.payload, "project"),
-                    score: 1.0,
-                });
-            }
-            if matches.len() >= limit {
-                break;
-            }
-        }
-
-        offset = result.next_page_offset;
-        if offset.is_none() {
-            break;
-        }
-    }
-
-    Ok(matches)
-}
-
-async fn search_collection(
-    query: &str,
-    limit: usize,
-    source: Option<&str>,
-    collection: &str,
-) -> Result<Vec<SearchResult>> {
-    if !config::search_enabled() {
-        return Ok(Vec::new());
-    }
-
-    let client = Qdrant::from_url(QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
-    ensure_hybrid_collection(&client, collection).await?;
-
-    let embedder = Embedder::new();
-    let query_vec = embedder.embed(query).await?;
-
-    let mut search = SearchPointsBuilder::new(collection, query_vec, limit as u64)
-        .vector_name("dense")
-        .with_payload(true);
-
-    if let Some(src) = source {
-        search = search.filter(Filter::must([Condition::matches(
-            "source",
-            src.to_string(),
-        )]));
-    }
-
-    let results = client
-        .search_points(search)
-        .await
-        .context("search failed")?;
-    Ok(build_search_results(results.result))
 }
 
 /// Index a single conversation file (both prompts and answers).

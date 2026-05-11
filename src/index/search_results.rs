@@ -4,7 +4,7 @@ use qdrant_client::qdrant::{ScoredPoint, Value, value::Kind::StringValue};
 
 use super::SearchResult;
 
-pub(super) fn build_search_results(points: Vec<ScoredPoint>) -> Vec<SearchResult> {
+pub(crate) fn build_search_results(points: Vec<ScoredPoint>) -> Vec<SearchResult> {
     points
         .into_iter()
         .map(|point| {
@@ -19,7 +19,7 @@ pub(super) fn build_search_results(points: Vec<ScoredPoint>) -> Vec<SearchResult
         .collect()
 }
 
-pub(super) fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
+pub(crate) fn get_string(payload: &HashMap<String, Value>, key: &str) -> String {
     payload
         .get(key)
         .and_then(|value| value.kind.as_ref())
