@@ -276,6 +276,14 @@ async fn run_command(command: Command) -> Result<()> {
 async fn run_transcript_page_index_command(command: TranscriptPageIndexCommand) -> Result<()> {
     match command {
         TranscriptPageIndexCommand::Build { .. } => run_transcript_page_index_build(command).await,
+        command => run_transcript_page_index_lookup_command(command).await,
+    }
+}
+
+async fn run_transcript_page_index_lookup_command(
+    command: TranscriptPageIndexCommand,
+) -> Result<()> {
+    match command {
         TranscriptPageIndexCommand::Document { doc, index } => {
             run_transcript_page_index_document(&doc, index)
         }
@@ -293,6 +301,9 @@ async fn run_transcript_page_index_command(command: TranscriptPageIndexCommand) 
             index,
             mode,
         } => run_transcript_page_index_query(&query, limit, index, mode).await,
+        TranscriptPageIndexCommand::Build { .. } => {
+            unreachable!("build command passed to run_transcript_page_index_lookup_command")
+        }
     }
 }
 
