@@ -317,6 +317,7 @@ pub async fn judge_efficiency(simulated: &str, preload: &str) -> Result<JudgeRes
 // ── T4: Orchestrator ──────────────────────────────────────────────────────────
 
 const MAX_ITERATIONS: usize = 1;
+const NULL_CANDIDATE_REASON: &str = "extractor returned null";
 
 struct AnalysisSession {
     turns: Vec<Turn>,
@@ -417,7 +418,7 @@ async fn analyze_flagged_turn(
             return Ok(outcome);
         }
 
-        if final_fail_reason == "extractor returned null" {
+        if should_stop_candidate_retries(&final_fail_reason) {
             break;
         }
     }
@@ -436,7 +437,7 @@ fn handle_candidate_attempt(
     match attempt {
         CandidateAttempt::Stored(outcome) => Some(outcome),
         CandidateAttempt::NullCandidate => {
-            *final_fail_reason = "extractor returned null".to_string();
+            *final_fail_reason = NULL_CANDIDATE_REASON.to_string();
             None
         }
         CandidateAttempt::Retry(fail_reason) => {
@@ -445,6 +446,10 @@ fn handle_candidate_attempt(
             None
         }
     }
+}
+
+fn should_stop_candidate_retries(final_fail_reason: &str) -> bool {
+    final_fail_reason == NULL_CANDIDATE_REASON
 }
 
 async fn validate_candidate_attempt(
@@ -531,7 +536,7 @@ fn stored_outcome(turn: u32, unit: MemoryUnit, deduped: bool) -> AnalysisOutcome
 
 fn discarded_validation_outcome(turn: u32, final_fail_reason: &str) -> AnalysisOutcome {
     let reason = if final_fail_reason.is_empty() {
-        "extractor returned null".to_string()
+        NULL_CANDIDATE_REASON.to_string()
     } else {
         format!("validation failed 3x: {final_fail_reason}")
     };
