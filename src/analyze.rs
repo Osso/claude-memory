@@ -334,10 +334,14 @@ enum CandidateAttempt {
 
 pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>> {
     let session = load_analysis_session(session_path).await?;
+    collect_user_turn_outcomes(&session).await
+}
+
+async fn collect_user_turn_outcomes(session: &AnalysisSession) -> Result<Vec<AnalysisOutcome>> {
     let mut outcomes = Vec::new();
 
     for turn in user_turns(&session.turns) {
-        outcomes.push(analyze_user_turn(&session, turn).await?);
+        outcomes.push(analyze_user_turn(session, turn).await?);
     }
 
     Ok(outcomes)
