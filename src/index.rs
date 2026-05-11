@@ -2,10 +2,9 @@
 
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
-use qdrant_client::qdrant::{PointStruct, ScrollPointsBuilder, UpsertPointsBuilder, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use walkdir::WalkDir;
 
 use crate::embed::Embedder;
@@ -13,12 +12,16 @@ use crate::extract::{
     IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary,
     extract_zst, extract_zst_answers,
 };
-use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
+use crate::qdrant_hybrid::ensure_hybrid_collection;
 
 #[path = "index_search.rs"]
 mod index_search;
+#[path = "index_writer.rs"]
+mod index_writer;
 mod search_results;
 pub use index_search::{search_answers, search_memories, search_prompts};
+pub(crate) use index_writer::filter_new;
+use index_writer::{get_existing_hashes, index_chunks};
 #[cfg(test)]
 pub(crate) use search_results::{build_search_results, get_string};
 
@@ -453,48 +456,6 @@ async fn index_new_chunks(
     .await
 }
 
-pub(crate) fn filter_new(chunks: &[IndexedChunk], existing: &HashSet<String>) -> Vec<IndexedChunk> {
-    let mut seen = HashSet::new();
-    chunks
-        .iter()
-        .filter(|c| !existing.contains(&c.chunk.hash) && seen.insert(c.chunk.hash.clone()))
-        .cloned()
-        .collect()
-}
-
-/// Get all existing chunk hashes from Qdrant.
-async fn get_existing_hashes(client: &Qdrant, collection: &str) -> Result<HashSet<String>> {
-    let mut hashes = HashSet::new();
-    let mut offset: Option<qdrant_client::qdrant::PointId> = None;
-
-    loop {
-        let mut scroll = ScrollPointsBuilder::new(collection)
-            .limit(1000)
-            .with_payload(true);
-
-        if let Some(off) = offset {
-            scroll = scroll.offset(off);
-        }
-
-        let result = client.scroll(scroll).await.context("failed to scroll")?;
-
-        for point in &result.result {
-            if let Some(hash) = point.payload.get("hash")
-                && let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &hash.kind
-            {
-                hashes.insert(s.clone());
-            }
-        }
-
-        offset = result.next_page_offset;
-        if offset.is_none() {
-            break;
-        }
-    }
-
-    Ok(hashes)
-}
-
 /// Index a single conversation file (both prompts and answers).
 pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
     let client = Qdrant::from_url(QDRANT_URL)
@@ -621,80 +582,6 @@ pub async fn show_stats() -> Result<()> {
     Ok(())
 }
 
-async fn index_chunks(
-    client: &Qdrant,
-    embedder: &Embedder,
-    chunks: &[IndexedChunk],
-    batch_size: usize,
-    next_id: &AtomicU64,
-    collection: &str,
-    delay_ms: u64,
-) -> Result<usize> {
-    let mut indexed = 0;
-    let delay = std::time::Duration::from_millis(delay_ms);
-
-    for batch in chunks.chunks(batch_size) {
-        if delay_ms > 0 && indexed > 0 {
-            tokio::time::sleep(delay).await;
-        }
-
-        let texts: Vec<&str> = batch.iter().map(|c| c.chunk.text.as_str()).collect();
-
-        let embeddings = match embedder.embed_batch(&texts).await {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("\nEmbedding error: {}", e);
-                continue;
-            }
-        };
-
-        let points: Vec<PointStruct> = build_points(batch, embeddings, next_id);
-
-        client
-            .upsert_points(UpsertPointsBuilder::new(collection, points))
-            .await
-            .context("failed to upsert points")?;
-
-        indexed += batch.len();
-    }
-
-    Ok(indexed)
-}
-
-fn build_points(
-    batch: &[IndexedChunk],
-    embeddings: Vec<Vec<f32>>,
-    next_id: &AtomicU64,
-) -> Vec<PointStruct> {
-    batch
-        .iter()
-        .zip(embeddings)
-        .map(|(chunk, embedding)| build_single_point(chunk, embedding, next_id))
-        .collect()
-}
-
-fn build_single_point(
-    chunk: &IndexedChunk,
-    embedding: Vec<f32>,
-    next_id: &AtomicU64,
-) -> PointStruct {
-    let id = next_id.fetch_add(1, Ordering::SeqCst);
-    let named = build_named_vectors(embedding, &chunk.chunk.text);
-    let payload: HashMap<String, Value> = [
-        ("text", chunk.chunk.text.clone().into()),
-        ("source", chunk.source.clone().into()),
-        ("path", chunk.path.clone().into()),
-        (
-            "session_id",
-            chunk.session_id.clone().unwrap_or_default().into(),
-        ),
-        ("hash", chunk.chunk.hash.clone().into()),
-    ]
-    .into_iter()
-    .map(|(k, v): (&str, Value)| (k.to_string(), v))
-    .collect();
-    PointStruct::new(id, named, payload)
-}
 #[cfg(test)]
 #[path = "index_tests.rs"]
 mod index_tests;
