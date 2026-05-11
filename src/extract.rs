@@ -84,8 +84,12 @@ fn build_turn(role: Role, content: serde_json::Value, turn_index: u32) -> Turn {
     match content {
         serde_json::Value::String(text) => text_turn(role, text, turn_index),
         serde_json::Value::Array(blocks) => block_turn(role, blocks, turn_index),
-        _ => text_turn(role, String::new(), turn_index),
+        _ => empty_turn(role, turn_index),
     }
+}
+
+fn empty_turn(role: Role, turn_index: u32) -> Turn {
+    text_turn(role, String::new(), turn_index)
 }
 
 fn text_turn(role: Role, text: String, turn_index: u32) -> Turn {
