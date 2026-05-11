@@ -13,7 +13,8 @@ Transcript PageIndex for Claude/Codex sessions.
 
 ### Reference baseline
 
-- [ ] Record the reference implementation and commit being matched: `VectifyAI/PageIndex` at `f50e529`.
+Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
+
 - [x] Match the reference architectural flow: index a document, inspect metadata, inspect structure without full text, fetch tight content ranges, answer with traceable references.
 - [x] Keep the reference distinction between document structure and document content: structure output must not require dumping full node text.
 - [x] Use stable node identifiers that are suitable for follow-up content fetches.
@@ -64,7 +65,6 @@ Transcript PageIndex for Claude/Codex sessions.
 - [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
 - [x] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
 - [x] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
-- [ ] Expose Transcript PageIndex through MCP only after query-quality and corpus-scale build benchmarks improve.
 
 ### Agentic tree-walk retrieval
 
@@ -82,10 +82,11 @@ Transcript PageIndex for Claude/Codex sessions.
 
 ### Non-goals and bounded parity
 
-- [x] Do not implement PDF parsing parity in this cycle.
-- [x] Do not implement OCR or PageIndex cloud/API parity in this cycle.
-- [ ] Do not claim FinanceBench or other reference benchmark parity.
-- [ ] Do not replace friction-driven memory creation with Transcript PageIndex.
+- PDF parsing parity is deferred until there is a concrete need for document formats beyond Markdown and transcripts.
+- OCR and PageIndex cloud/API parity are out of scope for this local Rust implementation.
+- FinanceBench and other reference benchmark parity are not claimed.
+- Transcript PageIndex MCP exposure is deferred until query-quality and corpus-scale build benchmarks improve.
+- Transcript PageIndex does not replace friction-driven memory creation.
 
 ## How it works
 
