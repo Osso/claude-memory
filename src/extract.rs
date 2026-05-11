@@ -82,55 +82,75 @@ fn read_session_turns_from<R: std::io::BufRead>(reader: R) -> Result<Vec<Turn>> 
 
 fn build_turn(role: Role, content: serde_json::Value, turn_index: u32) -> Turn {
     match content {
-        serde_json::Value::String(s) => Turn {
-            role,
-            text: s,
-            turn_index,
-            has_tool_use: false,
-            tool_call_count: 0,
-        },
-        serde_json::Value::Array(blocks) => {
-            let mut text_parts: Vec<String> = Vec::new();
-            let mut tool_call_count: u32 = 0;
-
-            for block in blocks {
-                let block_type = block
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                match block_type.as_str() {
-                    "text" => {
-                        if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
-                            let t = t.trim();
-                            if !t.is_empty() {
-                                text_parts.push(t.to_string());
-                            }
-                        }
-                    }
-                    "tool_use" => {
-                        tool_call_count += 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            Turn {
-                role,
-                text: text_parts.join("\n"),
-                turn_index,
-                has_tool_use: tool_call_count > 0,
-                tool_call_count,
-            }
-        }
-        _ => Turn {
-            role,
-            text: String::new(),
-            turn_index,
-            has_tool_use: false,
-            tool_call_count: 0,
-        },
+        serde_json::Value::String(text) => text_turn(role, text, turn_index),
+        serde_json::Value::Array(blocks) => block_turn(role, blocks, turn_index),
+        _ => text_turn(role, String::new(), turn_index),
     }
+}
+
+fn text_turn(role: Role, text: String, turn_index: u32) -> Turn {
+    Turn {
+        role,
+        text,
+        turn_index,
+        has_tool_use: false,
+        tool_call_count: 0,
+    }
+}
+
+fn block_turn(role: Role, blocks: Vec<serde_json::Value>, turn_index: u32) -> Turn {
+    let block_content = collect_turn_block_content(blocks);
+    Turn {
+        role,
+        text: block_content.text_parts.join("\n"),
+        turn_index,
+        has_tool_use: block_content.tool_call_count > 0,
+        tool_call_count: block_content.tool_call_count,
+    }
+}
+
+struct TurnBlockContent {
+    text_parts: Vec<String>,
+    tool_call_count: u32,
+}
+
+fn collect_turn_block_content(blocks: Vec<serde_json::Value>) -> TurnBlockContent {
+    let mut content = TurnBlockContent {
+        text_parts: Vec::new(),
+        tool_call_count: 0,
+    };
+
+    for block in blocks {
+        collect_turn_block(block, &mut content);
+    }
+
+    content
+}
+
+fn collect_turn_block(block: serde_json::Value, content: &mut TurnBlockContent) {
+    match block_type(&block) {
+        "text" => collect_text_block(block, content),
+        "tool_use" => content.tool_call_count += 1,
+        _ => {}
+    }
+}
+
+fn block_type(block: &serde_json::Value) -> &str {
+    block
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+}
+
+fn collect_text_block(block: serde_json::Value, content: &mut TurnBlockContent) {
+    if let Some(text) = trimmed_block_text(&block) {
+        content.text_parts.push(text.to_string());
+    }
+}
+
+fn trimmed_block_text(block: &serde_json::Value) -> Option<&str> {
+    let text = block.get("text")?.as_str()?.trim();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 #[derive(Debug, Clone)]
