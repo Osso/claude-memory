@@ -118,11 +118,25 @@ struct TurnBlockContent {
     tool_call_count: u32,
 }
 
+impl TurnBlockContent {
+    fn new() -> Self {
+        Self {
+            text_parts: Vec::new(),
+            tool_call_count: 0,
+        }
+    }
+
+    fn record_text(&mut self, text: &str) {
+        self.text_parts.push(text.to_string());
+    }
+
+    fn record_tool_use(&mut self) {
+        self.tool_call_count += 1;
+    }
+}
+
 fn collect_turn_block_content(blocks: Vec<serde_json::Value>) -> TurnBlockContent {
-    let mut content = TurnBlockContent {
-        text_parts: Vec::new(),
-        tool_call_count: 0,
-    };
+    let mut content = TurnBlockContent::new();
 
     for block in blocks {
         collect_turn_block(block, &mut content);
@@ -134,7 +148,7 @@ fn collect_turn_block_content(blocks: Vec<serde_json::Value>) -> TurnBlockConten
 fn collect_turn_block(block: serde_json::Value, content: &mut TurnBlockContent) {
     match block_type(&block) {
         "text" => collect_text_block(block, content),
-        "tool_use" => content.tool_call_count += 1,
+        "tool_use" => content.record_tool_use(),
         _ => {}
     }
 }
@@ -148,7 +162,7 @@ fn block_type(block: &serde_json::Value) -> &str {
 
 fn collect_text_block(block: serde_json::Value, content: &mut TurnBlockContent) {
     if let Some(text) = trimmed_block_text(&block) {
-        content.text_parts.push(text.to_string());
+        content.record_text(text);
     }
 }
 
