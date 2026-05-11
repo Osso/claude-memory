@@ -468,12 +468,8 @@ async fn validate_candidate_attempt(
     };
 
     log_candidate_attempt(turn_index, attempt, &candidate);
-    let simulated = replay_with_preload(&candidate, &turn.text)
-        .await
-        .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))?;
-    let correctness = judge_correctness(&simulated, resolution)
-        .await
-        .with_context(|| format!("judge_correctness failed at turn {turn_index}"))?;
+    let simulated = replay_candidate(turn_index, &candidate, &turn.text).await?;
+    let correctness = check_candidate_correctness(turn_index, &simulated, resolution).await?;
 
     if correctness.passed {
         return Ok(CandidateAttempt::Stored(
@@ -481,12 +477,40 @@ async fn validate_candidate_attempt(
         ));
     }
 
+    Ok(candidate_validation_failure(
+        turn_index,
+        attempt,
+        correctness,
+    ))
+}
+
+async fn replay_candidate(turn_index: u32, candidate: &str, prompt: &str) -> Result<String> {
+    replay_with_preload(candidate, prompt)
+        .await
+        .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))
+}
+
+async fn check_candidate_correctness(
+    turn_index: u32,
+    simulated: &str,
+    resolution: &str,
+) -> Result<JudgeResult> {
+    judge_correctness(simulated, resolution)
+        .await
+        .with_context(|| format!("judge_correctness failed at turn {turn_index}"))
+}
+
+fn candidate_validation_failure(
+    turn_index: u32,
+    attempt: usize,
+    correctness: JudgeResult,
+) -> CandidateAttempt {
     let fail_reason = format!("correctness: {}", correctness.reason);
     eprintln!(
         "  [turn {turn_index}] attempt {} failed: {fail_reason}",
         attempt + 1
     );
-    Ok(CandidateAttempt::Retry(fail_reason))
+    CandidateAttempt::Retry(fail_reason)
 }
 
 fn log_candidate_attempt(turn_index: u32, attempt: usize, candidate: &str) {
