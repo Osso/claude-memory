@@ -407,18 +407,18 @@ async fn analyze_flagged_turn(
     let mut final_fail_reason = String::new();
 
     for attempt in 0..MAX_ITERATIONS {
-        match validate_candidate_attempt(session, turn, resolution, feedback.as_deref(), attempt)
-            .await?
+        let candidate_attempt =
+            validate_candidate_attempt(session, turn, resolution, feedback.as_deref(), attempt)
+                .await?;
+
+        if let Some(outcome) =
+            handle_candidate_attempt(candidate_attempt, &mut feedback, &mut final_fail_reason)
         {
-            CandidateAttempt::Stored(outcome) => return Ok(outcome),
-            CandidateAttempt::NullCandidate => {
-                final_fail_reason = "extractor returned null".to_string();
-                break;
-            }
-            CandidateAttempt::Retry(fail_reason) => {
-                final_fail_reason = fail_reason.clone();
-                feedback = Some(fail_reason);
-            }
+            return Ok(outcome);
+        }
+
+        if final_fail_reason == "extractor returned null" {
+            break;
         }
     }
 
@@ -426,6 +426,25 @@ async fn analyze_flagged_turn(
         turn.turn_index,
         &final_fail_reason,
     ))
+}
+
+fn handle_candidate_attempt(
+    attempt: CandidateAttempt,
+    feedback: &mut Option<String>,
+    final_fail_reason: &mut String,
+) -> Option<AnalysisOutcome> {
+    match attempt {
+        CandidateAttempt::Stored(outcome) => Some(outcome),
+        CandidateAttempt::NullCandidate => {
+            *final_fail_reason = "extractor returned null".to_string();
+            None
+        }
+        CandidateAttempt::Retry(fail_reason) => {
+            *final_fail_reason = fail_reason.clone();
+            *feedback = Some(fail_reason);
+            None
+        }
+    }
 }
 
 async fn validate_candidate_attempt(
