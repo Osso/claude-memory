@@ -61,24 +61,30 @@ struct JudgeJson {
 
 /// Strip markdown fences and extract the first JSON object from raw LLM output.
 fn extract_json(text: &str) -> &str {
-    let s = text.trim();
-    // Strip ```json ... ``` fences
-    let s = if let Some(inner) = s.strip_prefix("```json") {
+    let stripped = strip_markdown_json_fence(text.trim());
+    slice_first_json_object(stripped)
+}
+
+fn strip_markdown_json_fence(text: &str) -> &str {
+    let text = if let Some(inner) = text.strip_prefix("```json") {
         inner.trim_start()
-    } else if let Some(inner) = s.strip_prefix("```") {
+    } else if let Some(inner) = text.strip_prefix("```") {
         inner.trim_start()
     } else {
-        s
+        text
     };
-    let s = if let Some(inner) = s.strip_suffix("```") {
+
+    if let Some(inner) = text.strip_suffix("```") {
         inner.trim_end()
     } else {
-        s
-    };
-    // Find first `{`
-    let start = s.find('{').unwrap_or(0);
-    let end = s.rfind('}').map(|i| i + 1).unwrap_or(s.len());
-    &s[start..end]
+        text
+    }
+}
+
+fn slice_first_json_object(text: &str) -> &str {
+    let start = text.find('{').unwrap_or(0);
+    let end = text.rfind('}').map(|i| i + 1).unwrap_or(text.len());
+    &text[start..end]
 }
 
 // ── Turn context helpers ──────────────────────────────────────────────────────
@@ -312,7 +318,32 @@ pub async fn judge_efficiency(simulated: &str, preload: &str) -> Result<JudgeRes
 
 const MAX_ITERATIONS: usize = 1;
 
+struct AnalysisSession {
+    turns: Vec<Turn>,
+    session_id: String,
+    source: String,
+    client: Qdrant,
+    embedder: Embedder,
+}
+
+enum CandidateAttempt {
+    Stored(AnalysisOutcome),
+    Retry(String),
+    NullCandidate,
+}
+
 pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>> {
+    let session = load_analysis_session(session_path).await?;
+    let mut outcomes = Vec::new();
+
+    for turn in user_turns(&session.turns) {
+        outcomes.push(analyze_user_turn(&session, turn).await?);
+    }
+
+    Ok(outcomes)
+}
+
+async fn load_analysis_session(session_path: &Path) -> Result<AnalysisSession> {
     let turns = read_session_turns(session_path)
         .with_context(|| format!("failed to read turns from {}", session_path.display()))?;
 
@@ -328,130 +359,160 @@ pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>
     crate::memory_unit::ensure_memory_units_collection(&client).await?;
     let embedder = Embedder::new();
 
-    let mut outcomes = Vec::new();
+    Ok(AnalysisSession {
+        turns,
+        session_id,
+        source,
+        client,
+        embedder,
+    })
+}
 
-    for turn in &turns {
-        // Only classify user turns
-        if !matches!(turn.role, crate::extract::Role::User) {
-            continue;
-        }
+fn user_turns(turns: &[Turn]) -> impl Iterator<Item = &Turn> {
+    turns
+        .iter()
+        .filter(|turn| matches!(turn.role, crate::extract::Role::User))
+}
 
-        let turn_index = turn.turn_index;
+async fn analyze_user_turn(session: &AnalysisSession, turn: &Turn) -> Result<AnalysisOutcome> {
+    let turn_index = turn.turn_index;
+    let friction = classify_friction(&session.turns, turn_index)
+        .await
+        .with_context(|| format!("classify_friction failed at turn {turn_index}"))?;
 
-        let friction = classify_friction(&turns, turn_index)
-            .await
-            .with_context(|| format!("classify_friction failed at turn {turn_index}"))?;
+    if !friction.flagged {
+        eprintln!("  [turn {turn_index}] no friction: {}", friction.reason);
+        return Ok(AnalysisOutcome::NoFriction { turn: turn_index });
+    }
 
-        if !friction.flagged {
-            eprintln!("  [turn {turn_index}] no friction: {}", friction.reason);
-            outcomes.push(AnalysisOutcome::NoFriction { turn: turn_index });
-            continue;
-        }
+    eprintln!(
+        "  [turn {turn_index}] friction flagged: {}",
+        friction.reason
+    );
 
-        eprintln!(
-            "  [turn {turn_index}] friction flagged: {}",
-            friction.reason
-        );
+    let resolution = eventual_resolution(&session.turns, turn_index);
+    analyze_flagged_turn(session, turn, &resolution).await
+}
 
-        let resolution = eventual_resolution(&turns, turn_index);
-        let user_prompt = turn.text.clone();
+async fn analyze_flagged_turn(
+    session: &AnalysisSession,
+    turn: &Turn,
+    resolution: &str,
+) -> Result<AnalysisOutcome> {
+    let mut feedback = None;
+    let mut final_fail_reason = String::new();
 
-        let mut feedback: Option<String> = None;
-        let mut stored = false;
-        let mut final_fail_reason = String::new();
-
-        for attempt in 0..MAX_ITERATIONS {
-            // Extract candidate
-            let candidate = match extract_candidate(&turns, turn_index, feedback.as_deref())
-                .await
-                .with_context(|| format!("extract_candidate failed at turn {turn_index}"))?
-            {
-                Some(c) => c,
-                None => {
-                    final_fail_reason = "extractor returned null".to_string();
-                    break;
-                }
-            };
-
-            eprintln!(
-                "  [turn {turn_index}] attempt {}: candidate: {}...",
-                attempt + 1,
-                candidate.chars().take(60).collect::<String>()
-            );
-
-            // Replay
-            let simulated = replay_with_preload(&candidate, &user_prompt)
-                .await
-                .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))?;
-
-            // Judge correctness only (efficiency dropped — high false-negative rate)
-            let c_result = judge_correctness(&simulated, &resolution)
-                .await
-                .with_context(|| format!("judge_correctness failed at turn {turn_index}"))?;
-
-            if c_result.passed {
-                // Store
-                let unit = MemoryUnit {
-                    text: candidate,
-                    created_at: Utc::now(),
-                    source: source.clone(),
-                    source_session: session_id.clone(),
-                    source_turn: turn_index,
-                    category: None,
-                    project: None,
-                    seen_in_sessions: vec![session_id.clone()],
-                };
-
-                match upsert_with_dedup(&client, &embedder, unit.clone()).await {
-                    Ok(DedupOutcome::Inserted(_)) => {
-                        outcomes.push(AnalysisOutcome::Stored {
-                            turn: turn_index,
-                            unit,
-                            deduped: false,
-                        });
-                    }
-                    Ok(DedupOutcome::Merged(_)) => {
-                        outcomes.push(AnalysisOutcome::Stored {
-                            turn: turn_index,
-                            unit,
-                            deduped: true,
-                        });
-                    }
-                    Err(e) => {
-                        eprintln!("  [turn {turn_index}] upsert error: {e}");
-                        outcomes.push(AnalysisOutcome::Discarded {
-                            turn: turn_index,
-                            reason: format!("upsert failed: {e}"),
-                        });
-                    }
-                }
-                stored = true;
+    for attempt in 0..MAX_ITERATIONS {
+        match validate_candidate_attempt(session, turn, resolution, feedback.as_deref(), attempt)
+            .await?
+        {
+            CandidateAttempt::Stored(outcome) => return Ok(outcome),
+            CandidateAttempt::NullCandidate => {
+                final_fail_reason = "extractor returned null".to_string();
                 break;
             }
-
-            let fail_reason = format!("correctness: {}", c_result.reason);
-
-            eprintln!(
-                "  [turn {turn_index}] attempt {} failed: {fail_reason}",
-                attempt + 1
-            );
-            final_fail_reason = fail_reason.clone();
-            feedback = Some(fail_reason);
-        }
-
-        if !stored {
-            outcomes.push(AnalysisOutcome::Discarded {
-                turn: turn_index,
-                reason: if final_fail_reason.is_empty() {
-                    "extractor returned null".to_string()
-                } else {
-                    format!("validation failed 3x: {final_fail_reason}")
-                },
-            });
+            CandidateAttempt::Retry(fail_reason) => {
+                final_fail_reason = fail_reason.clone();
+                feedback = Some(fail_reason);
+            }
         }
     }
 
-    Ok(outcomes)
+    Ok(discarded_validation_outcome(
+        turn.turn_index,
+        &final_fail_reason,
+    ))
+}
+
+async fn validate_candidate_attempt(
+    session: &AnalysisSession,
+    turn: &Turn,
+    resolution: &str,
+    feedback: Option<&str>,
+    attempt: usize,
+) -> Result<CandidateAttempt> {
+    let turn_index = turn.turn_index;
+    let Some(candidate) = extract_candidate(&session.turns, turn_index, feedback)
+        .await
+        .with_context(|| format!("extract_candidate failed at turn {turn_index}"))?
+    else {
+        return Ok(CandidateAttempt::NullCandidate);
+    };
+
+    log_candidate_attempt(turn_index, attempt, &candidate);
+    let simulated = replay_with_preload(&candidate, &turn.text)
+        .await
+        .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))?;
+    let correctness = judge_correctness(&simulated, resolution)
+        .await
+        .with_context(|| format!("judge_correctness failed at turn {turn_index}"))?;
+
+    if correctness.passed {
+        return Ok(CandidateAttempt::Stored(
+            store_candidate(session, turn_index, candidate).await,
+        ));
+    }
+
+    let fail_reason = format!("correctness: {}", correctness.reason);
+    eprintln!(
+        "  [turn {turn_index}] attempt {} failed: {fail_reason}",
+        attempt + 1
+    );
+    Ok(CandidateAttempt::Retry(fail_reason))
+}
+
+fn log_candidate_attempt(turn_index: u32, attempt: usize, candidate: &str) {
+    eprintln!(
+        "  [turn {turn_index}] attempt {}: candidate: {}...",
+        attempt + 1,
+        candidate.chars().take(60).collect::<String>()
+    );
+}
+
+async fn store_candidate(
+    session: &AnalysisSession,
+    turn_index: u32,
+    candidate: String,
+) -> AnalysisOutcome {
+    let unit = MemoryUnit {
+        text: candidate,
+        created_at: Utc::now(),
+        source: session.source.clone(),
+        source_session: session.session_id.clone(),
+        source_turn: turn_index,
+        category: None,
+        project: None,
+        seen_in_sessions: vec![session.session_id.clone()],
+    };
+
+    match upsert_with_dedup(&session.client, &session.embedder, unit.clone()).await {
+        Ok(DedupOutcome::Inserted(_)) => stored_outcome(turn_index, unit, false),
+        Ok(DedupOutcome::Merged(_)) => stored_outcome(turn_index, unit, true),
+        Err(e) => {
+            eprintln!("  [turn {turn_index}] upsert error: {e}");
+            AnalysisOutcome::Discarded {
+                turn: turn_index,
+                reason: format!("upsert failed: {e}"),
+            }
+        }
+    }
+}
+
+fn stored_outcome(turn: u32, unit: MemoryUnit, deduped: bool) -> AnalysisOutcome {
+    AnalysisOutcome::Stored {
+        turn,
+        unit,
+        deduped,
+    }
+}
+
+fn discarded_validation_outcome(turn: u32, final_fail_reason: &str) -> AnalysisOutcome {
+    let reason = if final_fail_reason.is_empty() {
+        "extractor returned null".to_string()
+    } else {
+        format!("validation failed 3x: {final_fail_reason}")
+    };
+    AnalysisOutcome::Discarded { turn, reason }
 }
 
 fn memory_unit_source_from_path(session_path: &Path) -> &'static str {
