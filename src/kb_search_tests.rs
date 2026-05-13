@@ -254,6 +254,62 @@ fn long_queries_require_three_distinct_terms() {
     assert!(result.is_none());
 }
 
+#[test]
+fn link_dumps_do_not_match_scattered_prompt_terms() {
+    let markdown = format!(
+        "# Firefox Tab Archive\n\n## Firefox Tabs\n{}\n",
+        [
+            "- [Deployment guide](https://example.test/deploy)",
+            "- [Mini secrets manager](https://example.test/secrets)",
+            "- [New shell tools](https://example.test/new)",
+            "- [Would you use this tool?](https://example.test/you)",
+            "- [Did the release ship?](https://example.test/did)",
+            "- [Git performance improvements](https://example.test/git)",
+            "- [Kubernetes news](https://example.test/kubernetes)",
+            "- [Claude memory project](https://example.test/claude)",
+            "- [Rust CLI parser](https://example.test/rust)",
+            "- [Home automation notes](https://example.test/home)",
+            "- [GlobalComix pull requests](https://example.test/prs)",
+            "- [Task queue article](https://example.test/task)",
+        ]
+        .join("\n")
+    );
+    let doc = build_doc_from_text("state/firefox-tab-archive.md", &markdown);
+    let query = "did you deploy the new secrets";
+
+    let result = score_node(&doc, &doc.nodes[0].nodes[0], query, &tokenize(query));
+
+    assert!(result.is_none());
+}
+
+#[test]
+fn link_dumps_still_match_exact_link_phrases() {
+    let markdown = format!(
+        "# Firefox Tab Archive\n\n## Reddit\n{}\n",
+        [
+            "- [Deployment guide](https://example.test/deploy)",
+            "- [VOA mini secrets manager](https://example.test/secrets)",
+            "- [New shell tools](https://example.test/new)",
+            "- [Would you use this tool?](https://example.test/you)",
+            "- [Did the release ship?](https://example.test/did)",
+            "- [Git performance improvements](https://example.test/git)",
+            "- [Kubernetes news](https://example.test/kubernetes)",
+            "- [Claude memory project](https://example.test/claude)",
+            "- [Rust CLI parser](https://example.test/rust)",
+            "- [Home automation notes](https://example.test/home)",
+            "- [GlobalComix pull requests](https://example.test/prs)",
+            "- [Task queue article](https://example.test/task)",
+        ]
+        .join("\n")
+    );
+    let doc = build_doc_from_text("state/firefox-tab-archive.md", &markdown);
+    let query = "mini secrets manager";
+
+    let result = score_node(&doc, &doc.nodes[0].nodes[0], query, &tokenize(query));
+
+    assert!(result.is_some());
+}
+
 fn build_doc_from_text(path: &str, markdown: &str) -> KbIndexedDoc {
     let sections = split_markdown_sections(path, markdown);
     let doc_description = sections.first().map(|section| section.title.clone());

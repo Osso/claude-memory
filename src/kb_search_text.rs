@@ -3,7 +3,7 @@ use std::collections::HashMap;
 const SNIPPET_CHARS: usize = 420;
 const STOPWORDS: &[&str] = &[
     "the", "and", "or", "to", "of", "in", "for", "a", "an", "is", "are", "we", "it", "with", "on",
-    "as", "by", "be", "this", "that", "use",
+    "as", "by", "be", "this", "that", "use", "did", "do", "does", "you", "your", "me", "my", "new",
 ];
 
 pub(crate) fn token_counts(text: &str) -> HashMap<String, usize> {

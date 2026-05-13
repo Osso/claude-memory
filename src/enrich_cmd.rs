@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::{config, graph, index, kb_search, memory_unit};
 
-const MIN_MEMORY_SCORE: f32 = 0.65;
+const MIN_MEMORY_SCORE: f32 = 0.75;
 const MAX_KB_RESULTS: usize = 3;
 const MAX_KB_RESULT_CHARS: usize = 500;
 
@@ -48,10 +48,7 @@ async fn add_memory_section(prompt: &str, limit: usize, sections: &mut Vec<Strin
         }
     };
 
-    let relevant_units: Vec<&index::SearchResult> = units
-        .iter()
-        .filter(|result| result.score >= MIN_MEMORY_SCORE)
-        .collect();
+    let relevant_units = relevant_memory_units(&units);
     if !relevant_units.is_empty() {
         sections.push(format_memory_unit_results(&relevant_units));
     }
@@ -107,6 +104,13 @@ fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
         out.push_str(&format!("\n- ({:.2}) {}", result.score, text));
     }
     out
+}
+
+fn relevant_memory_units(results: &[index::SearchResult]) -> Vec<&index::SearchResult> {
+    results
+        .iter()
+        .filter(|result| result.score >= MIN_MEMORY_SCORE)
+        .collect()
 }
 
 fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
@@ -199,5 +203,31 @@ mod tests {
         assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
         assert!(!formatted.contains("tail marker"));
         assert!(formatted.contains("..."));
+    }
+
+    #[test]
+    fn memory_units_need_strong_similarity_for_enrich() {
+        let results = vec![
+            index::SearchResult {
+                text: "Unrelated but vaguely Claude-shaped memory.".to_string(),
+                source: "memory".to_string(),
+                path: String::new(),
+                score: 0.71,
+            },
+            index::SearchResult {
+                text: "Deploy secrets through the production secret store.".to_string(),
+                source: "memory".to_string(),
+                path: String::new(),
+                score: 0.76,
+            },
+        ];
+
+        let relevant = relevant_memory_units(&results);
+
+        assert_eq!(relevant.len(), 1);
+        assert_eq!(
+            relevant[0].text,
+            "Deploy secrets through the production secret store."
+        );
     }
 }

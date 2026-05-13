@@ -446,7 +446,12 @@ fn score_node(
     }
 
     let combined_text = format!("{structural_text}\n{}", node.text);
-    let score = score_node_match(&stats, &combined_text, query, query_tokens);
+    let phrase_score = phrase_score(&combined_text, query, query_tokens);
+    if is_link_dump_node(node) && phrase_score == 0 {
+        return None;
+    }
+
+    let score = score_node_match(&stats, phrase_score);
     if score < MIN_SCORE {
         return None;
     }
@@ -467,14 +472,27 @@ fn node_structural_text(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
     )
 }
 
-fn score_node_match(
-    stats: &NodeMatchStats,
-    combined_text: &str,
-    query: &str,
-    query_tokens: &[String],
-) -> usize {
+fn score_node_match(stats: &NodeMatchStats, phrase_score: usize) -> usize {
     let base_score = stats.matched * 10 + stats.occurrences + stats.structural_matches * 4;
-    base_score + phrase_score(combined_text, query, query_tokens)
+    base_score + phrase_score
+}
+
+fn is_link_dump_node(node: &KbIndexedNode) -> bool {
+    let mut non_empty_lines = 0usize;
+    let mut markdown_link_lines = 0usize;
+
+    for line in node.text.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+
+        non_empty_lines += 1;
+        if line.starts_with("- [") && line.contains("](") {
+            markdown_link_lines += 1;
+        }
+    }
+
+    markdown_link_lines >= 10 && markdown_link_lines * 2 >= non_empty_lines
 }
 
 fn search_result_for_node(
