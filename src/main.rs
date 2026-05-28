@@ -171,11 +171,11 @@ enum Command {
         id: u64,
     },
 
-    /// Manually write a memory unit (alternative to the MCP memory_write tool)
+    /// Explain where manual memories should be written
     MemoryWrite {
         /// Project slug, or __global__ for memories that should apply everywhere
         #[arg(long)]
-        project: String,
+        project: Option<String>,
 
         /// Memory text (1-3 sentences, encyclopedia-style)
         text: String,
@@ -431,38 +431,13 @@ async fn run_memory_delete(id: u64) -> Result<()> {
     Ok(())
 }
 
-async fn run_memory_write(text: String, project: String) -> Result<()> {
-    use chrono::Utc;
-    use claude_memory::embed::Embedder;
-    use claude_memory::memory_unit::{
-        DedupOutcome, MemoryUnit, normalize_manual_project_scope, upsert_with_dedup,
-    };
-    use qdrant_client::Qdrant;
-
+async fn run_memory_write(text: String, _project: Option<String>) -> Result<()> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         anyhow::bail!("memory text is empty");
     }
-    let project = normalize_manual_project_scope(&project)?;
-    let client = Qdrant::from_url(claude_memory::index::QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
-    memory_unit::ensure_memory_units_collection(&client).await?;
-    let embedder = Embedder::new();
-    let unit = MemoryUnit {
-        text: trimmed.to_string(),
-        created_at: Utc::now(),
-        source: "memory".to_string(),
-        source_session: "manual".to_string(),
-        source_turn: 0,
-        category: None,
-        project,
-        seen_in_sessions: vec!["manual".to_string()],
-    };
-    match upsert_with_dedup(&client, &embedder, unit).await? {
-        DedupOutcome::Inserted(uuid) => println!("inserted (uuid={uuid})"),
-        DedupOutcome::Merged(_) => println!("merged with an existing similar memory"),
-    }
+
+    println!("{}", memory_unit::manual_memory_write_guidance());
     Ok(())
 }
 

@@ -39,32 +39,23 @@ fn search_accepts_answer_type() {
 }
 
 #[test]
-fn memory_write_requires_project_scope() {
-    let Err(error) = Cli::try_parse_from(["claude-memory", "memory-write", "remember this"]) else {
-        panic!("memory-write accepted a missing project scope");
-    };
-
-    assert_eq!(
-        error.kind(),
-        clap::error::ErrorKind::MissingRequiredArgument
-    );
-}
-
-#[test]
-fn memory_write_accepts_explicit_project_scope() {
-    let cli = Cli::parse_from([
-        "claude-memory",
-        "memory-write",
-        "--project",
-        "claude-memory",
-        "remember this",
-    ]);
+fn memory_write_accepts_no_project_scope_when_guidance_only() {
+    let cli = Cli::parse_from(["claude-memory", "memory-write", "remember this"]);
     let Command::MemoryWrite { text, project } = cli.command else {
         panic!("expected memory-write command");
     };
 
     assert_eq!(text, "remember this");
-    assert_eq!(project, "claude-memory");
+    assert_eq!(project, None);
+}
+
+#[test]
+fn manual_memory_write_guidance_points_to_docs_local() {
+    let guidance = claude_memory::memory_unit::manual_memory_write_guidance();
+
+    assert!(guidance.contains("disabled"));
+    assert!(guidance.contains("docs/local/memory.md"));
+    assert!(guidance.contains("/home/osso/AgentConfig/rules"));
 }
 
 #[test]

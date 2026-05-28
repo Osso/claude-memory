@@ -48,6 +48,15 @@ pub fn normalize_manual_project_scope(project: &str) -> Result<Option<String>> {
     Ok(Some(project.to_string()))
 }
 
+pub fn manual_memory_write_guidance() -> &'static str {
+    concat!(
+        "Manual memory writes are disabled. Do not store this in Qdrant. ",
+        "For project-specific durable context, create or update docs/local/memory.md ",
+        "in the current project. For cross-project behavior and long-term agent rules, ",
+        "update /home/osso/AgentConfig/rules."
+    )
+}
+
 #[derive(Debug)]
 pub enum DedupOutcome {
     Inserted(Uuid),
@@ -478,6 +487,15 @@ mod tests {
 
         assert_eq!(result.source, "session");
         assert_eq!(result.path, "session.jsonl");
+    }
+
+    #[test]
+    fn manual_memory_write_guidance_disables_qdrant_path() {
+        let guidance = manual_memory_write_guidance();
+
+        assert!(guidance.contains("Manual memory writes are disabled"));
+        assert!(guidance.contains("Do not store this in Qdrant"));
+        assert!(guidance.contains("docs/local/memory.md"));
     }
 
     #[test]

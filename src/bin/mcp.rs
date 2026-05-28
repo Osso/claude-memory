@@ -1,15 +1,11 @@
 //! MCP server for Claude memory operations.
 
 use anyhow::{Context, Result};
-use claude_memory::chunk::chunk_text;
 use claude_memory::config;
-use claude_memory::daily::{append_daily, append_kb_memory};
 use claude_memory::embed::Embedder;
 use claude_memory::graph;
 use claude_memory::llm::{self, RawResult};
-use claude_memory::memory_unit::{
-    DedupOutcome, MemoryUnit, normalize_manual_project_scope, upsert_with_dedup,
-};
+use claude_memory::memory_unit::manual_memory_write_guidance;
 use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
@@ -143,9 +139,9 @@ pub struct MemoryWriteParams {
     #[schemars(description = "Category: correction, preference, context, learning, decision")]
     category: Option<String>,
     #[schemars(
-        description = "Required project slug, or __global__ for memories that apply everywhere"
+        description = "Project slug, or __global__ for memories that apply everywhere. Manual writes are disabled and this is kept for compatibility."
     )]
-    project: String,
+    project: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -154,7 +150,7 @@ pub struct SearchParams {
     #[schemars(description = "Maximum results (default: 5)")]
     limit: Option<usize>,
     #[schemars(
-        description = "Filter by source type: \"memory\" (manually added), \"session\", \"archive\", \"summary\", \"kb\""
+        description = "Filter by source type: \"memory\" (legacy manual), \"session\", \"archive\", \"summary\", \"kb\""
     )]
     source: Option<String>,
 }
@@ -170,7 +166,7 @@ pub struct MemoryListParams {
 #[tool_router]
 impl MemoryService {
     #[tool(
-        description = "Store a memory entry. Use for: corrections (when user corrects a mistake), preferences (how user likes things done), learnings (new knowledge), decisions (architectural choices), context (ongoing project state)."
+        description = "Return guidance for manual memories. Storage is disabled; project-local durable context should be written to docs/local/memory.md."
     )]
     async fn memory_write(&self, Parameters(params): Parameters<MemoryWriteParams>) -> String {
         match self.do_memory_write(params).await {
@@ -233,60 +229,18 @@ impl MemoryService {
 
 impl MemoryService {
     async fn do_memory_write(&self, params: MemoryWriteParams) -> Result<String> {
-        let project = normalize_manual_project_scope(&params.project)?;
-        append_daily(
-            &params.content,
-            params.category.as_deref(),
-            project.as_deref(),
-        )?;
-        if let Err(e) = append_kb_memory(
-            &params.content,
-            params.category.as_deref(),
-            project.as_deref(),
-        ) {
-            log(&format!("KB memory write failed (non-fatal): {e}"));
-        }
-        let chunks = chunk_text(&params.content);
-        if chunks.is_empty() {
-            return Ok("Memory stored (empty content, not indexed)".to_string());
-        }
-        let client = get_qdrant().await?;
-        let (mut indexed, mut merged) = (0u32, 0u32);
-        for chunk in &chunks {
-            match self
-                .store_memory_unit(client, &chunk.text, &params, project.clone())
-                .await
-            {
-                Ok(DedupOutcome::Inserted(_)) => indexed += 1,
-                Ok(DedupOutcome::Merged(_)) => merged += 1,
-                Err(e) => log(&format!("memory_write chunk error: {e}")),
-            }
-        }
-        // Graph extraction (non-blocking, failures logged)
-        if let Err(e) = graph::extract_and_store(&params.content).await {
-            log(&format!("graph extract_and_store failed: {e}"));
-        }
-        Ok(format_write_result(indexed, merged))
-    }
-
-    async fn store_memory_unit(
-        &self,
-        client: &Qdrant,
-        text: &str,
-        params: &MemoryWriteParams,
-        project: Option<String>,
-    ) -> Result<DedupOutcome> {
-        let unit = MemoryUnit {
-            text: text.to_string(),
-            created_at: chrono::Utc::now(),
-            source: "memory".to_string(),
-            source_session: "manual".to_string(),
-            source_turn: 0,
-            category: params.category.clone(),
+        let MemoryWriteParams {
+            content,
+            category,
             project,
-            seen_in_sessions: vec!["manual".to_string()],
-        };
-        upsert_with_dedup(client, &self.embedder, unit).await
+        } = params;
+        log(&format!(
+            "memory_write disabled; content_bytes={}, category={:?}, project={:?}",
+            content.len(),
+            category,
+            project
+        ));
+        Ok(manual_memory_write_guidance().to_string())
     }
 
     async fn do_memory_list(&self, params: MemoryListParams) -> Result<String> {
@@ -364,21 +318,6 @@ impl MemoryService {
             .await?;
         log_scores("raw", &points);
         Ok(points)
-    }
-}
-
-fn format_write_result(indexed: u32, merged: u32) -> String {
-    match (indexed, merged) {
-        (0, 0) => "Memory stored (no chunks indexed)".to_string(),
-        (i, 0) => format!(
-            "Memory stored and indexed ({i} chunk{})",
-            if i == 1 { "" } else { "s" }
-        ),
-        (0, m) => format!(
-            "Memory stored and merged with {m} existing entry{}",
-            if m == 1 { "" } else { "ies" }
-        ),
-        (i, m) => format!("Memory stored ({i} indexed, {m} merged)"),
     }
 }
 
@@ -512,13 +451,34 @@ fn format_entry(i: usize, category: &str, project: &str, text: &str) -> String {
     entry
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mcp_memory_write_returns_guidance_without_storage() {
+        let service = MemoryService::new();
+        let response = service
+            .do_memory_write(MemoryWriteParams {
+                content: "Remember this project-local detail.".to_string(),
+                category: Some("context".to_string()),
+                project: Some("claude-memory".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(response.contains("Manual memory writes are disabled"));
+        assert!(response.contains("Do not store this in Qdrant"));
+        assert!(response.contains("docs/local/memory.md"));
+    }
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MemoryService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Claude memory MCP server - store and search semantic memories across sessions"
-                    .into(),
+                "Claude memory MCP server - search semantic memories across sessions; manual memory_write storage is disabled and returns docs/local guidance".into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()

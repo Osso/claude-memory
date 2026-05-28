@@ -53,8 +53,8 @@ After extracting a candidate, classify its scope:
   convention, a local config choice, a per-repo architectural decision.
 
 Automatic extraction stores global memories as `project = None` and local memories as
-`project = <cwd-slug>`. Manual writes must pass an explicit project scope; use
-`__global__` when the memory should be stored globally. Enrich only surfaces
+`project = <cwd-slug>`. Manual project memories are not written to Qdrant; store
+them as editable Markdown in `docs/local/memory.md`. Enrich only surfaces
 project-local memories when running in that project.
 
 ## Adaptation Notes

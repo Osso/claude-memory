@@ -32,7 +32,7 @@ Claude Code ──MCP──► claude-memory-mcp ──► Qdrant (vectors + BM2
 | Active sessions | `~/.claude/projects/**/sessions/*.jsonl` | Current project conversations |
 | Project summaries | `~/.claude/projects/**/summary.md` | Project summary files |
 | Knowledge base | `/syncthing/Sync/KB/**/*.md` | Markdown knowledge base |
-| Manual memories | via MCP `memory_write` | Explicitly recorded learnings |
+| Local project memories | `docs/local/` in each project | Explicitly recorded project-local context |
 
 ## Setup
 
@@ -144,7 +144,7 @@ The MCP server exposes four tools:
 
 | Tool | Description |
 |------|-------------|
-| `memory_write` | Store a memory with optional category and required project scope (`__global__` for global memories) |
+| `memory_write` | Disabled for storage; returns guidance to write project memories under `docs/local/` |
 | `prompt_search` | Search prompts, questions, and legacy KB vector chunks |
 | `answer_search` | Search assistant responses and solutions |
 | `memory_list` | List all memories matching category/project filters |
