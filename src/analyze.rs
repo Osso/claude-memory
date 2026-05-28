@@ -12,6 +12,7 @@ use crate::extract::Turn;
 use crate::extract::read_session_turns;
 use crate::llm;
 use crate::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
+use crate::notable_fact::{NotableFactIngestSummary, ingest_session_notable_facts};
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,11 @@ pub struct JudgeResult {
 }
 
 pub enum AnalysisOutcome {
+    NotableFacts {
+        facts: usize,
+        inserted: usize,
+        merged: usize,
+    },
     NoFriction {
         turn: u32,
     },
@@ -323,6 +329,7 @@ struct AnalysisSession {
     turns: Vec<Turn>,
     session_id: String,
     source: String,
+    project_slug: Option<String>,
     client: Qdrant,
     embedder: Embedder,
 }
@@ -335,7 +342,42 @@ enum CandidateAttempt {
 
 pub async fn analyze_session(session_path: &Path) -> Result<Vec<AnalysisOutcome>> {
     let session = load_analysis_session(session_path).await?;
-    collect_user_turn_outcomes(&session).await
+    let mut outcomes = collect_session_notable_fact_outcomes(&session).await?;
+    outcomes.extend(collect_user_turn_outcomes(&session).await?);
+    Ok(outcomes)
+}
+
+async fn collect_session_notable_fact_outcomes(
+    session: &AnalysisSession,
+) -> Result<Vec<AnalysisOutcome>> {
+    let summary = ingest_session_notable_facts(
+        &session.client,
+        &session.embedder,
+        &session.turns,
+        &session.source,
+        &session.session_id,
+        session.project_slug.as_deref(),
+    )
+    .await
+    .context("notable fact ingestion failed")?;
+
+    if summary.facts == 0 {
+        return Ok(Vec::new());
+    }
+
+    eprintln!(
+        "  notable facts: {} (inserted {}, merged {})",
+        summary.facts, summary.inserted, summary.merged
+    );
+    Ok(vec![notable_fact_outcome(summary)])
+}
+
+fn notable_fact_outcome(summary: NotableFactIngestSummary) -> AnalysisOutcome {
+    AnalysisOutcome::NotableFacts {
+        facts: summary.facts,
+        inserted: summary.inserted,
+        merged: summary.merged,
+    }
 }
 
 async fn collect_user_turn_outcomes(session: &AnalysisSession) -> Result<Vec<AnalysisOutcome>> {
@@ -357,17 +399,20 @@ async fn load_analysis_session(session_path: &Path) -> Result<AnalysisSession> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
     let source = memory_unit_source_from_path(session_path).to_string();
+    let project_slug = project_slug_from_session_path(session_path);
 
     let client = Qdrant::from_url(crate::index::QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
     crate::memory_unit::ensure_memory_units_collection(&client).await?;
+    crate::notable_fact::ensure_notable_facts_collection(&client).await?;
     let embedder = Embedder::new();
 
     Ok(AnalysisSession {
         turns,
         session_id,
         source,
+        project_slug,
         client,
         embedder,
     })
@@ -576,6 +621,46 @@ fn memory_unit_source_from_path(session_path: &Path) -> &'static str {
     }
 }
 
+fn project_slug_from_session_path(session_path: &Path) -> Option<String> {
+    if session_path.to_string_lossy().ends_with(".jsonl.zst") {
+        return archive_project_slug(session_path);
+    }
+
+    session_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|name| slugify_project_component(&name.to_string_lossy()))
+        .filter(|slug| !slug.is_empty())
+}
+
+fn archive_project_slug(session_path: &Path) -> Option<String> {
+    let file_name = session_path.file_name()?.to_string_lossy();
+    let prefix = file_name.strip_suffix(".jsonl.zst").unwrap_or(&file_name);
+    let project = prefix.rsplit_once('_').map(|(project, _)| project)?;
+    let slug = slugify_project_component(project);
+    if slug.is_empty() { None } else { Some(slug) }
+}
+
+fn slugify_project_component(component: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+
+    for ch in component.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+            continue;
+        }
+
+        if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+
+    slug.trim_matches('-').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +678,30 @@ mod tests {
         assert_eq!(
             memory_unit_source_from_path(Path::new("/tmp/session.jsonl.zst")),
             "archive"
+        );
+    }
+
+    #[test]
+    fn project_slug_uses_live_session_parent_dir() {
+        let path = Path::new(
+            "/home/osso/.claude/projects/-syncthing-Sync-Projects-claude-memory/session.jsonl",
+        );
+
+        assert_eq!(
+            project_slug_from_session_path(path).as_deref(),
+            Some("syncthing-sync-projects-claude-memory")
+        );
+    }
+
+    #[test]
+    fn project_slug_uses_archive_prefix_before_session_id() {
+        let path = Path::new(
+            "/home/osso/.claude/archive/-home-osso-Projects-claude-memory_abc123.jsonl.zst",
+        );
+
+        assert_eq!(
+            project_slug_from_session_path(path).as_deref(),
+            Some("home-osso-projects-claude-memory")
         );
     }
 }

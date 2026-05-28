@@ -527,43 +527,72 @@ async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
 }
 
 async fn run_analyze(session_jsonl: &Path) -> Result<()> {
-    use analyze::AnalysisOutcome;
-
     println!("Analyzing: {}", session_jsonl.display());
     let outcomes = analyze::analyze_session(session_jsonl).await?;
-
-    let mut no_friction = 0usize;
-    let mut discarded = 0usize;
-    let mut stored = 0usize;
-
-    for outcome in &outcomes {
-        match outcome {
-            AnalysisOutcome::NoFriction { .. } => {
-                no_friction += 1;
-            }
-            AnalysisOutcome::Discarded { turn, reason } => {
-                discarded += 1;
-                println!("[turn {turn}] DISCARDED: {reason}");
-            }
-            AnalysisOutcome::Stored {
-                turn,
-                unit,
-                deduped,
-            } => {
-                stored += 1;
-                let dedup_label = if *deduped {
-                    " (merged with existing)"
-                } else {
-                    ""
-                };
-                println!("[turn {turn}] STORED{dedup_label}: {}", unit.text);
-            }
-        }
-    }
+    let counts = print_analysis_outcomes(&outcomes);
 
     println!(
-        "\nDone. Turns analysed: {}  |  no-friction: {no_friction}  |  discarded: {discarded}  |  stored: {stored}",
-        outcomes.len()
+        "\nDone. Outcomes: {}  |  notable-facts: {}  |  no-friction: {}  |  discarded: {}  |  stored: {}",
+        outcomes.len(),
+        counts.notable_facts,
+        counts.no_friction,
+        counts.discarded,
+        counts.stored
     );
     Ok(())
+}
+
+struct AnalysisCounts {
+    no_friction: usize,
+    discarded: usize,
+    stored: usize,
+    notable_facts: usize,
+}
+
+fn print_analysis_outcomes(outcomes: &[analyze::AnalysisOutcome]) -> AnalysisCounts {
+    let mut counts = AnalysisCounts {
+        no_friction: 0,
+        discarded: 0,
+        stored: 0,
+        notable_facts: 0,
+    };
+
+    for outcome in outcomes {
+        update_analysis_counts(&mut counts, outcome);
+    }
+
+    counts
+}
+
+fn update_analysis_counts(counts: &mut AnalysisCounts, outcome: &analyze::AnalysisOutcome) {
+    use analyze::AnalysisOutcome;
+
+    match outcome {
+        AnalysisOutcome::NotableFacts {
+            facts,
+            inserted,
+            merged,
+        } => {
+            counts.notable_facts += facts;
+            println!("NOTABLE FACTS: {facts} extracted ({inserted} inserted, {merged} merged)");
+        }
+        AnalysisOutcome::NoFriction { .. } => counts.no_friction += 1,
+        AnalysisOutcome::Discarded { turn, reason } => {
+            counts.discarded += 1;
+            println!("[turn {turn}] DISCARDED: {reason}");
+        }
+        AnalysisOutcome::Stored {
+            turn,
+            unit,
+            deduped,
+        } => {
+            counts.stored += 1;
+            let dedup_label = if *deduped {
+                " (merged with existing)"
+            } else {
+                ""
+            };
+            println!("[turn {turn}] STORED{dedup_label}: {}", unit.text);
+        }
+    }
 }

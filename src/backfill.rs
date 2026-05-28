@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -18,6 +18,29 @@ const ACTIVE_SKEW_SECS: u64 = 300;
 /// per session would dominate wall-clock time.
 const MAX_USER_TURNS: usize = 100;
 
+#[derive(Default)]
+struct BackfillTotals {
+    analyzed: usize,
+    stored: usize,
+    discarded: usize,
+    skipped_short: usize,
+    skipped_active: usize,
+}
+
+struct SessionStats {
+    notable_facts: usize,
+    stored: usize,
+    discarded: usize,
+    outcomes: usize,
+}
+
+enum SessionStep {
+    Analyzed(SessionStats),
+    SkippedShort,
+    SkippedActive,
+    Ignored,
+}
+
 pub async fn run_backfill(
     projects_dir: &Path,
     archive_dir: Option<&Path>,
@@ -26,8 +49,51 @@ pub async fn run_backfill(
     max_sessions: Option<usize>,
 ) -> Result<()> {
     let processed = load_processed(state_file)?;
+    let sessions = collect_all_sessions(projects_dir, archive_dir);
+    eprintln!("Already processed: {}", processed.len());
+
+    let mut state = open_state_file(state_file)?;
+    let pending = sessions.len() - processed.len();
+    let mut totals = BackfillTotals::default();
+
+    for path in &sessions {
+        let display_index = totals.analyzed + 1;
+        update_backfill_totals(
+            &mut totals,
+            process_session(
+                path,
+                &processed,
+                &mut state,
+                min_user_turns,
+                pending,
+                display_index,
+            )
+            .await?,
+        );
+
+        if let Some(max) = max_sessions
+            && totals.analyzed >= max
+        {
+            eprintln!("\nReached max_sessions={max}");
+            break;
+        }
+    }
+
+    eprintln!(
+        "\nBackfill done. Sessions analysed: {} | stored: {} | discarded: {} | skipped (too short): {} | skipped (active): {}",
+        totals.analyzed,
+        totals.stored,
+        totals.discarded,
+        totals.skipped_short,
+        totals.skipped_active
+    );
+    Ok(())
+}
+
+fn collect_all_sessions(projects_dir: &Path, archive_dir: Option<&Path>) -> Vec<PathBuf> {
     let mut sessions = collect_sessions(projects_dir);
     let live_count = sessions.len();
+
     if let Some(adir) = archive_dir {
         let archive_sessions = collect_archive_sessions(adir);
         eprintln!(
@@ -45,108 +111,176 @@ pub async fn run_backfill(
             projects_dir.display()
         );
     }
-    eprintln!("Already processed: {}", processed.len());
 
+    sessions
+}
+
+fn open_state_file(state_file: &Path) -> Result<File> {
     if let Some(parent) = state_file.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let mut state = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .append(true)
         .open(state_file)
-        .with_context(|| format!("failed to open state file {}", state_file.display()))?;
+        .with_context(|| format!("failed to open state file {}", state_file.display()))
+}
 
-    let pending = sessions.len() - processed.len();
-    let mut count = 0usize;
-    let mut total_stored = 0usize;
-    let mut total_discarded = 0usize;
-    let mut skipped_short = 0usize;
-    let mut skipped_active = 0usize;
+async fn process_session(
+    path: &Path,
+    processed: &HashSet<String>,
+    state: &mut File,
+    min_user_turns: usize,
+    pending: usize,
+    display_index: usize,
+) -> Result<SessionStep> {
+    let Some(session_id) = session_id_from_path(path) else {
+        return Ok(SessionStep::Ignored);
+    };
+    if processed.contains(&session_id) {
+        return Ok(SessionStep::Ignored);
+    }
+    if is_likely_active(path) {
+        eprintln!("  [{session_id}] skipping: recently modified (likely active)");
+        return Ok(SessionStep::SkippedActive);
+    }
 
-    for path in &sessions {
-        let Some(session_id) = session_id_from_path(path) else {
-            continue;
-        };
-        if processed.contains(&session_id) {
-            continue;
-        }
-
-        if is_likely_active(path) {
-            skipped_active += 1;
-            eprintln!("  [{session_id}] skipping: recently modified (likely active)");
-            continue;
-        }
-
-        let user_turn_count = match read_session_turns(path) {
-            Ok(turns) => turns
-                .iter()
-                .filter(|t| matches!(t.role, Role::User))
-                .count(),
-            Err(e) => {
-                eprintln!("  [{session_id}] read error: {e}");
-                writeln!(state, "{session_id} read_error")?;
-                continue;
-            }
-        };
-
-        if user_turn_count < min_user_turns {
-            skipped_short += 1;
-            writeln!(state, "{session_id} short turns={user_turn_count}")?;
-            continue;
-        }
-        if user_turn_count > MAX_USER_TURNS {
-            eprintln!(
-                "  [{session_id}] skipping: too long ({user_turn_count} user turns > {MAX_USER_TURNS})"
-            );
-            writeln!(state, "{session_id} too_long turns={user_turn_count}")?;
-            continue;
-        }
-
-        count += 1;
-        eprintln!(
-            "\n[{}/{}] {} ({} user turns)",
-            count, pending, session_id, user_turn_count
-        );
-
-        match analyze_session(path).await {
-            Ok(outcomes) => {
-                let stored = outcomes
-                    .iter()
-                    .filter(|o| matches!(o, AnalysisOutcome::Stored { .. }))
-                    .count();
-                let discarded = outcomes
-                    .iter()
-                    .filter(|o| matches!(o, AnalysisOutcome::Discarded { .. }))
-                    .count();
-                total_stored += stored;
-                total_discarded += discarded;
-                writeln!(
-                    state,
-                    "{session_id} ok stored={stored} discarded={discarded} turns={}",
-                    outcomes.len()
-                )?;
-                state.flush().ok();
-                eprintln!("  → stored: {stored}, discarded: {discarded}");
-            }
-            Err(e) => {
-                eprintln!("  error: {e}");
-                writeln!(state, "{session_id} error {e}")?;
-                state.flush().ok();
-            }
-        }
-
-        if let Some(max) = max_sessions
-            && count >= max
-        {
-            eprintln!("\nReached max_sessions={max}");
-            break;
-        }
+    let Some(user_turn_count) = count_user_turns(path, state, &session_id)? else {
+        return Ok(SessionStep::Ignored);
+    };
+    if should_skip_short_session(user_turn_count, min_user_turns, state, &session_id)? {
+        return Ok(SessionStep::SkippedShort);
+    }
+    if should_skip_long_session(user_turn_count, state, &session_id)? {
+        return Ok(SessionStep::Ignored);
     }
 
     eprintln!(
-        "\nBackfill done. Sessions analysed: {count} | stored: {total_stored} | discarded: {total_discarded} | skipped (too short): {skipped_short} | skipped (active): {skipped_active}"
+        "\n[{}/{}] {} ({} user turns)",
+        display_index, pending, session_id, user_turn_count
     );
-    Ok(())
+    analyze_and_record_session(path, state, &session_id).await
+}
+
+fn count_user_turns(path: &Path, state: &mut File, session_id: &str) -> Result<Option<usize>> {
+    match read_session_turns(path) {
+        Ok(turns) => Ok(Some(
+            turns
+                .iter()
+                .filter(|turn| matches!(turn.role, Role::User))
+                .count(),
+        )),
+        Err(error) => {
+            eprintln!("  [{session_id}] read error: {error}");
+            writeln!(state, "{session_id} read_error")?;
+            Ok(None)
+        }
+    }
+}
+
+fn should_skip_short_session(
+    user_turn_count: usize,
+    min_user_turns: usize,
+    state: &mut File,
+    session_id: &str,
+) -> Result<bool> {
+    if user_turn_count >= min_user_turns {
+        return Ok(false);
+    }
+
+    writeln!(state, "{session_id} short turns={user_turn_count}")?;
+    Ok(true)
+}
+
+fn should_skip_long_session(
+    user_turn_count: usize,
+    state: &mut File,
+    session_id: &str,
+) -> Result<bool> {
+    if user_turn_count <= MAX_USER_TURNS {
+        return Ok(false);
+    }
+
+    eprintln!(
+        "  [{session_id}] skipping: too long ({user_turn_count} user turns > {MAX_USER_TURNS})"
+    );
+    writeln!(state, "{session_id} too_long turns={user_turn_count}")?;
+    Ok(true)
+}
+
+async fn analyze_and_record_session(
+    path: &Path,
+    state: &mut File,
+    session_id: &str,
+) -> Result<SessionStep> {
+    match analyze_session(path).await {
+        Ok(outcomes) => {
+            let stats = session_stats(&outcomes);
+            writeln!(
+                state,
+                "{session_id} ok facts={} stored={} discarded={} turns={}",
+                stats.notable_facts, stats.stored, stats.discarded, stats.outcomes
+            )?;
+            state.flush().ok();
+            eprintln!(
+                "  → notable facts: {}, stored: {}, discarded: {}",
+                stats.notable_facts, stats.stored, stats.discarded
+            );
+            Ok(SessionStep::Analyzed(stats))
+        }
+        Err(error) => {
+            eprintln!("  error: {error}");
+            writeln!(state, "{session_id} error {error}")?;
+            state.flush().ok();
+            Ok(SessionStep::Ignored)
+        }
+    }
+}
+
+fn session_stats(outcomes: &[AnalysisOutcome]) -> SessionStats {
+    SessionStats {
+        notable_facts: notable_fact_count(outcomes),
+        stored: stored_count(outcomes),
+        discarded: discarded_count(outcomes),
+        outcomes: outcomes.len(),
+    }
+}
+
+fn notable_fact_count(outcomes: &[AnalysisOutcome]) -> usize {
+    outcomes
+        .iter()
+        .map(|outcome| match outcome {
+            AnalysisOutcome::NotableFacts { facts, .. } => *facts,
+            _ => 0,
+        })
+        .sum()
+}
+
+fn stored_count(outcomes: &[AnalysisOutcome]) -> usize {
+    outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, AnalysisOutcome::Stored { .. }))
+        .count()
+}
+
+fn discarded_count(outcomes: &[AnalysisOutcome]) -> usize {
+    outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, AnalysisOutcome::Discarded { .. }))
+        .count()
+}
+
+fn update_backfill_totals(totals: &mut BackfillTotals, step: SessionStep) {
+    match step {
+        SessionStep::Analyzed(stats) => {
+            totals.analyzed += 1;
+            totals.stored += stats.stored;
+            totals.discarded += stats.discarded;
+        }
+        SessionStep::SkippedShort => totals.skipped_short += 1,
+        SessionStep::SkippedActive => totals.skipped_active += 1,
+        SessionStep::Ignored => {}
+    }
 }
 
 fn is_likely_active(path: &Path) -> bool {
