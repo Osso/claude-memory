@@ -52,8 +52,10 @@ After extracting a candidate, classify its scope:
 - **Project-local**: a fact about a specific project — a schema detail, a naming
   convention, a local config choice, a per-repo architectural decision.
 
-Set `project = None` for global memories. Set `project = <cwd-slug>` for local ones.
-Enrich only surfaces project-local memories when running in that project.
+Automatic extraction stores global memories as `project = None` and local memories as
+`project = <cwd-slug>`. Manual writes must pass an explicit project scope; use
+`__global__` when the memory should be stored globally. Enrich only surfaces
+project-local memories when running in that project.
 
 ## Adaptation Notes
 

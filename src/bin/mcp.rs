@@ -7,7 +7,9 @@ use claude_memory::daily::{append_daily, append_kb_memory};
 use claude_memory::embed::Embedder;
 use claude_memory::graph;
 use claude_memory::llm::{self, RawResult};
-use claude_memory::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
+use claude_memory::memory_unit::{
+    DedupOutcome, MemoryUnit, normalize_manual_project_scope, upsert_with_dedup,
+};
 use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
@@ -140,8 +142,10 @@ pub struct MemoryWriteParams {
     content: String,
     #[schemars(description = "Category: correction, preference, context, learning, decision")]
     category: Option<String>,
-    #[schemars(description = "Project name if this memory is project-specific")]
-    project: Option<String>,
+    #[schemars(
+        description = "Required project slug, or __global__ for memories that apply everywhere"
+    )]
+    project: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -229,15 +233,16 @@ impl MemoryService {
 
 impl MemoryService {
     async fn do_memory_write(&self, params: MemoryWriteParams) -> Result<String> {
+        let project = normalize_manual_project_scope(&params.project)?;
         append_daily(
             &params.content,
             params.category.as_deref(),
-            params.project.as_deref(),
+            project.as_deref(),
         )?;
         if let Err(e) = append_kb_memory(
             &params.content,
             params.category.as_deref(),
-            params.project.as_deref(),
+            project.as_deref(),
         ) {
             log(&format!("KB memory write failed (non-fatal): {e}"));
         }
@@ -248,7 +253,10 @@ impl MemoryService {
         let client = get_qdrant().await?;
         let (mut indexed, mut merged) = (0u32, 0u32);
         for chunk in &chunks {
-            match self.store_memory_unit(client, &chunk.text, &params).await {
+            match self
+                .store_memory_unit(client, &chunk.text, &params, project.clone())
+                .await
+            {
                 Ok(DedupOutcome::Inserted(_)) => indexed += 1,
                 Ok(DedupOutcome::Merged(_)) => merged += 1,
                 Err(e) => log(&format!("memory_write chunk error: {e}")),
@@ -266,6 +274,7 @@ impl MemoryService {
         client: &Qdrant,
         text: &str,
         params: &MemoryWriteParams,
+        project: Option<String>,
     ) -> Result<DedupOutcome> {
         let unit = MemoryUnit {
             text: text.to_string(),
@@ -274,7 +283,7 @@ impl MemoryService {
             source_session: "manual".to_string(),
             source_turn: 0,
             category: params.category.clone(),
-            project: params.project.clone(),
+            project,
             seen_in_sessions: vec!["manual".to_string()],
         };
         upsert_with_dedup(client, &self.embedder, unit).await

@@ -173,6 +173,10 @@ enum Command {
 
     /// Manually write a memory unit (alternative to the MCP memory_write tool)
     MemoryWrite {
+        /// Project slug, or __global__ for memories that should apply everywhere
+        #[arg(long)]
+        project: String,
+
         /// Memory text (1-3 sentences, encyclopedia-style)
         text: String,
     },
@@ -262,7 +266,7 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Stats => index::show_stats().await,
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
         Command::MemoryDelete { id } => run_memory_delete(id).await,
-        Command::MemoryWrite { text } => run_memory_write(text).await,
+        Command::MemoryWrite { text, project } => run_memory_write(text, project).await,
         Command::Backfill {
             projects,
             archive,
@@ -427,16 +431,19 @@ async fn run_memory_delete(id: u64) -> Result<()> {
     Ok(())
 }
 
-async fn run_memory_write(text: String) -> Result<()> {
+async fn run_memory_write(text: String, project: String) -> Result<()> {
     use chrono::Utc;
     use claude_memory::embed::Embedder;
-    use claude_memory::memory_unit::{DedupOutcome, MemoryUnit, upsert_with_dedup};
+    use claude_memory::memory_unit::{
+        DedupOutcome, MemoryUnit, normalize_manual_project_scope, upsert_with_dedup,
+    };
     use qdrant_client::Qdrant;
 
     let trimmed = text.trim();
     if trimmed.is_empty() {
         anyhow::bail!("memory text is empty");
     }
+    let project = normalize_manual_project_scope(&project)?;
     let client = Qdrant::from_url(claude_memory::index::QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
@@ -449,7 +456,7 @@ async fn run_memory_write(text: String) -> Result<()> {
         source_session: "manual".to_string(),
         source_turn: 0,
         category: None,
-        project: None,
+        project,
         seen_in_sessions: vec!["manual".to_string()],
     };
     match upsert_with_dedup(&client, &embedder, unit).await? {

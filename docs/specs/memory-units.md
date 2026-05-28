@@ -6,7 +6,7 @@ Memory units are compact, durable preloads stored separately from raw prompt and
 
 - [x] Carry a source vocabulary field for each memory unit.
 - [ ] Store memory units in a dedicated collection separate from prompt and answer history.
-- [ ] Store memory text, creation time, source, source session, source turn, optional category, optional project, and seen-in-sessions metadata.
+- [ ] Store memory text, creation time, source, source session, source turn, optional category, project scope, and seen-in-sessions metadata.
 - [ ] Use the same hybrid vector format as other searchable collections.
 - [ ] Deduplicate similar memory units at write time.
 - [ ] Merge duplicate sightings by appending to `seen_in_sessions` instead of inserting another point.
@@ -16,7 +16,8 @@ Memory units are compact, durable preloads stored separately from raw prompt and
 - [ ] MCP `memory_write` writes manual memories into memory units, not prompt history.
 - [ ] CLI `memory-write` writes manual memories into memory units.
 - [ ] Manual memories use source `memory`, source session `manual`, and source turn `0`.
-- [ ] Manual memory writes accept optional category and project metadata through MCP.
+- [ ] Manual memory writes accept optional category metadata and require explicit project scope through MCP and CLI.
+- [ ] Manual memory writes use `__global__` as the explicit sentinel for global memories.
 - [ ] Empty manual memory text is rejected.
 
 ### Listing, filtering, and deletion
@@ -55,8 +56,12 @@ Memory units are compact, durable preloads stored separately from raw prompt and
   - `memory_unit_has_existing_source_vocabulary_field`
   - `stored_memory_reads_source_from_payload`
   - `search_result_uses_payload_source`
+  - `global_project_scope_normalizes_to_unscoped_memory`
+  - `blank_project_scope_is_rejected`
   - `manual_memory_filter_matches_category_and_project`
 - `src/main_tests.rs`
+  - `memory_write_requires_project_scope`
+  - `memory_write_accepts_explicit_project_scope`
   - `memory_search_uses_semantic_query_when_enabled`
   - `memory_search_falls_back_to_substring_when_disabled`
 

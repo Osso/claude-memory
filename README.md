@@ -144,7 +144,7 @@ The MCP server exposes four tools:
 
 | Tool | Description |
 |------|-------------|
-| `memory_write` | Store a memory with optional category and project |
+| `memory_write` | Store a memory with optional category and required project scope (`__global__` for global memories) |
 | `prompt_search` | Search prompts, questions, and legacy KB vector chunks |
 | `answer_search` | Search assistant responses and solutions |
 | `memory_list` | List all memories matching category/project filters |

@@ -17,6 +17,7 @@ use crate::index::{QDRANT_URL, SearchResult};
 use crate::qdrant_hybrid::ensure_hybrid_collection;
 
 pub const COLLECTION_MEMORY_UNITS: &str = "claude-memory-units";
+pub const GLOBAL_PROJECT_SCOPE: &str = "__global__";
 
 const DEDUP_THRESHOLD: f32 = 0.85;
 const DEDUP_TOP_K: u64 = 5;
@@ -31,6 +32,20 @@ pub struct MemoryUnit {
     pub category: Option<String>,
     pub project: Option<String>,
     pub seen_in_sessions: Vec<String>,
+}
+
+pub fn normalize_manual_project_scope(project: &str) -> Result<Option<String>> {
+    let project = project.trim();
+    if project.is_empty() {
+        anyhow::bail!(
+            "project is required; pass a project slug or {GLOBAL_PROJECT_SCOPE} for global memories"
+        );
+    }
+    if project == GLOBAL_PROJECT_SCOPE {
+        return Ok(None);
+    }
+
+    Ok(Some(project.to_string()))
 }
 
 #[derive(Debug)]
@@ -463,6 +478,20 @@ mod tests {
 
         assert_eq!(result.source, "session");
         assert_eq!(result.path, "session.jsonl");
+    }
+
+    #[test]
+    fn global_project_scope_normalizes_to_unscoped_memory() {
+        let project = normalize_manual_project_scope("__global__").unwrap();
+
+        assert_eq!(project, None);
+    }
+
+    #[test]
+    fn blank_project_scope_is_rejected() {
+        let error = normalize_manual_project_scope("   ").unwrap_err();
+
+        assert!(error.to_string().contains("project is required"));
     }
 
     #[test]
