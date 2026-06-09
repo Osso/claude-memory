@@ -43,7 +43,7 @@ No systemd service — the MCP server runs as a stdio child process of Claude Co
 ## Dependencies
 
 Requires running services:
-- Qdrant: `docker run -p 6334:6334 qdrant/qdrant`
+- Qdrant: `authsudo arch install /syncthing/Sync/Projects/system/arch-pkgbuilds/qdrant-bin` then `authsudo systemctl enable --now qdrant.service`
 - Ollama: `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
   ```bash
   echo -e 'FROM qwen3-embedding:0.6b\nPARAMETER num_ctx 2048' | ollama create qwen3-embedding:0.6b-ctx2048 -f -

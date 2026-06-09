@@ -40,8 +40,10 @@ Claude Code ──MCP──► claude-memory-mcp ──► Qdrant (vectors + BM2
 
 1. **Qdrant** (localhost:6334):
    ```bash
-   docker run -p 6334:6334 qdrant/qdrant
+   authsudo arch install /syncthing/Sync/Projects/system/arch-pkgbuilds/qdrant-bin
+   authsudo systemctl enable --now qdrant.service
    ```
+   The local package installs Qdrant as a host systemd service bound to localhost.
 
 2. **Ollama** (localhost:11434):
    ```bash
