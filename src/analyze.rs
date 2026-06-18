@@ -254,66 +254,40 @@ pub async fn extract_candidate(
     Ok(parsed.preload.filter(|s| !s.trim().is_empty()))
 }
 
-// ── T3c: Replay simulator ─────────────────────────────────────────────────────
+// ── T3c: Preload judge ──────────────────────────────────────────────────────────
 
-const REPLAY_SYSTEM_PREFIX: &str = "\
-You are an assistant answering a user. The preload below is established background knowledge — \
-treat it as ground truth and apply it directly. Do not ask the user clarifying questions; \
-do not say you need to investigate. Use the preload to give a substantive answer or take \
-the action it enables. If the user prompt is ambiguous, pick the most likely interpretation \
-and proceed.\n\nPreload:\n";
-
-pub async fn replay_with_preload(preload: &str, original_user_prompt: &str) -> Result<String> {
-    let system = format!("{REPLAY_SYSTEM_PREFIX}{preload}");
-    llm::complete(&system, original_user_prompt, 500, 180)
-        .await
-        .context("replay LLM call failed")
-}
-
-// ── T3d: Dual judge ───────────────────────────────────────────────────────────
-
-const CORRECTNESS_SYSTEM: &str = "\
-You judge whether a simulated single-turn response is consistent with how a real multi-turn \
-session resolved. The simulated response was produced from a preload alone, with no tool access \
-and no conversation history; the eventual resolution emerged from many turns and tool calls.\n\n\
-PASS if the simulated response conveys information that is consistent with — and would lead toward — \
-the eventual resolution. Different stylistic framings, partial answers, or stating the relevant fact \
-without taking an action all PASS as long as nothing said is wrong.\n\n\
-FAIL only if the simulated response asserts a fact that contradicts the resolution, takes a wrong \
-direction the resolution explicitly rejected, or is empty/refuses entirely (e.g. 'I don't know').\n\n\
-Asking a clarifying question is NOT automatic failure if the preload's content is reflected in the question. \
-Stylistic divergence is fine.\n\n\
+// Single-pass judge: the model internally simulates a preload-only answer and grades it
+// against the eventual resolution in one call, replacing the former replay + judge pair.
+const PRELOAD_JUDGE_SYSTEM: &str = "\
+You judge whether a preload (established background knowledge) would have let a fresh assistant \
+answer a user prompt well enough to match how the real session eventually resolved.\n\n\
+First, internally simulate the answer a fresh assistant would give to the user prompt using ONLY \
+the preload as ground truth — no tool access, no conversation history — applying the preload \
+directly rather than proposing investigation. Then judge that simulated answer against the \
+eventual resolution.\n\n\
+PASS if the simulated answer conveys information consistent with — and that would lead toward — \
+the eventual resolution. Different stylistic framings, partial answers, or stating the relevant \
+fact without taking an action all PASS as long as nothing said is wrong. Asking a clarifying \
+question is NOT automatic failure if the preload's content is reflected in it.\n\n\
+FAIL if the simulated answer would assert a fact that contradicts the resolution, take a wrong \
+direction the resolution explicitly rejected, refuse or be empty (e.g. 'I don't know'), or if the \
+preload is too vague to produce a substantive answer.\n\n\
 Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 40 words.";
 
-const EFFICIENCY_SYSTEM: &str = "\
-You are a judge evaluating whether a simulated assistant response uses a given preload. \
-The simulated response should cite, build on, or apply the preload directly. \
-Fail if the response ignores the preload and proposes exploration (file reads, greps, searches). \
-Respond ONLY with JSON: {\"passed\": bool, \"reason\": \"...\"}. Keep reason under 30 words.";
-
-pub async fn judge_correctness(simulated: &str, eventual_resolution: &str) -> Result<JudgeResult> {
-    let user_msg =
-        format!("Simulated response:\n{simulated}\n\nEventual resolution:\n{eventual_resolution}");
-    let raw = llm::complete(CORRECTNESS_SYSTEM, &user_msg, 200, 90)
+pub async fn judge_candidate(
+    preload: &str,
+    original_user_prompt: &str,
+    eventual_resolution: &str,
+) -> Result<JudgeResult> {
+    let user_msg = format!(
+        "Preload:\n{preload}\n\nUser prompt:\n{original_user_prompt}\n\nEventual resolution:\n{eventual_resolution}"
+    );
+    let raw = llm::complete(PRELOAD_JUDGE_SYSTEM, &user_msg, 200, 120)
         .await
-        .context("correctness judge LLM call failed")?;
+        .context("preload judge LLM call failed")?;
     let json_str = extract_json(&raw);
     let parsed: JudgeJson = serde_json::from_str(json_str)
-        .with_context(|| format!("correctness judge JSON parse failed | raw: {raw}"))?;
-    Ok(JudgeResult {
-        passed: parsed.passed,
-        reason: parsed.reason,
-    })
-}
-
-pub async fn judge_efficiency(simulated: &str, preload: &str) -> Result<JudgeResult> {
-    let user_msg = format!("Preload:\n{preload}\n\nSimulated response:\n{simulated}");
-    let raw = llm::complete(EFFICIENCY_SYSTEM, &user_msg, 200, 90)
-        .await
-        .context("efficiency judge LLM call failed")?;
-    let json_str = extract_json(&raw);
-    let parsed: JudgeJson = serde_json::from_str(json_str)
-        .with_context(|| format!("efficiency judge JSON parse failed | raw: {raw}"))?;
+        .with_context(|| format!("preload judge JSON parse failed | raw: {raw}"))?;
     Ok(JudgeResult {
         passed: parsed.passed,
         reason: parsed.reason,
@@ -513,8 +487,9 @@ async fn validate_candidate_attempt(
     };
 
     log_candidate_attempt(turn_index, attempt, &candidate);
-    let simulated = replay_candidate(turn_index, &candidate, &turn.text).await?;
-    let correctness = check_candidate_correctness(turn_index, &simulated, resolution).await?;
+    let correctness = judge_candidate(&candidate, &turn.text, resolution)
+        .await
+        .with_context(|| format!("judge_candidate failed at turn {turn_index}"))?;
 
     if correctness.passed {
         return Ok(CandidateAttempt::Stored(
@@ -527,22 +502,6 @@ async fn validate_candidate_attempt(
         attempt,
         correctness,
     ))
-}
-
-async fn replay_candidate(turn_index: u32, candidate: &str, prompt: &str) -> Result<String> {
-    replay_with_preload(candidate, prompt)
-        .await
-        .with_context(|| format!("replay_with_preload failed at turn {turn_index}"))
-}
-
-async fn check_candidate_correctness(
-    turn_index: u32,
-    simulated: &str,
-    resolution: &str,
-) -> Result<JudgeResult> {
-    judge_correctness(simulated, resolution)
-        .await
-        .with_context(|| format!("judge_correctness failed at turn {turn_index}"))
 }
 
 fn candidate_validation_failure(
