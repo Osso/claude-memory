@@ -4,25 +4,26 @@ Semantic memory for Claude Code. Indexes conversation history and knowledge base
 
 ## What it does
 
-- **Hybrid search** over past conversations, project summaries, and markdown knowledge bases using dense vectors (Qwen3 embeddings) + BM25 sparse search with Reciprocal Rank Fusion
-- **LLM filtering** validates search results are genuinely relevant, not just keyword matches
-- **Graph memory** extracts entities and relationships from memories using Claude Haiku, enriches search results with related context
-- **Automatic deduplication** merges similar memories via LLM on write
-- **Prompt enrichment hook** injects relevant memory context into Claude Code prompts automatically
+- **Memory-unit search** over durable distilled memories, with substring fallback when semantic search is disabled
+- **Prompt/answer history search** over indexed conversations using Ollama embeddings and Qdrant
+- **KB PageIndex** for traceable Markdown knowledge-base retrieval with exact content fetches
+- **Prompt enrichment hook** injects small labeled memory and KB context into Claude Code prompts automatically
+- **Optional graph context** reads CozoDB entity relationships only when `[graph].enabled = true`
 
 ## Architecture
 
 ```
 Claude Code ──MCP──► claude-memory-mcp ──► Qdrant (vectors + BM25)
-                                       ──► Ollama (embeddings)
-                                       ──► CozoDB (graph)
-                                       ──► Anthropic API (filtering/merging/extraction)
+                                       ──► Ollama (embeddings + default LLM)
+                                       ──► KB/Transcript PageIndex files
+                                       ──► CozoDB (optional graph)
+                                       ──► configured LLM backend (optional)
 ```
 
 - **Vector store**: Qdrant with hybrid collections (dense + BM25 sparse vectors)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (1024 dimensions)
-- **Graph**: CozoDB with SQLite backend for entity-relationship storage
-- **LLM**: Claude Haiku for relevance filtering, memory merging, and graph extraction
+- **Graph**: optional CozoDB SQLite backend for entity-relationship storage
+- **LLM**: configurable via `CLAUDE_MEMORY_LLM_BACKEND`; defaults to local Ollama
 
 ## Data sources
 
@@ -53,7 +54,11 @@ Claude Code ──MCP──► claude-memory-mcp ──► Qdrant (vectors + BM2
      ollama create qwen3-embedding:0.6b-ctx2048 -f -
    ```
 
-3. **Environment**: `ANTHROPIC_API_KEY` for LLM features (filtering, merging, graph extraction)
+3. **Optional LLM backend environment**:
+   - unset `CLAUDE_MEMORY_LLM_BACKEND` uses local Ollama
+   - supported backends: `ollama`, `anthropic`, `openrouter`, `claude`, `codex`
+   - `CLAUDE_MEMORY_LLM_MODEL` overrides the backend default model
+   - legacy caveat: `claude-memory deduplicate` still preflights `ANTHROPIC_API_KEY`
 
 ### Build
 
@@ -190,21 +195,36 @@ This injects relevant memory context into every prompt automatically.
 
 ### Optional Semantic Search
 
-Semantic search depends on Ollama embeddings and is disabled by default. Enable
-it in `~/.config/claude-memory/config.toml` when Ollama is available:
+Semantic search and graph context are disabled by default. Enable semantic
+search in `~/.config/claude-memory/config.toml` when Ollama/Qdrant are
+available:
 
 ```toml
 [search]
 enabled = true
 ```
 
-## How search works
+To enable optional graph context as well:
 
-1. Query embedded via Ollama
-2. Parallel dense vector + BM25 sparse search in Qdrant (4x over-fetch)
-3. Results merged via Reciprocal Rank Fusion
-4. LLM filters for genuine relevance (falls back to top-N on failure)
-5. Graph context appended from related entities
+```toml
+[graph]
+enabled = true
+```
+
+## How retrieval works
+
+The runtime flows are documented in
+[`docs/wiki/systems/retrieval-flows.md`](docs/wiki/systems/retrieval-flows.md).
+Short version:
+
+- `claude-memory enrich` combines memory-unit hints, deterministic KB PageIndex
+  context, and optional graph reads.
+- CLI `search <query>` targets memory units by default.
+- CLI `search --type prompts|answers` and MCP `prompt_search` / `answer_search`
+  query Qdrant prompt/answer collections when semantic search is enabled.
+- KB PageIndex is the exact Markdown retrieval surface.
+- Transcript PageIndex is CLI-only source inspection and is not injected into
+  prompts by default.
 
 ## License
 
