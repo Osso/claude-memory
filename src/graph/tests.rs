@@ -252,6 +252,16 @@ fn parse_triplets_strips_prose_wrapper() {
     );
 }
 
+#[test]
+fn extract_completion_request_uses_graph_prompt_and_text() {
+    let request = build_extract_completion_request("authd is written in Rust");
+
+    assert_eq!(request.system, EXTRACT_SYSTEM);
+    assert_eq!(request.user, "authd is written in Rust");
+    assert_eq!(request.max_tokens, 500);
+    assert_eq!(request.timeout_secs, 20);
+}
+
 // --- triplet_matches_keywords ---
 
 #[test]

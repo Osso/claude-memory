@@ -19,9 +19,6 @@ pub(crate) fn run_graph_clean_cmd(max_passes: usize, dry_run: bool) -> Result<()
 }
 
 pub(crate) async fn run_build_graph(kb: bool, fresh: bool) -> Result<()> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        anyhow::bail!("ANTHROPIC_API_KEY must be set for graph building (needs LLM to extract)");
-    }
     if fresh {
         graph::clear_graph()?;
     }

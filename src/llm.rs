@@ -48,22 +48,26 @@ enum LlmBackend {
     OpenRouter,
     Claude,
     Codex,
+    Ollama,
 }
 
 fn parse_backend() -> LlmBackend {
-    match std::env::var("CLAUDE_MEMORY_LLM_BACKEND")
-        .unwrap_or_default()
-        .as_str()
-    {
+    let value = std::env::var("CLAUDE_MEMORY_LLM_BACKEND").unwrap_or_default();
+    parse_backend_value(&value)
+}
+
+fn parse_backend_value(value: &str) -> LlmBackend {
+    match value {
         "anthropic" => LlmBackend::Anthropic,
         "claude" => LlmBackend::Claude,
         "openrouter" => LlmBackend::OpenRouter,
-        "codex" | "" => LlmBackend::Codex,
+        "codex" => LlmBackend::Codex,
+        "ollama" | "" => LlmBackend::Ollama,
         other => {
             log(&format!(
-                "unknown CLAUDE_MEMORY_LLM_BACKEND={other:?}, falling back to codex"
+                "unknown CLAUDE_MEMORY_LLM_BACKEND={other:?}, falling back to ollama"
             ));
-            LlmBackend::Codex
+            LlmBackend::Ollama
         }
     }
 }
@@ -74,6 +78,7 @@ fn default_model_for_backend(backend: LlmBackend) -> &'static str {
         LlmBackend::OpenRouter => "google/gemini-2.5-flash-lite",
         LlmBackend::Claude => "haiku",
         LlmBackend::Codex => "gpt-5.3-codex-spark",
+        LlmBackend::Ollama => "qwen3:4b-instruct-2507-q4_K_M",
     }
 }
 
@@ -117,7 +122,28 @@ async fn complete_with_backend(
         LlmBackend::OpenRouter => complete_with_openrouter(model, system, user, timeout).await,
         LlmBackend::Claude => complete_with_claude(model, system, user, timeout).await,
         LlmBackend::Codex => complete_with_codex_fallback(model, system, user, timeout).await,
+        LlmBackend::Ollama => complete_with_ollama(model, system, user, timeout).await,
     }
+}
+
+/// Local Ollama via its OpenAI-compatible endpoint (`/v1/chat/completions`).
+/// Zero cost, no external quota. Default model is a non-reasoning Instruct
+/// build (qwen3 *-instruct-2507) so judge calls emit JSON directly without
+/// burning latency on chain-of-thought.
+async fn complete_with_ollama(
+    model: &str,
+    system: &str,
+    user: &str,
+    timeout: Duration,
+) -> std::result::Result<llm_sdk::Output, llm_sdk::Error> {
+    let base_url = std::env::var("CLAUDE_MEMORY_OLLAMA_URL")
+        .unwrap_or_else(|_| "http://localhost:11434/v1".to_owned());
+    let backend = llm_sdk::openai::OpenAI::new(model)
+        .base_url(base_url)
+        .api_key("ollama")
+        .system_prompt(system)
+        .timeout(timeout);
+    backend.complete(user).await
 }
 
 async fn complete_with_anthropic(
@@ -375,21 +401,13 @@ mod tests {
 
     #[test]
     fn parse_backend_explicit_values() {
-        fn parse_str(s: &str) -> LlmBackend {
-            match s {
-                "anthropic" => LlmBackend::Anthropic,
-                "claude" => LlmBackend::Claude,
-                "openrouter" => LlmBackend::OpenRouter,
-                "codex" | "" => LlmBackend::Codex,
-                _ => LlmBackend::Codex,
-            }
-        }
-        assert_eq!(parse_str("anthropic"), LlmBackend::Anthropic);
-        assert_eq!(parse_str("openrouter"), LlmBackend::OpenRouter);
-        assert_eq!(parse_str("claude"), LlmBackend::Claude);
-        assert_eq!(parse_str("codex"), LlmBackend::Codex);
-        assert_eq!(parse_str(""), LlmBackend::Codex);
-        assert_eq!(parse_str("unknown"), LlmBackend::Codex);
+        assert_eq!(parse_backend_value("anthropic"), LlmBackend::Anthropic);
+        assert_eq!(parse_backend_value("openrouter"), LlmBackend::OpenRouter);
+        assert_eq!(parse_backend_value("claude"), LlmBackend::Claude);
+        assert_eq!(parse_backend_value("codex"), LlmBackend::Codex);
+        assert_eq!(parse_backend_value("ollama"), LlmBackend::Ollama);
+        assert_eq!(parse_backend_value(""), LlmBackend::Ollama);
+        assert_eq!(parse_backend_value("unknown"), LlmBackend::Ollama);
     }
 
     // --- default_model_for_backend ---
@@ -408,6 +426,10 @@ mod tests {
         assert_eq!(
             default_model_for_backend(LlmBackend::Codex),
             "gpt-5.3-codex-spark"
+        );
+        assert_eq!(
+            default_model_for_backend(LlmBackend::Ollama),
+            "qwen3:4b-instruct-2507-q4_K_M"
         );
     }
 

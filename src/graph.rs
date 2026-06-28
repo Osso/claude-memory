@@ -3,7 +3,7 @@
 mod clean;
 mod sanitize;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -87,22 +87,31 @@ pub async fn extract_and_store(text: &str) -> Result<usize> {
 }
 
 async fn extract_triplets(text: &str) -> Result<Vec<(String, String, String)>> {
-    let key = match anthropic_api_key() {
-        Some(key) => key,
-        _ => return Ok(vec![]),
-    };
+    let request = build_extract_completion_request(text);
+    let response = crate::llm::complete(
+        request.system,
+        request.user,
+        request.max_tokens,
+        request.timeout_secs,
+    )
+    .await?;
+    parse_triplets(&response)
+}
 
-    let response = anthropic_client()?
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&anthropic_request_body(text))
-        .send()
-        .await
-        .context("failed to call Anthropic API")?;
-    let json = parse_anthropic_response(response).await?;
-    let content_text = response_content_text(&json);
-    parse_triplets(content_text)
+struct ExtractCompletionRequest<'a> {
+    system: &'static str,
+    user: &'a str,
+    max_tokens: u32,
+    timeout_secs: u64,
+}
+
+fn build_extract_completion_request(text: &str) -> ExtractCompletionRequest<'_> {
+    ExtractCompletionRequest {
+        system: EXTRACT_SYSTEM,
+        user: text,
+        max_tokens: 500,
+        timeout_secs: 20,
+    }
 }
 
 fn parse_triplets(text: &str) -> Result<Vec<(String, String, String)>> {
@@ -222,49 +231,6 @@ fn str_val(v: &DataValue) -> &str {
 fn parse_triplet_array(text: &str) -> Vec<serde_json::Value> {
     let json_str = extract_json_array(text);
     serde_json::from_str(json_str).unwrap_or_default()
-}
-
-fn anthropic_api_key() -> Option<String> {
-    std::env::var("ANTHROPIC_API_KEY")
-        .ok()
-        .filter(|key| !key.is_empty())
-}
-
-fn anthropic_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(Into::into)
-}
-
-fn anthropic_request_body(text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 500,
-        "system": EXTRACT_SYSTEM,
-        "messages": [{"role": "user", "content": text}]
-    })
-}
-
-async fn parse_anthropic_response(response: reqwest::Response) -> Result<serde_json::Value> {
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("Anthropic API error {}: {}", status, body);
-    }
-
-    response
-        .json()
-        .await
-        .context("failed to parse API response")
-}
-
-fn response_content_text(json: &serde_json::Value) -> &str {
-    json["content"]
-        .as_array()
-        .and_then(|array| array.first())
-        .and_then(|block| block["text"].as_str())
-        .unwrap_or("[]")
 }
 
 fn extract_json_array(text: &str) -> &str {
