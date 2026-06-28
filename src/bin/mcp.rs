@@ -411,6 +411,14 @@ fn format_search_output(
 
 /// Query graph for related entities to enrich search results.
 async fn enrich_with_graph(query: &str) -> Vec<String> {
+    enrich_with_graph_when_enabled(query, config::graph_enabled()).await
+}
+
+async fn enrich_with_graph_when_enabled(query: &str, graph_enabled: bool) -> Vec<String> {
+    if !graph_enabled {
+        return vec![];
+    }
+
     let entities = graph::find_concepts(query).await;
     if entities.is_empty() {
         return vec![];
@@ -454,6 +462,12 @@ fn format_entry(i: usize, category: &str, project: &str, text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn enrich_with_graph_returns_empty_when_graph_disabled() {
+        let related = enrich_with_graph_when_enabled("Rust", false).await;
+
+        assert!(related.is_empty());
+    }
 
     #[tokio::test]
     async fn mcp_memory_write_returns_guidance_without_storage() {
