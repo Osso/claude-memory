@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{PointStruct, ScrollPointsBuilder, UpsertPointsBuilder, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+use uuid::Uuid;
 
 use crate::embed::Embedder;
 use crate::extract::IndexedChunk;
@@ -146,11 +148,20 @@ fn build_points(
 fn build_single_point(
     chunk: &IndexedChunk,
     embedding: Vec<f32>,
-    next_id: &AtomicU64,
+    _next_id: &AtomicU64,
 ) -> PointStruct {
-    let id = next_id.fetch_add(1, Ordering::SeqCst);
+    let id = point_id_for_chunk(chunk);
     let named = build_named_vectors(embedding, &chunk.chunk.text);
     PointStruct::new(id, named, point_payload(chunk))
+}
+
+fn point_id_for_chunk(chunk: &IndexedChunk) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(chunk.chunk.hash.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes).to_string()
 }
 
 fn point_payload(chunk: &IndexedChunk) -> HashMap<String, Value> {
