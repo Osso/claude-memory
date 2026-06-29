@@ -58,13 +58,12 @@ fn read_session_turns_from<R: std::io::BufRead>(reader: R) -> Result<Vec<Turn>> 
             Err(_) => continue,
         };
 
-        let role = match msg.msg_type.as_deref() {
-            Some("user") => Role::User,
-            Some("assistant") => Role::Assistant,
-            _ => continue,
+        let role = match message_role(&msg) {
+            Some(role) => role,
+            None => continue,
         };
 
-        let content = match msg.message.and_then(|m| m.content) {
+        let content = match message_content(msg) {
             Some(c) => c,
             None => continue,
         };
@@ -148,7 +147,7 @@ fn collect_turn_block_content(blocks: Vec<serde_json::Value>) -> TurnBlockConten
 fn collect_turn_block(block: serde_json::Value, content: &mut TurnBlockContent) {
     match block_type(&block) {
         "text" => collect_text_block(block, content),
-        "tool_use" => content.record_tool_use(),
+        "tool_use" | "toolCall" => content.record_tool_use(),
         _ => {}
     }
 }
@@ -188,6 +187,7 @@ struct Message {
 
 #[derive(Deserialize)]
 struct MessageContent {
+    role: Option<String>,
     content: Option<serde_json::Value>,
 }
 
@@ -303,7 +303,7 @@ fn parse_message(line: String) -> Option<Message> {
 }
 
 fn extract_user_message(message: Message) -> Vec<String> {
-    if message.msg_type.as_deref() != Some("user") {
+    if message_role(&message) != Some(Role::User) {
         return vec![];
     }
 
@@ -311,12 +311,17 @@ fn extract_user_message(message: Message) -> Vec<String> {
         Some(serde_json::Value::String(text)) if !text.trim().is_empty() => {
             vec![format!("User: {text}")]
         }
+        Some(serde_json::Value::Array(blocks)) => blocks
+            .into_iter()
+            .filter_map(parse_content_block)
+            .filter_map(extract_user_block_text)
+            .collect(),
         _ => vec![],
     }
 }
 
 fn extract_assistant_message(message: Message) -> Vec<String> {
-    if message.msg_type.as_deref() != Some("assistant") {
+    if message_role(&message) != Some(Role::Assistant) {
         return vec![];
     }
 
@@ -327,8 +332,27 @@ fn extract_assistant_message(message: Message) -> Vec<String> {
     blocks
         .into_iter()
         .filter_map(parse_content_block)
-        .filter_map(extract_block_text)
+        .filter_map(extract_assistant_block_text)
         .collect()
+}
+
+fn message_role(message: &Message) -> Option<Role> {
+    if let Some(role) = role_from_str(message.msg_type.as_deref()) {
+        return Some(role);
+    }
+
+    message
+        .message
+        .as_ref()
+        .and_then(|content| role_from_str(content.role.as_deref()))
+}
+
+fn role_from_str(role: Option<&str>) -> Option<Role> {
+    match role {
+        Some("user") => Some(Role::User),
+        Some("assistant") => Some(Role::Assistant),
+        _ => None,
+    }
 }
 
 fn message_content(message: Message) -> Option<serde_json::Value> {
@@ -339,7 +363,15 @@ fn parse_content_block(block: serde_json::Value) -> Option<ContentBlock> {
     serde_json::from_value(block).ok()
 }
 
-fn extract_block_text(block: ContentBlock) -> Option<String> {
+fn extract_user_block_text(block: ContentBlock) -> Option<String> {
+    extract_text_block(block).map(|text| format!("User: {text}"))
+}
+
+fn extract_assistant_block_text(block: ContentBlock) -> Option<String> {
+    extract_text_block(block).map(|text| format!("Assistant: {text}"))
+}
+
+fn extract_text_block(block: ContentBlock) -> Option<String> {
     if block.block_type.as_deref() != Some("text") {
         return None;
     }
@@ -349,7 +381,7 @@ fn extract_block_text(block: ContentBlock) -> Option<String> {
         return None;
     }
 
-    Some(format!("Assistant: {text}"))
+    Some(text)
 }
 
 fn build_indexed_chunks(
@@ -454,6 +486,14 @@ not json at all
         assert_eq!(result, vec!["User: real"]);
     }
 
+    #[test]
+    fn user_messages_extracts_pi_text_blocks() {
+        let data = r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Pi prompt"},{"type":"toolResult","content":"ignored"}]}}
+"#;
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: Pi prompt"]);
+    }
+
     // ── extract_assistant_messages ─────────────────────────────────────────
 
     #[test]
@@ -503,6 +543,14 @@ not json at all
     fn assistant_messages_empty_input_returns_empty() {
         let result = extract_assistant_messages(make_reader("")).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn assistant_messages_extracts_pi_text_blocks() {
+        let data = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{}},{"type":"text","text":"Pi answer"}]}}
+"#;
+        let result = extract_assistant_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["Assistant: Pi answer"]);
     }
 }
 
