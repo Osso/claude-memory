@@ -26,11 +26,18 @@ fn str_value(s: &str) -> Value {
     }
 }
 
-fn make_scored_point(text: &str, source: &str, path: &str, score: f32) -> ScoredPoint {
+fn make_scored_point(
+    text: &str,
+    source: &str,
+    path: &str,
+    session_id: &str,
+    score: f32,
+) -> ScoredPoint {
     let payload = [
         ("text".to_string(), str_value(text)),
         ("source".to_string(), str_value(source)),
         ("path".to_string(), str_value(path)),
+        ("session_id".to_string(), str_value(session_id)),
     ]
     .into();
     ScoredPoint {
@@ -121,12 +128,13 @@ fn get_string_returns_empty_for_null_kind() {
 
 #[test]
 fn build_search_results_extracts_fields() {
-    let point = make_scored_point("some text", "session", "/some/path", 0.95);
+    let point = make_scored_point("some text", "session", "/some/path", "session-1", 0.95);
     let results = build_search_results(vec![point]);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].text, "some text");
     assert_eq!(results[0].source, "session");
     assert_eq!(results[0].path, "/some/path");
+    assert_eq!(results[0].session_id, "session-1");
     assert!((results[0].score - 0.95).abs() < 1e-6);
 }
 
@@ -146,6 +154,7 @@ fn build_search_results_empty_payload_graceful() {
     assert_eq!(results[0].text, "");
     assert_eq!(results[0].source, "");
     assert_eq!(results[0].path, "");
+    assert_eq!(results[0].session_id, "");
 }
 
 #[test]

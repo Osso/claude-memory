@@ -14,7 +14,7 @@ pub async fn search_prompts(
     limit: usize,
     source: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
-    search_collection(query, limit, source, COLLECTION_PROMPTS).await
+    search_collection(query, limit, source.into_iter(), COLLECTION_PROMPTS).await
 }
 
 /// Search answers (assistant responses).
@@ -23,7 +23,23 @@ pub async fn search_answers(
     limit: usize,
     source: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
-    search_collection(query, limit, source, COLLECTION_ANSWERS).await
+    search_collection(query, limit, source.into_iter(), COLLECTION_ANSWERS).await
+}
+
+pub async fn search_prompt_sources(
+    query: &str,
+    limit: usize,
+    sources: &[&str],
+) -> Result<Vec<SearchResult>> {
+    search_collection(query, limit, sources.iter().copied(), COLLECTION_PROMPTS).await
+}
+
+pub async fn search_answer_sources(
+    query: &str,
+    limit: usize,
+    sources: &[&str],
+) -> Result<Vec<SearchResult>> {
+    search_collection(query, limit, sources.iter().copied(), COLLECTION_ANSWERS).await
 }
 
 /// Search manually stored memories by substring without requiring embeddings.
@@ -118,14 +134,15 @@ fn memory_point_result(
         text,
         source: "memory".to_string(),
         path: get_string(&point.payload, "project"),
+        session_id: String::new(),
         score: 1.0,
     })
 }
 
-async fn search_collection(
+async fn search_collection<'a>(
     query: &str,
     limit: usize,
-    source: Option<&str>,
+    sources: impl IntoIterator<Item = &'a str>,
     collection: &str,
 ) -> Result<Vec<SearchResult>> {
     if !config::search_enabled() {
@@ -144,11 +161,9 @@ async fn search_collection(
         .vector_name("dense")
         .with_payload(true);
 
-    if let Some(src) = source {
-        search = search.filter(Filter::must([Condition::matches(
-            "source",
-            src.to_string(),
-        )]));
+    let sources: Vec<&str> = sources.into_iter().collect();
+    if let Some(filter) = source_filter(&sources) {
+        search = search.filter(filter);
     }
 
     let results = client
@@ -156,4 +171,18 @@ async fn search_collection(
         .await
         .context("search failed")?;
     Ok(build_search_results(results.result))
+}
+
+fn source_filter(sources: &[&str]) -> Option<Filter> {
+    match sources {
+        [] => None,
+        [source] => Some(Filter::must([source_condition(source)])),
+        _ => Some(Filter::should(
+            sources.iter().map(|source| source_condition(source)),
+        )),
+    }
+}
+
+fn source_condition(source: &str) -> Condition {
+    Condition::matches("source", source.to_string())
 }

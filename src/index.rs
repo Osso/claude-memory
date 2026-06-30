@@ -19,7 +19,9 @@ mod index_search;
 #[path = "index_writer.rs"]
 mod index_writer;
 mod search_results;
-pub use index_search::{search_answers, search_memories, search_prompts};
+pub use index_search::{
+    search_answer_sources, search_answers, search_memories, search_prompt_sources, search_prompts,
+};
 pub(crate) use index_writer::filter_new;
 use index_writer::{get_existing_hashes, index_chunks};
 #[cfg(test)]
@@ -33,6 +35,7 @@ pub struct SearchResult {
     pub text: String,
     pub source: String,
     pub path: String,
+    pub session_id: String,
     pub score: f32,
 }
 

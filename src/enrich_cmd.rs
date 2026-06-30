@@ -7,6 +7,8 @@ use crate::{config, graph, index, kb_search, memory_unit};
 const MIN_MEMORY_SCORE: f32 = 0.75;
 const MAX_KB_RESULTS: usize = 3;
 const MAX_KB_RESULT_CHARS: usize = 500;
+const MAX_SESSION_CHUNKS_PER_GROUP: usize = 3;
+const RAW_SESSION_SOURCES: &[&str] = &["session", "archive"];
 
 pub async fn run_enrich(limit: usize) -> Result<()> {
     let prompt = read_prompt_from_hook()?;
@@ -17,6 +19,7 @@ pub async fn run_enrich(limit: usize) -> Result<()> {
 
     let mut sections = Vec::new();
     add_memory_section(&prompt, limit, &mut sections).await;
+    add_session_chunk_section(&prompt, limit, &mut sections).await;
     add_kb_section(&prompt, limit, &mut sections);
     add_graph_section(&prompt, &mut sections).await;
 
@@ -51,6 +54,50 @@ async fn add_memory_section(prompt: &str, limit: usize, sections: &mut Vec<Strin
     let relevant_units = relevant_memory_units(&units);
     if !relevant_units.is_empty() {
         sections.push(format_memory_unit_results(&relevant_units));
+    }
+}
+
+async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
+    let session_limit = limit.min(MAX_SESSION_CHUNKS_PER_GROUP);
+    let prompt_chunks = search_session_chunks(prompt, session_limit, ChunkKind::Prompt).await;
+    let answer_chunks = search_session_chunks(prompt, session_limit, ChunkKind::Answer).await;
+
+    if prompt_chunks.is_empty() && answer_chunks.is_empty() {
+        return;
+    }
+
+    sections.push(format_session_chunk_results(&prompt_chunks, &answer_chunks));
+}
+
+#[derive(Clone, Copy)]
+enum ChunkKind {
+    Prompt,
+    Answer,
+}
+
+async fn search_session_chunks(
+    prompt: &str,
+    limit: usize,
+    kind: ChunkKind,
+) -> Vec<index::SearchResult> {
+    let results = match kind {
+        ChunkKind::Prompt => index::search_prompt_sources(prompt, limit, RAW_SESSION_SOURCES).await,
+        ChunkKind::Answer => index::search_answer_sources(prompt, limit, RAW_SESSION_SOURCES).await,
+    };
+
+    match results {
+        Ok(results) => results
+            .into_iter()
+            .filter(|result| !result.session_id.is_empty())
+            .collect(),
+        Err(error) => {
+            let label = match kind {
+                ChunkKind::Prompt => "prompt",
+                ChunkKind::Answer => "answer",
+            };
+            eprintln!("enrich: {label} chunk search failed: {error:#}");
+            Vec::new()
+        }
     }
 }
 
@@ -104,6 +151,45 @@ fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
         out.push_str(&format!("\n- ({:.2}) {}", result.score, text));
     }
     out
+}
+
+fn format_session_chunk_results(
+    prompt_results: &[index::SearchResult],
+    answer_results: &[index::SearchResult],
+) -> String {
+    let mut out = String::from(
+        "## Relevant past session chunks (raw prompt/answer history; use session_id to inspect source transcript)",
+    );
+    append_session_chunk_group(&mut out, "prompts", prompt_results);
+    append_session_chunk_group(&mut out, "answers", answer_results);
+    out
+}
+
+fn append_session_chunk_group(out: &mut String, label: &str, results: &[index::SearchResult]) {
+    if results.is_empty() {
+        return;
+    }
+
+    out.push_str(&format!("\n### {label}"));
+    for result in results {
+        let text = preview_text(&result.text, 300);
+        let history_source = transcript_history_source(result);
+        out.push_str(&format!(
+            "\n- ({:.2}) source: {} source_type: {} session_id: {}\n  path: {}\n  text: {}",
+            result.score, history_source, result.source, result.session_id, result.path, text
+        ));
+    }
+}
+
+fn transcript_history_source(result: &index::SearchResult) -> &'static str {
+    if result.path.contains(".codex") {
+        return "codex";
+    }
+
+    match result.source.as_str() {
+        "session" | "archive" => "claude",
+        _ => "unknown",
+    }
 }
 
 fn relevant_memory_units(results: &[index::SearchResult]) -> Vec<&index::SearchResult> {
@@ -212,12 +298,14 @@ mod tests {
                 text: "Unrelated but vaguely Claude-shaped memory.".to_string(),
                 source: "memory".to_string(),
                 path: String::new(),
+                session_id: String::new(),
                 score: 0.71,
             },
             index::SearchResult {
                 text: "Deploy secrets through the production secret store.".to_string(),
                 source: "memory".to_string(),
                 path: String::new(),
+                session_id: String::new(),
                 score: 0.76,
             },
         ];
@@ -229,5 +317,44 @@ mod tests {
             relevant[0].text,
             "Deploy secrets through the production secret store."
         );
+    }
+
+    #[test]
+    fn session_chunk_results_include_session_id() {
+        let prompt_results = vec![index::SearchResult {
+            text: "User asked about transcript page indexes.".to_string(),
+            source: "session".to_string(),
+            path: "project/session-1.jsonl".to_string(),
+            session_id: "session-1".to_string(),
+            score: 0.82,
+        }];
+        let answer_results = vec![index::SearchResult {
+            text: "Assistant explained how chunks are indexed.".to_string(),
+            source: "session".to_string(),
+            path: "project/session-2.jsonl".to_string(),
+            session_id: "session-2".to_string(),
+            score: 0.79,
+        }];
+
+        let formatted = format_session_chunk_results(&prompt_results, &answer_results);
+
+        assert!(formatted.contains("Relevant past session chunks"));
+        assert!(formatted.contains("prompts"));
+        assert!(formatted.contains("answers"));
+        assert!(formatted.contains("source: claude source_type: session session_id: session-1"));
+        assert!(formatted.contains("source: claude source_type: session session_id: session-2"));
+    }
+
+    #[test]
+    fn transcript_history_source_uses_codex_path_when_available() {
+        let result = index::SearchResult {
+            text: "Codex answer".to_string(),
+            source: "session".to_string(),
+            path: ".codex/sessions/2026/06/session.jsonl".to_string(),
+            session_id: "session".to_string(),
+            score: 0.81,
+        };
+
+        assert_eq!(transcript_history_source(&result), "codex");
     }
 }

@@ -386,6 +386,7 @@ fn payload_to_search_result(payload: &HashMap<String, Value>, score: f32) -> Sea
         text: string_field(payload, "text"),
         source: source_field(payload),
         path: string_field(payload, "source_session"),
+        session_id: string_field(payload, "source_session"),
         score,
     }
 }

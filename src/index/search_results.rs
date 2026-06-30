@@ -13,6 +13,7 @@ pub(crate) fn build_search_results(points: Vec<ScoredPoint>) -> Vec<SearchResult
                 text: get_string(&payload, "text"),
                 source: get_string(&payload, "source"),
                 path: get_string(&payload, "path"),
+                session_id: get_string(&payload, "session_id"),
                 score: point.score,
             }
         })
