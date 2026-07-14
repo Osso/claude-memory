@@ -13,6 +13,7 @@ content fetches.
 - [ ] Store assistant responses in an answer/search collection separate from user prompts.
 - [ ] Preserve source metadata for each indexed chunk, including source kind and source path.
 - [ ] Preserve session identity when it is available.
+- [x] Exclude Pi extension-origin user messages from prompt history while retaining interactive and RPC user prompts.
 - [ ] Keep KB Markdown prompt-search indexing distinct from KB PageIndex retrieval.
 
 ### Indexing lifecycle
@@ -70,6 +71,7 @@ content fetches.
   - `build_search_results_empty_input`
 - `src/extract.rs`
   - user-message and assistant-message extraction tests in the module test suite.
+  - `user_messages_skips_pi_extension_input`
 
 ## Known gaps (current cycle)
 

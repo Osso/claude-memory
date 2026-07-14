@@ -189,6 +189,8 @@ struct Message {
 struct MessageContent {
     role: Option<String>,
     content: Option<serde_json::Value>,
+    #[serde(rename = "inputSource")]
+    input_source: Option<String>,
 }
 
 /// Content block in assistant messages.
@@ -303,7 +305,7 @@ fn parse_message(line: String) -> Option<Message> {
 }
 
 fn extract_user_message(message: Message) -> Vec<String> {
-    if message_role(&message) != Some(Role::User) {
+    if message_role(&message) != Some(Role::User) || is_extension_input(&message) {
         return vec![];
     }
 
@@ -334,6 +336,14 @@ fn extract_assistant_message(message: Message) -> Vec<String> {
         .filter_map(parse_content_block)
         .filter_map(extract_assistant_block_text)
         .collect()
+}
+
+fn is_extension_input(message: &Message) -> bool {
+    message
+        .message
+        .as_ref()
+        .and_then(|content| content.input_source.as_deref())
+        == Some("extension")
 }
 
 fn message_role(message: &Message) -> Option<Role> {
@@ -492,6 +502,15 @@ not json at all
 "#;
         let result = extract_user_messages(make_reader(data)).unwrap();
         assert_eq!(result, vec!["User: Pi prompt"]);
+    }
+
+    #[test]
+    fn user_messages_skips_pi_extension_input() {
+        let data = r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"From shared channel:\n\nMessage:\ncoordination only"}],"inputSource":"extension"}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Actual user prompt"}],"inputSource":"interactive"}}
+"#;
+        let result = extract_user_messages(make_reader(data)).unwrap();
+        assert_eq!(result, vec!["User: Actual user prompt"]);
     }
 
     // ── extract_assistant_messages ─────────────────────────────────────────
