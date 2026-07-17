@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use claude_memory::kb_export::{
     KnowledgeCollection, KnowledgePoint, classify_and_render, verify_source_plan_unchanged,
@@ -108,13 +108,16 @@ fn renders_stable_canonical_paths_anchors_and_merged_provenance() {
     let friction = plan
         .documents
         .iter()
-        .find(|doc| doc.relative_path == PathBuf::from("memory/friction/project-claude-memory.md"))
+        .find(|doc| {
+            doc.relative_path.as_path() == Path::new("memory/friction/project-claude-memory.md")
+        })
         .unwrap();
     let quarantine = plan
         .documents
         .iter()
         .find(|doc| {
-            doc.relative_path == PathBuf::from("memory/quarantine/unclassified-memory-units.md")
+            doc.relative_path.as_path()
+                == Path::new("memory/quarantine/unclassified-memory-units.md")
         })
         .unwrap();
 
@@ -614,8 +617,8 @@ fn quarantine_preserves_each_original_source_value() {
         .documents
         .iter()
         .find(|document| {
-            document.relative_path
-                == PathBuf::from("memory/quarantine/unclassified-memory-units.md")
+            document.relative_path.as_path()
+                == Path::new("memory/quarantine/unclassified-memory-units.md")
         })
         .unwrap();
 
