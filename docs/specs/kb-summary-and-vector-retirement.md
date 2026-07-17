@@ -6,7 +6,7 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 
 - [x] Reject `claude-memory ingest-kb`; the CLI command is no longer part of the public surface.
 - [x] Expose no replacement KB-to-memory-unit writer through the public CLI.
-- [x] Leave manual memory, memory-unit, and notable-fact API behavior unchanged.
+- [x] Leave manual-memory and memory-unit reader/dedup/enrich paths available; notable-fact analyzer/writer behavior is retired.
 
 ### Preserved retrieval and history
 
@@ -53,6 +53,6 @@ None for this slice.
 
 - Reintroducing KB Markdown facts as memory units.
 - Removing or migrating legacy Qdrant collections or points.
-- Changing manual memory, memory-unit, notable-fact, prompt/answer history, or PageIndex APIs.
+- Changing manual memory, memory-unit, prompt/answer history, or PageIndex APIs.
 - Treating `PageIndexNode.summary` as the retired summary-vector feature.
-- Touching unrelated dirty changes in `src/analyze.rs` or `src/notable_fact.rs`.
+- Claiming that legacy points or collections were deleted.

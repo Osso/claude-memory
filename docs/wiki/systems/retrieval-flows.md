@@ -1,9 +1,9 @@
 # Retrieval Flows
 
 `claude-memory` has several retrieval surfaces. They share storage and LLM
-helpers, but they intentionally answer different questions.
+helpers, but answer different questions.
 
-## Configuration Gates
+## Configuration gates
 
 Runtime config lives at `~/.config/claude-memory/config.toml`.
 
@@ -15,135 +15,53 @@ enabled = true
 enabled = false
 ```
 
-Defaults are conservative: both `search.enabled` and `graph.enabled` are false
-when the file or section is missing.
+Defaults are conservative: both gates are false when missing.
 
-LLM calls go through `src/llm.rs` unless a path is explicitly noted otherwise.
-`CLAUDE_MEMORY_LLM_BACKEND` selects `ollama`, `anthropic`, `openrouter`,
-`claude`, or `codex`; unset and unknown values fall back to local Ollama.
-`CLAUDE_MEMORY_LLM_MODEL` overrides the backend default model.
+## Active surfaces
 
-Known legacy gate: `claude-memory deduplicate` still checks for
-`ANTHROPIC_API_KEY` before it calls the shared LLM merge path. That preflight is
-not representative of the default backend behavior.
+### Session-history search
 
-## Session-history search
+`claude-memory index` reads active Claude `.jsonl` sessions and archived
+`.jsonl.zst` sessions. Prompt and answer searches are filtered views over the
+shared `claude-session-history` collection. MCP exposes the same two views as
+`prompt_search` and `answer_search`.
 
-The implementation details for the shared collection, payload fields, source
-kinds, extraction, identity, and deduplication are in
-[prompt-answer-history.md](prompt-answer-history.md).
+### `claude-memory enrich`
 
-## `claude-memory enrich`
+Enrichment can read:
 
-Purpose: inject small, relevant context into a Claude Code `UserPromptSubmit`
-hook.
+1. memory-unit search results, above the configured relevance floor;
+2. raw prompt/answer history chunks;
+3. deterministic KB PageIndex context;
+4. optional graph context when graph search is enabled.
 
-Flow in `src/enrich_cmd.rs`:
+Memory units are labeled as possibly useful hints. KB PageIndex remains the
+exact Markdown retrieval path. Transcript PageIndex is CLI-only navigation and
+is not injected by default.
 
-1. Read hook JSON from stdin and extract `prompt`.
-2. Search memory units semantically with `memory_unit::search`.
-   - Requires `[search].enabled = true`.
-   - Uses Ollama embeddings and Qdrant memory-unit vectors.
-   - Keeps only results with score `>= 0.75`.
-3. Search KB PageIndex with `kb_search::search_default_kb_context`.
-   - Does not use embeddings or an LLM.
-   - Builds or refreshes the local KB PageIndex if stale.
-   - Caps injected KB results to three sections and 500 chars each.
-4. Optionally append graph context.
-   - Requires `[graph].enabled = true`.
-   - Reads CozoDB graph relationships; no extraction happens during enrich.
-5. Emit Claude hook JSON with `additionalContext`, or `{}` if nothing matched.
+### PageIndex
 
-Enrich never injects Transcript PageIndex results by default.
+KB PageIndex retrieves canonical Markdown from `/syncthing/Sync/KB`.
+Transcript PageIndex builds local outlines for Claude and Codex sessions. Neither
+PageIndex path writes notable facts or memory units.
 
-## CLI `search`
+## Retired memory creation
 
-Purpose: manual lookup from the terminal.
+The transcript analyzer and `analyze`/`backfill` commands are retired. No active
+friction-memory or notable-fact analyzer writer remains. Existing memory-unit
+read, deduplication, and enrich paths remain separate from transcript mining.
 
-CLI search requires an explicit history target:
+The completed durable-memory KB export remains the canonical Markdown export
+path. Migration/export compatibility readers retain legacy `source=summary` and
+`source=kb` recognition. These readers do not delete legacy points or
+collections.
 
-- `claude-memory search --type prompts <query>` searches the prompt view.
-- `claude-memory search --type answers <query>` searches the answer view.
+## Optional graph path
 
-Both paths use the shared `claude-session-history` collection with required
-history-type filters and require `[search].enabled = true`; if disabled they
-return no results.
+`build-graph`, `graph-dump`, and `graph-clean` maintain the optional CozoDB graph.
+`enrich` and MCP search only read graph context when enabled.
 
-## MCP Search Tools
-
-Purpose: let Claude Code query indexed history through MCP.
-
-Tools in `src/bin/mcp.rs`:
-
-- `prompt_search`: user prompts and questions from session history.
-- `answer_search`: assistant responses and solutions from session history.
-
-These are the only MCP tools exposed by the server.
-
-`prompt_search` and `answer_search` flow:
-
-1. Require `[search].enabled = true`; otherwise no points are returned.
-2. Embed query with Ollama.
-3. Run hybrid Qdrant dense+BM25 search with over-fetch.
-4. Ask the configured LLM backend to filter relevance.
-5. Fall back to top results if LLM filtering fails.
-6. Drop points below score `0.65`.
-7. Optionally append graph context only when `[graph].enabled = true`.
-
-## KB PageIndex
-
-Purpose: traceable retrieval from `/syncthing/Sync/KB` Markdown.
-
-CLI surface: `claude-memory kb-page-index ...`.
-
-- `build` writes a persistent nested index under
-  `~/.cache/claude-memory/kb-page-index` by default.
-- `query` defaults to deterministic lexical lookup.
-- `query --mode agentic` uses the configured LLM backend to inspect metadata and
-  structure, choose content fetches, and answer from fetched content.
-- `document`, `structure`, and `content` expose exact metadata and source text.
-
-`claude-memory enrich` uses the deterministic KB PageIndex context path, not the
-agentic mode.
-
-## Transcript PageIndex
-
-Purpose: local navigation of Claude and Codex session history.
-
-CLI surface: `claude-memory transcript-page-index ...`.
-
-- Builds nested outlines from Claude project/archive sessions and Codex session
-  stores.
-- Query defaults to deterministic lexical lookup.
-- `--mode agentic` uses the configured LLM backend for tree-walk retrieval.
-- It is CLI-only: no MCP tool and no default prompt enrichment injection.
-- It does not write memory units.
-
-## Memory Creation and Ingestion
-
-Durable memory units come from analysis paths, not from search:
-
-- `analyze <session.jsonl>` parses one session, runs friction/notability LLM
-  stages, and writes accepted memory units/notable facts with deduplication.
-- `backfill` runs analysis over many sessions using a processed-state file.
-- The former `ingest-kb` KB-to-memory-unit path is retired. KB Markdown remains
-  available through KB PageIndex; no active summary producer or summary search
-  path is part of retrieval.
-- Project-local durable context should be written as editable Markdown under
-  `docs/local/memory.md`.
-
-## Graph Path
-
-The graph is optional and disabled by default.
-
-- `build-graph` iterates memory units, and optionally KB text, but extraction
-  only runs when `[graph].enabled = true`.
-- Extraction calls the configured LLM backend through `src/llm.rs`.
-- Results are sanitized triplets stored in CozoDB at `~/.claude/memory/graph.db`.
-- `enrich` and MCP search only read graph context when `[graph].enabled = true`.
-- `graph-dump` and `graph-clean` are explicit graph maintenance commands.
-
-## Which Surface To Use
+## Which surface to use
 
 | Need | Surface |
 | --- | --- |

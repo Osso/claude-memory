@@ -1,28 +1,24 @@
 # KB Markdown Export
 
-`claude-memory-export-kb` moves durable knowledge from legacy Qdrant surfaces into editable KB Markdown. The test-backed contract is [docs/specs/kb-markdown-export.md](../../specs/kb-markdown-export.md). No live export is recorded here yet.
+`claude-memory-export-kb` moves durable knowledge from legacy Qdrant surfaces into
+editable Markdown under `/syncthing/Sync/KB/memory`. The export is completed for
+this migration slice. The Markdown files and `memory/export-manifest.json` are
+the canonical exported representation, and KB PageIndex remains the retrieval
+surface.
 
-## Classification
+## Readers and compatibility
 
-The planner reads all memory units and notable facts. It also reads every legacy `claude-memory` payload long enough to validate `source`, then admits only `source=memory` records.
+The planner reads memory units, existing notable-fact records, and eligible
+legacy manual records. It preserves source validation for legacy values:
+`source=summary` remains non-durable and `source=kb` vectors remain excluded
+with manifest accounting. The migration reader retains the same legacy source
+compatibility rules for prompt/answer history.
 
-| Source | Destination |
-|---|---|
-| memory unit, `source=session` | `memory/friction/` |
-| notable fact, `source=session` | `memory/notable-facts/` |
-| notable fact with missing/unknown source | rejected for review |
-| memory unit or legacy memory, `source=memory` | `memory/manual-memories/` |
-| memory unit with missing/unknown source | `memory/quarantine/unclassified-memory-units.md` |
-| any `source=kb` vector | excluded, manifest-accounted |
-| legacy prompt/archive/summary record | validated, then excluded before the export plan |
+The notable-fact analyzer/writer is retired. Existing notable-fact records are
+read only for export/parity compatibility; no active notable-fact writer
+remains.
 
-Apply and verify require exactly 222 raw unclassified memory-unit source points, counted before content deduplication. A changed count fails closed for human review.
-
-## Identity and deduplication
-
-SHA-256 of exact source text supplies content identity. Deduplication key is destination, original project value, and content hash. Duplicate points merge provenance but retain separate manifest entries with their original source values. The original project remains metadata and key material. Non-empty project names use an injective `project-` filename encoding: ASCII letters, digits, `-`, and `_` remain literal; every other byte is percent-encoded. Empty global scope alone uses `__global__.md`, remaining distinct from every named project.
-
-## Markdown representation
+## Output
 
 ```text
 KB/memory/friction/<project>.md
@@ -32,19 +28,8 @@ KB/memory/quarantine/unclassified-memory-units.md
 KB/memory/export-manifest.json
 ```
 
-Each record has a destination/project-scoped stable anchor, exact content hash, original project, source point IDs, and available source-path/legacy-hash/session/turn/topic/category/timestamp provenance. Provenance values are Markdown-encoded so embedded newlines, headings, fences, or marker text cannot alter later record boundaries. Source text is line-prefixed as a Markdown blockquote between explicit markers. This representation is reversible and prevents embedded headings or unmatched code fences from changing later record boundaries.
-
-## Publication safety
-
-Before writing, every relative path is validated and every target is checked. Identical files are idempotent; different files, non-UTF-8 files, directories, or other target types abort before any write. New files are then written directly with `std::fs`.
-
-## Manifest and parity
-
-`memory/export-manifest.json` records counts and one entry per admitted source point: collection, point ID, original source, legacy path/hash, disposition, destination path, anchor, and source-text hash.
-
-Verification compares persisted document bytes with the planned document, then independently locates each manifest anchor, reverses the blockquote encoding, hashes persisted source text, and compares that hash with the manifest. It also proves source-point count equals manifest count.
-
-Apply reads sources twice before writing and once afterward. Counts, every manifest entry, and rendered provenance documents must match across those reads. It writes directly, verifies persisted parity, and rebuilds PageIndex. A later destructive cleanup requires another fresh verify while writers remain quiesced.
+The export preserves source text, provenance, project scope, source IDs, and
+content hashes. PageIndex can discover the resulting Markdown.
 
 ## Commands
 
@@ -54,12 +39,13 @@ claude-memory-export-kb apply --kb-root /syncthing/Sync/KB
 claude-memory-export-kb verify --kb-root /syncthing/Sync/KB
 ```
 
-`plan` is read-only. `apply` writes only KB output, verifies a fresh source plan, then rebuilds the existing KB PageIndex. `verify` is read-only. The binary has no source-deletion or collection-deletion command.
+`plan` and `verify` are read-only. `apply` writes only KB output, checks source
+and document parity, and rebuilds KB PageIndex. No command here deletes source
+points or collections. Completion of the export is not collection deletion.
 
 ## Separate work
 
-Prompt/answer history remains in `claude-session-history`. The summary and duplicate
-KB-vector ingestion retirement is documented in
-[kb-summary-and-vector-retirement.md](kb-summary-and-vector-retirement.md).
-Legacy reader/writer removal and collection deletion remain separate work with
-separate verification gates.
+Prompt/answer history remains in `claude-session-history`. The former KB-to-
+memory-unit ingestion path is retired. Memory-unit read, deduplication, and
+enrich paths remain active. Transcript analyzer and notable-fact writer removal
+are separate runtime retirement changes documented in the related specs.

@@ -1,42 +1,43 @@
 # claude-memory
 
-Semantic memory search for Claude Code sessions and knowledge base.
+Semantic memory search for Claude Code sessions and the knowledge base.
 
 ## Architecture
 
 - **Session-history vector store**: Qdrant collection `claude-session-history` (localhost:6334)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
-- **Migration CLI**: `claude-memory-migrate` for guarded legacy Qdrant storage migration
+- **KB retrieval**: persistent KB PageIndex over Markdown
+- **Migration/export**: guarded legacy migration and completed durable-memory KB export
 
 ## Usage
 
-Manual CLI invocation + Claude Code hooks:
-
 ```bash
-# Index active and archived Claude transcript chunks
 claude-memory index
-
-# Search prompt/answer history (--type is required)
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
-
-# Stats
+claude-memory deduplicate
+claude-memory enrich
 claude-memory stats
 ```
 
 `index` reads active `.jsonl` sessions and archived `.jsonl.zst` sessions only.
-Prompt and answer searches are filtered views over the shared
-`claude-session-history` collection. There is no `index --kb` command; KB
-Markdown uses the separate `kb-page-index` surface. The former `ingest-kb`
-command is retired, so KB facts
-are not actively duplicated into memory units.
+Prompt and answer searches are filtered views over `claude-session-history`.
+KB Markdown uses the separate `kb-page-index` surface. The former `ingest-kb`
+command is retired.
+
+The transcript analyzer and `analyze`/`backfill` commands are retired. The
+notable-fact analyzer/writer module is removed; no active notable-fact writer
+remains. Memory-unit readers, listing/deletion, deduplication, and enrich
+retrieval remain active. Prompt/answer history, KB PageIndex, and transcript
+PageIndex remain separate retrieval surfaces.
 
 Project summaries, KB Markdown, manual memories, and the
 `claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
 session-history indexing targets or alternate search paths. Legacy
-`source=summary` and `source=kb` recognition remains for export/migration parity;
-legacy Qdrant data and collections are not changed by this retirement.
+`source=summary` and `source=kb` recognition remains for migration/export
+compatibility; legacy Qdrant data and collections are not changed by this
+retirement.
 
 ## Build & Install
 
@@ -44,11 +45,18 @@ legacy Qdrant data and collections are not changed by this retirement.
 ./deploy.sh
 ```
 
-`deploy.sh` installs all four binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
+`deploy.sh` installs the remaining binaries to `~/.cargo/bin/` with
+`cargo install --force --path .`.
 
-No systemd service — the MCP server runs as a stdio child process of Claude Code. After rebuilding, restart Claude Code to reload it.
+No systemd service — the MCP server runs as a stdio child process of Claude
+Code. After rebuilding, restart Claude Code to reload it.
 
-The separate `claude-memory-migrate` binary exposes read-only `plan` and `verify` commands plus guarded `apply --backup-dir <directory>`. It backs up all four legacy collections before creating `claude-session-history`, preserves eligible history points, and verifies exact parity. No deletion or fallback command exists; this documents the contract and does not claim a live migration has been run.
+`claude-memory-migrate` provides read-only `plan`/`verify` and guarded
+`apply --backup-dir <directory>` for legacy history migration. The completed
+`claude-memory-export-kb` flow writes canonical durable-memory Markdown and a
+manifest under `/syncthing/Sync/KB/memory`, then rebuilds KB PageIndex.
+Neither tool deletes source points or collections. No collection deletion is
+claimed here.
 
 ## Dependencies
 

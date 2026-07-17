@@ -44,6 +44,17 @@ fn manual_memory_commands_are_retired() {
 }
 
 #[test]
+fn legacy_analysis_commands_are_retired() {
+    for command in ["analyze", "backfill"] {
+        let error = match Cli::try_parse_from(["claude-memory", command]) {
+            Ok(_) => panic!("{command} should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+}
+
+#[test]
 fn ingest_kb_command_is_retired() {
     let error = match Cli::try_parse_from(["claude-memory", "ingest-kb"]) {
         Ok(_) => panic!("ingest-kb should be rejected"),

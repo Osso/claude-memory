@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use claude_memory::{analyze, backfill, index};
-use std::path::{Path, PathBuf};
+use claude_memory::index;
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 mod dedup;
@@ -138,38 +138,6 @@ enum Command {
 
     /// Show collection statistics
     Stats,
-
-    /// Analyze a single session JSONL for friction moments and extract memory units
-    Analyze {
-        /// Path to the session .jsonl file
-        session_jsonl: PathBuf,
-    },
-
-    /// Backfill: walk the live projects directory and analyze each session.
-    /// Resumable via a sidecar state file.
-    Backfill {
-        /// Projects directory (default: ~/.claude/projects)
-        #[arg(long)]
-        projects: Option<PathBuf>,
-
-        /// Archive directory of .jsonl.zst files (default: skip archives).
-        /// Pass `~/.claude/archive` to also process compressed archives.
-        #[arg(long)]
-        archive: Option<PathBuf>,
-
-        /// State file tracking processed session IDs
-        /// (default: ~/.cache/claude-memory/backfill-processed.txt)
-        #[arg(long)]
-        state_file: Option<PathBuf>,
-
-        /// Skip sessions with fewer than this many user turns
-        #[arg(long, default_value = "3")]
-        min_user_turns: usize,
-
-        /// Stop after analysing this many sessions (useful for testing)
-        #[arg(long)]
-        max_sessions: Option<usize>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -211,21 +179,6 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
-        Command::Analyze { .. } | Command::Backfill { .. } => run_memory_command(command).await,
-    }
-}
-
-async fn run_memory_command(command: Command) -> Result<()> {
-    match command {
-        Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
-        Command::Backfill {
-            projects,
-            archive,
-            state_file,
-            min_user_turns,
-            max_sessions,
-        } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
-        _ => unreachable!("non-memory command dispatched to run_memory_command"),
     }
 }
 
@@ -328,30 +281,6 @@ async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result
     }
 }
 
-async fn run_backfill_cmd(
-    projects: Option<PathBuf>,
-    archive: Option<PathBuf>,
-    state_file: Option<PathBuf>,
-    min_user_turns: usize,
-    max_sessions: Option<usize>,
-) -> Result<()> {
-    let home = dirs::home_dir().context("no home directory")?;
-    let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
-    let state_file = state_file.unwrap_or_else(|| {
-        dirs::cache_dir()
-            .unwrap_or_else(|| home.join(".cache"))
-            .join("claude-memory/backfill-processed.txt")
-    });
-    backfill::run_backfill(
-        &projects_dir,
-        archive.as_deref(),
-        &state_file,
-        min_user_turns,
-        max_sessions,
-    )
-    .await
-}
-
 async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
     let results = index::search_prompts(&query, limit, source.as_deref()).await?;
     print_results(&results)
@@ -399,79 +328,4 @@ async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
         return Ok(());
     }
     merge_clusters(&entries, &clusters).await
-}
-
-async fn run_analyze(session_jsonl: &Path) -> Result<()> {
-    println!("Analyzing: {}", session_jsonl.display());
-    let outcomes = analyze::analyze_session(session_jsonl).await?;
-    let counts = print_analysis_outcomes(&outcomes);
-
-    println!(
-        "\nDone. Outcomes: {}  |  notable-facts: {}  |  no-friction: {}  |  discarded: {}  |  stored: {}",
-        outcomes.len(),
-        counts.notable_facts,
-        counts.no_friction,
-        counts.discarded,
-        counts.stored
-    );
-    Ok(())
-}
-
-struct AnalysisCounts {
-    no_friction: usize,
-    discarded: usize,
-    stored: usize,
-    notable_facts: usize,
-}
-
-fn print_analysis_outcomes(outcomes: &[analyze::AnalysisOutcome]) -> AnalysisCounts {
-    let mut counts = AnalysisCounts {
-        no_friction: 0,
-        discarded: 0,
-        stored: 0,
-        notable_facts: 0,
-    };
-
-    for outcome in outcomes {
-        update_analysis_counts(&mut counts, outcome);
-    }
-
-    counts
-}
-
-fn update_analysis_counts(counts: &mut AnalysisCounts, outcome: &analyze::AnalysisOutcome) {
-    use analyze::AnalysisOutcome;
-
-    match outcome {
-        AnalysisOutcome::NotableFacts {
-            facts,
-            inserted,
-            merged,
-        } => record_notable_facts(counts, *facts, *inserted, *merged),
-        AnalysisOutcome::NoFriction { .. } => counts.no_friction += 1,
-        AnalysisOutcome::Discarded { turn, reason } => {
-            counts.discarded += 1;
-            println!("[turn {turn}] DISCARDED: {reason}");
-        }
-        AnalysisOutcome::Stored {
-            turn,
-            unit,
-            deduped,
-        } => record_stored_memory(counts, *turn, &unit.text, *deduped),
-    }
-}
-
-fn record_notable_facts(counts: &mut AnalysisCounts, facts: usize, inserted: usize, merged: usize) {
-    counts.notable_facts += facts;
-    println!("NOTABLE FACTS: {facts} extracted ({inserted} inserted, {merged} merged)");
-}
-
-fn record_stored_memory(counts: &mut AnalysisCounts, turn: u32, text: &str, deduped: bool) {
-    counts.stored += 1;
-    let dedup_label = if deduped {
-        " (merged with existing)"
-    } else {
-        ""
-    };
-    println!("[turn {turn}] STORED{dedup_label}: {text}");
 }

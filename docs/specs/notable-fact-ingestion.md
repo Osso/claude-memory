@@ -1,52 +1,39 @@
-Notable fact ingestion extracts durable project understanding from existing session traversal and stores it separately from operational memory-unit preloads. It adapts codealmanac's absorb model for claude-memory: sessions are raw material, and the output is mergeable project memory facts rather than wiki pages.
+# Notable-fact ingestion
 
-## What it must do
+## Status
 
-### Extraction contract
+Notable-fact ingestion is retired. The analyzer and writer module were removed
+with the transcript analyzer deletion. `analyze` and `backfill` no longer exist,
+and no active notable-fact writer remains.
 
-- [ ] Reuse existing session/backfill traversal instead of adding new transcript discovery.
-- [x] Use an almanac-style prompt frame based on purpose, notability, and absorb operation rules.
-- [x] Treat sessions as raw material to distill, not logs to summarize.
-- [ ] Output zero or more durable notable facts.
-- [ ] Reject progress logs, file summaries, generic docs, unsupported guesses, and obvious one-file facts.
+Existing durable notable-fact records remain readable by the completed
+`claude-memory-export-kb` compatibility path. The export writes canonical
+Markdown under `/syncthing/Sync/KB/memory/notable-facts/`. Migration/export
+readers retain legacy source recognition for parity. This change does not delete
+notable-fact points or collections.
 
-### Storage model
+## Retired contract
 
-- [x] Store notable facts in a dedicated collection separate from memory-unit preloads.
-- [x] Store fact text, created time, source, source session, optional project, topic tags, and seen-in-sessions metadata.
-- [ ] Deduplicate similar notable facts at write time.
-- [ ] Merge duplicate sightings by appending to `seen_in_sessions`.
+The former contract extracted project facts from session traversal, stored them
+in `claude-notable-facts`, and deduplicated sightings. That pipeline is no
+longer an active feature. These are historical design requirements, not current
+runtime behavior:
 
-### Pipeline behavior
+- session traversal for notable-fact extraction;
+- almanac-style fact prompting and JSON parsing;
+- notable-fact collection writes and write-time merge handling;
+- analyzer and backfill integration;
+- notable-fact retrieval or prompt enrichment.
 
-- [ ] Run notable fact ingestion as a separate analyzer stage from friction-memory creation.
-- [ ] Keep memory-unit extraction focused on operational shortcuts.
-- [ ] Do not require friction to be present before notable facts can be extracted.
+## Remaining surfaces
 
-## How it works
+- Completed KB Markdown export can read existing notable-fact records.
+- Legacy migration/export compatibility readers remain available.
+- Prompt/answer history remains in `claude-session-history`.
+- KB PageIndex and transcript PageIndex remain separate retrieval surfaces.
+- Memory-unit read, deduplication, and enrich paths remain separate from this
+  retired pipeline.
 
-- [docs/wiki/systems/notable-fact-ingestion.md](../wiki/systems/notable-fact-ingestion.md)
-
-## Implementation inventory
-
-- `src/notable_fact.rs` — notable fact schema, prompt contract, JSON parsing, collection lifecycle, and write deduplication.
-- `src/analyze.rs` — invokes notable fact ingestion over the already parsed session turns.
-- `src/backfill.rs` — indirectly reuses notable fact ingestion through `analyze_session`.
-
-## Tests asserting this spec
-
-- `src/notable_fact.rs`
-  - `absorb_prompt_treats_sessions_as_raw_material`
-  - `parse_notable_fact_json_keeps_project_and_topics`
-  - `notable_fact_collection_is_separate_from_memory_units`
-  - `notable_fact_payload_records_merge_metadata`
-
-## Known gaps (current cycle)
-
-- [ ] Wire notable fact extraction into analyzer session processing.
-- [ ] Add retrieval/enrich support for notable facts after the storage path is proven.
-
-## Out of scope
-
-- Replacing memory units; notable facts are a separate durable memory surface.
-- Markdown wiki page generation; claude-memory stores facts, not `.almanac/` pages.
+See [retrieval flows](../wiki/systems/retrieval-flows.md),
+[KB Markdown export](kb-markdown-export.md), and
+[storage migration](storage-migration.md).

@@ -1,23 +1,33 @@
 # KB Summary and Duplicate-Vector Retirement
 
-This slice retires the obsolete KB-to-memory-unit ingestion path and removes the stale `ingest-kb` CLI surface. It does not replace KB retrieval: KB Markdown remains available through KB PageIndex.
+This slice retires the obsolete KB-to-memory-unit ingestion path and the stale
+`ingest-kb` CLI surface. KB Markdown remains available through KB PageIndex.
 
 ## Current state
 
-- `src/kb_ingest.rs`, the `kb_ingest` library export, `run_ingest_kb`, and `claude-memory ingest-kb` are retired.
-- No active summary producer or summary search path was present before this slice. This is retirement of an obsolete/duplicate surface, not a change to a running summary pipeline.
-- Transcript PageIndex `PageIndexNode.summary` remains. It is node metadata used for transcript outlines and retrieval, not the retired summary-vector path.
-- KB PageIndex remains the structured, exact-content KB retrieval path and remains available to `enrich`.
+- `src/kb_ingest.rs`, the `kb_ingest` library export, `run_ingest_kb`, and
+  `claude-memory ingest-kb` are retired.
+- No active summary producer or summary search path is part of retrieval.
+- Transcript PageIndex `PageIndexNode.summary` remains node metadata, not a
+  summary-vector path.
+- KB PageIndex remains the structured exact-content KB retrieval path.
 - Prompt/answer history remains a separate session-history surface.
+- The transcript analyzer and notable-fact analyzer/writer are also retired;
+  `analyze` and `backfill` are not available.
 
 ## Compatibility and preservation
 
 Legacy readers retain source recognition for parity:
 
-- migration recognizes `source=summary` and `source=kb` as unsupported history sources and skips them rather than migrating them;
-- export recognizes legacy `source=summary` as non-durable and `source=kb` as an excluded KB vector, with manifest accounting.
+- migration recognizes `source=summary` and `source=kb` as unsupported history
+  sources and skips them rather than migrating them;
+- export recognizes legacy `source=summary` as non-durable and `source=kb` as an
+  excluded KB vector, with manifest accounting.
 
-This slice does not write live data, delete points or collections, or alter legacy Qdrant contents. Manual memory, memory-unit, notable-fact, prompt/answer history, and collection APIs remain outside the retirement.
+The durable-memory KB export is completed. Existing exported Markdown remains
+available through KB PageIndex. This slice does not write live notable facts,
+delete points, or delete collections. Legacy Qdrant contents remain outside the
+retirement boundary.
 
 ## Related contracts
 
