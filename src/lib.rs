@@ -6,7 +6,5 @@ pub mod enrich_cmd;
 pub mod extract;
 pub mod index;
 pub mod kb_search;
-pub mod llm;
 pub mod page_index;
-pub mod page_index_agentic;
 pub mod qdrant_hybrid;

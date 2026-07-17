@@ -8,7 +8,6 @@ name = "claude-memory"
 path = "src/main.rs"
 
 [dependencies]
-llm-sdk = { path = "../../lib/llm-sdk" }
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }

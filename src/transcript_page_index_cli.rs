@@ -1,5 +1,4 @@
 use clap::Subcommand;
-use claude_memory::page_index_agentic;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -76,9 +75,5 @@ pub enum TranscriptPageIndexCommand {
         /// Index directory (default: ~/.cache/claude-memory/transcript-page-index)
         #[arg(long)]
         index: Option<PathBuf>,
-
-        /// Retrieval mode
-        #[arg(long, value_enum, default_value_t = page_index_agentic::RetrievalMode::Lexical)]
-        mode: page_index_agentic::RetrievalMode,
     },
 }

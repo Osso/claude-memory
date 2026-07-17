@@ -1,5 +1,4 @@
 use super::*;
-use claude_memory::page_index_agentic;
 
 #[test]
 fn search_requires_prompt_or_answer_type() {
@@ -188,7 +187,6 @@ fn transcript_page_index_accepts_document_structure_content_and_query_commands()
                 query,
                 limit,
                 index,
-                mode,
             },
     } = query.command
     else {
@@ -197,23 +195,19 @@ fn transcript_page_index_accepts_document_structure_content_and_query_commands()
     assert_eq!(query, "deploy script");
     assert_eq!(limit, 2);
     assert_eq!(index, Some(PathBuf::from("/tmp/transcript-index")));
-    assert_eq!(mode, page_index_agentic::RetrievalMode::Lexical);
 
-    let agentic_query = Cli::parse_from([
+    let error = match Cli::try_parse_from([
         "claude-memory",
         "transcript-page-index",
         "query",
         "deploy script",
         "--mode",
         "agentic",
-    ]);
-    let Command::TranscriptPageIndex {
-        command: TranscriptPageIndexCommand::Query { mode, .. },
-    } = agentic_query.command
-    else {
-        panic!("expected transcript-page-index query command");
+    ]) {
+        Ok(_) => panic!("retired agentic mode should be rejected"),
+        Err(error) => error,
     };
-    assert_eq!(mode, page_index_agentic::RetrievalMode::Agentic);
+    assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]

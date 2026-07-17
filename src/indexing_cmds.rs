@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use claude_memory::{index, kb_search, page_index, page_index_agentic};
+use claude_memory::{index, kb_search, page_index};
 use std::path::{Path, PathBuf};
 
 pub async fn run_index_cmd(
@@ -134,20 +134,12 @@ pub fn run_transcript_page_index_content(
     Ok(())
 }
 
-pub async fn run_transcript_page_index_query(
+pub fn run_transcript_page_index_query(
     query: &str,
     limit: usize,
     index: Option<PathBuf>,
-    mode: page_index_agentic::RetrievalMode,
 ) -> Result<()> {
     let index_dir = index.unwrap_or_else(page_index::default_output_dir);
-    if mode == page_index_agentic::RetrievalMode::Agentic {
-        let corpus = page_index_agentic::TranscriptTreeWalkCorpus::new(&index_dir);
-        let response = page_index_agentic::retrieve_with_llm(query, &corpus, limit).await?;
-        print_tree_walk_response(&response);
-        return Ok(());
-    }
-
     let results = page_index::query_index(&index_dir, query, limit)?;
     print_transcript_query_results(&results);
     Ok(())
@@ -170,20 +162,5 @@ fn print_transcript_query_results(results: &[page_index::PageIndexQueryResult]) 
         println!("   source: {}", result.source_path);
         println!("   reason: {}", result.reason);
         println!("   next: {}\n", result.next_content_command);
-    }
-}
-
-fn print_tree_walk_response(response: &page_index_agentic::TreeWalkResponse) {
-    println!("PageIndex retrieval mode: {:?}", response.mode);
-    println!("Answer:\n{}", response.answer);
-    println!("\nReferences:");
-    for reference in &response.references {
-        println!("- {}#{}", reference.doc_id, reference.locator);
-    }
-    println!("\nRetrieval path:");
-    for step in &response.steps {
-        let doc = step.doc_id.as_deref().unwrap_or("-");
-        let locator = step.locator.as_deref().unwrap_or("-");
-        println!("- {} doc={} locator={}", step.action, doc, locator);
     }
 }

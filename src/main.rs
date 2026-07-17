@@ -161,8 +161,7 @@ async fn run_transcript_page_index_lookup_command(
             query,
             limit,
             index,
-            mode,
-        } => run_transcript_page_index_query(&query, limit, index, mode).await,
+        } => run_transcript_page_index_query(&query, limit, index),
         TranscriptPageIndexCommand::Build { .. } => {
             unreachable!("build command passed to run_transcript_page_index_lookup_command")
         }
