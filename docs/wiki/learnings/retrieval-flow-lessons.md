@@ -21,7 +21,7 @@ unified prompt/answer history plus KB PageIndex only.
 
 ## Search Is Not One Thing
 
-Current runtime lookup has two source families:
+Current runtime lookup has three source families:
 
 - prompt/answer history: raw conversation chunks in Qdrant
 - KB PageIndex: deterministic TSV search plus exact source line-range retrieval
