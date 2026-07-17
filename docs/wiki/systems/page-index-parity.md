@@ -24,17 +24,11 @@ KB retrieval is deterministic text search over the persisted TSV index. Its
 `document`, `structure`, and agentic query commands are retired. Rebuild the KB
 index explicitly after source changes, then query or fetch exact source lines.
 
-Transcript PageIndex retains the intended PageIndex retrieval loop:
-
-1. Search for candidate documents or nodes.
-2. Inspect document metadata.
-3. Inspect document structure without dumping all content.
-4. Fetch tight node or range content.
-5. Answer from fetched content with auditable references.
-
-`src/page_index_agentic.rs` contains the unchanged Transcript PageIndex
-tree-walk abstraction. Lexical query mode remains available there as a
-deterministic fallback and debugging path.
+Transcript PageIndex query is deterministic lexical scoring over persisted
+transcript nodes. It returns traceable document/node hits and a follow-up
+content command. Metadata, structure, and exact content remain available as
+explicit CLI source-inspection commands; query does not perform an agentic,
+tree-walk, or LLM retrieval loop.
 
 ## Surfaces
 

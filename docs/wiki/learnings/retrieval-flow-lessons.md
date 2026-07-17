@@ -19,20 +19,13 @@ enrichment, and the graph runtime modules are retired.
 The former memory-unit enrichment path is also retired. Current `enrich` uses
 unified prompt/answer history plus KB PageIndex only.
 
-## Prefer Local Defaults, But Document Overrides
-
-The default LLM backend is local Ollama. Non-local backends are still available
-for quality or compatibility, but they should be explicit through
-`CLAUDE_MEMORY_LLM_BACKEND`. Documentation should describe the default and the
-override path, not assume a single hosted provider.
-
 ## Search Is Not One Thing
 
 Current runtime lookup has two source families:
 
 - prompt/answer history: raw conversation chunks in Qdrant
 - KB PageIndex: deterministic TSV search plus exact source line-range retrieval
-- Transcript PageIndex: traceable document/structure/content retrieval
+- Transcript PageIndex: deterministic lexical node search plus traceable document/structure/content retrieval
 
 Legacy memory-unit, migration, and export collections are no longer runtime
 search surfaces; Qdrant now contains only `claude-session-history`.

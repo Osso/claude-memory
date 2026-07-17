@@ -1,4 +1,4 @@
-PageIndex parity defines the contract for matching the useful architecture of `VectifyAI/PageIndex` reference commit `f50e529` inside `claude-memory`. The target is not a line-for-line port; it is a Rust-native PageIndex surface for local KB Markdown and Claude/Codex transcript history. KB uses a deterministic text index; Transcript PageIndex retains the nested document model and optional agentic tree-walk retrieval. Implementation details belong in [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md).
+PageIndex parity defines the contract for matching the useful architecture of `VectifyAI/PageIndex` reference commit `f50e529` inside `claude-memory`. The target is not a line-for-line port; it is a Rust-native PageIndex surface for local KB Markdown and Claude/Codex transcript history. KB uses a deterministic text index; Transcript PageIndex retains the nested document model and deterministic lexical query. Implementation details belong in [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md).
 
 Decision: PDF parsing and OCR support stay out of scope until there is a
 concrete need for document formats beyond Markdown KB notes and transcript
@@ -15,7 +15,7 @@ Transcript PageIndex for Claude/Codex sessions.
 
 Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
-- [x] Preserve the reference architectural flow for Transcript PageIndex: inspect metadata and structure, fetch tight content ranges, and answer with traceable references.
+- [x] Preserve traceable Transcript PageIndex document, structure, and exact-content surfaces.
 - [x] Keep the reference distinction between transcript structure and transcript content: structure output must not require dumping full turn text.
 - [x] Keep stable transcript node identifiers suitable for follow-up content fetches.
 - [x] Keep KB retrieval outside that JSON/nested-document CLI contract: KB uses deterministic TSV text search and exact source line ranges.
@@ -67,14 +67,8 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] `claude-memory transcript-page-index document <doc-id-or-path>` prints transcript metadata.
 - [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
 - [x] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
-- [x] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
-
-### Transcript agentic tree-walk retrieval
-
-- [x] Keep the transcript query mode that mirrors the reference tool loop: inspect metadata and structure, choose tight targets, fetch content, and answer from fetched content only.
-- [x] Use the project `llm` backend abstraction for any model calls; do not add direct external API calls.
-- [x] Include the retrieval path in transcript query output or logs so selected documents, node ids, and fetched ranges are auditable.
-- [x] Keep deterministic lexical search available for Transcript PageIndex and label it clearly when used.
+- [x] `claude-memory transcript-page-index query <query>` uses deterministic lexical scoring and returns traceable transcript references plus a follow-up content command.
+- [x] Keep Transcript PageIndex query free of model calls and alternate query modes.
 - [x] Keep KB query deterministic; KB agentic mode is retired.
 
 ### Enrich integration
@@ -95,7 +89,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ## How it works
 
 - `src/kb_search.rs` implements the KB TSV text index and exact source line-range retrieval.
-- `src/page_index.rs` and `src/page_index_agentic.rs` implement the unchanged Transcript PageIndex document model and retrieval modes.
+- `src/page_index.rs` implements the Transcript PageIndex document model, Claude/Codex parsing, build, and deterministic lexical query.
 - [kb-page-index.md](kb-page-index.md) describes the current KB PageIndex implementation.
 - [friction-memory-creation.md](friction-memory-creation.md) records the retired transcript-mining boundary.
 
@@ -103,7 +97,6 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 - `src/kb_search.rs` — KB TSV text-index builder/search path with exact source line-range content fetch.
 - `src/page_index.rs` — transcript outline builder for Claude/Codex sessions using the nested PageIndex document model.
-- `src/page_index_agentic.rs` — Transcript PageIndex agentic/tree-walk retrieval mode and lexical fallback.
 - `src/indexing_cmds.rs` — CLI command handlers for KB build/query/content and Transcript PageIndex commands.
 - `src/enrich_cmd.rs` — prompt hook integration for KB PageIndex context.
 - `src/main.rs` — CLI declaration and dispatch for KB PageIndex and Transcript PageIndex commands.
@@ -141,9 +134,6 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
     - `kb_page_index_accepts_build_paths`
     - `kb_page_index_accepts_query_paths_and_limit`
     - `kb_page_index_accepts_content_command`
-  - `src/page_index_agentic.rs`
-    - `tree_walk_inspects_metadata_structure_then_fetches_content`
-    - `empty_agentic_plan_uses_labeled_lexical_fallback`
 
 ## Known gaps (current cycle)
 
@@ -153,7 +143,6 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Add tests for KB stale-index rejection when files are added, changed, or deleted.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
-- [x] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
 - [ ] Re-run build-time, output-size, and query-quality benchmarks for the current TSV text index; the historical PageIndex benchmark no longer measures this runtime.
 - [ ] Evaluate KB result quality beyond the targeted frontend, bash-hook, AMDGPU-first, and absent-query gates.
 

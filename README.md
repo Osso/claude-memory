@@ -28,8 +28,9 @@ claude-memory kb-page-index query "query" --kb /syncthing/Sync/KB
 # Fetch exact source lines from a fresh index
 claude-memory kb-page-index content path/to/note.md 4-8 --kb /syncthing/Sync/KB
 
-# Build transcript PageIndex (unchanged)
+# Build transcript PageIndex from Claude and Codex sessions
 claude-memory transcript-page-index build
+claude-memory transcript-page-index query "query"
 
 # Enrich a prompt and show collection statistics
 claude-memory enrich
@@ -46,8 +47,9 @@ KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` reads those
 files and rejects a stale index without rebuilding; run `build` explicitly after
 source changes. KB `content` requires the KB source and an inclusive line range.
 Query results include a follow-up `content` command with explicit `--kb` and
-`--index` paths. The KB `document`, `structure`, and agentic query commands are
-retired. Transcript PageIndex behavior is unchanged.
+`--index` paths. The former KB `document`, `structure`, and agentic query
+commands are retired. Transcript PageIndex query is deterministic lexical-only;
+its document, structure, and content commands remain explicit CLI operations.
 
 The former memory-unit and graph runtime paths are retired. The
 `deduplicate`, `build-graph`, `graph-clean`, and `graph-dump` commands are no

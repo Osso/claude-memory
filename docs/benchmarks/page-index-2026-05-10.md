@@ -56,7 +56,7 @@ Ten prompts were used for the query benchmark:
 | `rg -i` OR-term scan | KB Markdown | 0.07s | 0.007s | Fastest, but output was 129 KiB and noisy because every term match is returned without document structure. |
 | `claude-memory search --type prompts --limit 3` | legacy prompt/vector search | 1.24s | 0.124s | Fast, but results are transcript chunks and often not KB-specific. |
 | `kb-page-index query --mode lexical --limit 3` (historical pre-retirement syntax) | KB PageIndex | 5.43s | 0.543s | Historical result: document id, node id, score/reason, and exact `content` command. The KB JSON/agentic surface was later replaced by the TSV text index. |
-| `transcript-page-index query --mode lexical --limit 3` | 424-session bounded transcript index | 1.46s | 0.146s | Faster than KB PageIndex on this smaller index, but lexical transcript quality is noisy on broad prompts. |
+| `transcript-page-index query --mode lexical --limit 3` (historical pre-removal syntax; current query omits `--mode`) | 424-session bounded transcript index | 1.46s | 0.146s | Historical deterministic lexical query; faster than KB PageIndex on this smaller index, but transcript quality is noisy on broad prompts. |
 | `claude-memory enrich` (pre-retirement) | memory units + KB PageIndex | 9.17s | 0.917s | Historical measurement only; not the current enrich source composition. |
 
 The default KB PageIndex cache initially failed hook lookup with `missing field

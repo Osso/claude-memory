@@ -26,6 +26,8 @@ claude-memory stats
 Prompt and answer searches are filtered views over `claude-session-history`.
 `enrich` reads unified prompt/answer history and KB PageIndex results only.
 Transcript PageIndex remains CLI-only navigation and is not injected by default.
+Its query command is deterministic lexical-only; document, structure, and content
+remain explicit source-inspection commands.
 
 The memory-unit and graph runtime paths are retired. `deduplicate`,
 `build-graph`, `graph-clean`, and `graph-dump` are retired commands. The
