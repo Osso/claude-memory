@@ -289,6 +289,136 @@ fn adjacent_coverage_levels_outrank_maximum_structural_frequency() {
 }
 
 #[test]
+fn frontend_quality_gate_excludes_archive_noise_from_top_three() {
+    let root = unique_temp_dir("kb-text-quality-frontend");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("memory/manual-memories")).unwrap();
+    std::fs::create_dir_all(kb_dir.join("dev")).unwrap();
+    std::fs::create_dir_all(kb_dir.join("state")).unwrap();
+    std::fs::write(
+        kb_dir.join("memory/corrections.md"),
+        "# Corrections\n\n## Process\nFrontend design skill must load immediately.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("memory/manual-memories/__global__.md"),
+        "# Durable memory\nRemember to load the frontend design skill immediately before interface work.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("dev/claude-skills-guide.md"),
+        "# Guide\nThe frontend design skill should load immediately for frontend tasks.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("state/firefox-tab-archive-2024-12.md"),
+        "# Firefox Tab Archive\n\n## Firefox Tabs\nFrontend design skill load immediately bookmark.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    let results = search_text_index(
+        &kb_dir,
+        &index_dir,
+        "frontend design skill load immediately",
+        3,
+    )
+    .unwrap();
+    let paths = results
+        .iter()
+        .map(|result| result.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(paths[0], "memory/corrections.md");
+    assert_eq!(
+        paths,
+        [
+            "memory/corrections.md",
+            "memory/manual-memories/__global__.md",
+            "dev/claude-skills-guide.md",
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bash_hook_quality_gate_returns_distinct_documents() {
+    let root = unique_temp_dir("kb-text-quality-bash-hook");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("memory/notable-facts")).unwrap();
+    std::fs::create_dir_all(kb_dir.join("memory/manual-memories")).unwrap();
+    std::fs::write(
+        kb_dir.join("memory/notable-facts/project-claude-bash-hook.md"),
+        "# Claude Bash Hook\n\n## First\nClaude bash hook blocks unsafe Codex commands.\n\n## Second\nClaude bash hook rejects unsafe Codex execution.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("memory/manual-memories/project-claude-bash-hook.md"),
+        "# Manual memory\nClaude bash hook handles unsafe Codex commands.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("memory/decision.md"),
+        "# Decision\nClaude bash hook marks unsafe Codex commands explicitly.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    let results = search_text_index(
+        &kb_dir,
+        &index_dir,
+        "claude bash hook codex unsafe",
+        3,
+    )
+    .unwrap();
+    let paths = results
+        .iter()
+        .map(|result| result.path.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        [
+            "memory/notable-facts/project-claude-bash-hook.md",
+            "memory/manual-memories/project-claude-bash-hook.md",
+            "memory/decision.md",
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quality_gate_preserves_amdgpu_first_and_absent_query_behavior() {
+    let root = unique_temp_dir("kb-text-quality-preservation");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("memory/briefs")).unwrap();
+    std::fs::write(
+        kb_dir.join("memory/briefs/kernel-panic-suspend-amdgpu.md"),
+        "# Kernel Panic\nRouter suspend AMDGPU investigation evidence.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("router-suspend.md"),
+        "# Router Suspend\nUnrelated networking note.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    let results = search_text_index(&kb_dir, &index_dir, "router suspend amdgpu", 3).unwrap();
+    let absent = search_text_index(&kb_dir, &index_dir, "zzzzqvwxjkl987654321", 3).unwrap();
+
+    assert_eq!(
+        results[0].path,
+        "memory/briefs/kernel-panic-suspend-amdgpu.md"
+    );
+    assert!(absent.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn text_search_caps_term_frequency() {
     let root = unique_temp_dir("kb-text-search-frequency-cap");
     let kb_dir = root.join("kb");
