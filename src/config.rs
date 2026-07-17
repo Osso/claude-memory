@@ -66,9 +66,11 @@ fn table_enabled(table: &toml::Table, section: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) const LOG_PATH: &str = "/tmp/claude/claude-memory.log";
+
 fn log_warn(msg: &str) {
     use std::io::Write;
-    let log_path = "/tmp/claude/memory-mcp.log";
+    let log_path = LOG_PATH;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

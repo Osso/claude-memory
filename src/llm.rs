@@ -34,7 +34,7 @@ fn log(msg: &str) {
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/claude/memory-mcp.log")
+        .open(crate::config::LOG_PATH)
     else {
         return;
     };
