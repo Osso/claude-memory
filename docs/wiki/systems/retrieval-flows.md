@@ -30,11 +30,12 @@ KB PageIndex retrieves canonical Markdown from `/syncthing/Sync/KB`.
 Transcript PageIndex builds local outlines for Claude and Codex sessions. Neither
 PageIndex path writes memory units or graph records.
 
-KB text search gives distinct query-term coverage priority over field-location
-bonuses. A multi-term body match therefore outranks a single heading/path match,
-while one-term matches remain eligible. Within equal coverage, archive-path results
-are demoted. Before applying the top-N limit, search keeps at most one section per
-source document, making the returned documents distinct. The real-KB query
+KB text search places nonarchive paths ahead of archive paths during top-N
+selection. Within each group, distinct query-term coverage takes priority over
+field-location bonuses: a multi-term body match outranks a single heading/path
+match, while one-term matches remain eligible. Before applying the top-N limit,
+search keeps at most one section per source document, making the returned
+documents distinct. The real-KB query
 `frontend design skill load immediately` keeps `memory/corrections.md` first and
 excludes archive noise from its top three; `claude bash hook codex unsafe` returns
 three distinct documents. AMDGPU-first ordering and empty-query behavior remain

@@ -43,7 +43,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Preserve heading source line numbers.
 - [x] Record source freshness in `manifest.tsv`.
 - [x] Reject query/content when Markdown files are added, changed, deleted, or otherwise make the manifest stale; rebuild is explicit.
-- [x] Rank results by distinct query-term coverage before secondary score, demoting archive paths only within equal coverage.
+- [x] Place nonarchive paths before archive paths during top-N selection; within each group, rank results by distinct query-term coverage before secondary score.
 - [x] Keep at most one matching section per source document before applying the top-N limit.
 - [x] Preserve the frontend top-three, bash-hook document-diversity, AMDGPU-first, and absent-query quality gates.
 
