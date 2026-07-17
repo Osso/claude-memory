@@ -8,7 +8,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Persist each chunk with its text, `type` (`prompt` or `answer`), `source` (`session` or `archive`), path, session id, and persisted hash.
 - [x] Make prompt search a `type=prompt` view and answer search a `type=answer` view.
 - [x] Allow prompt and answer searches to restrict results by `source`.
-- [x] Include history type in persisted chunk identity so identical text can exist once as a prompt and once as an answer.
+- [x] Include history type and source in persisted chunk identity so identical text remains distinct across prompt/answer and session/archive views.
 - [x] Return text, source, path, session id, and score without panicking on missing payload fields.
 
 ### Indexing lifecycle

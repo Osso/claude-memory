@@ -155,7 +155,12 @@ fn point_id_for_chunk(chunk: &IndexedChunk) -> String {
 }
 
 pub(crate) fn history_hash(chunk: &IndexedChunk) -> String {
-    format!("{}:{}", chunk.history_type.as_str(), chunk.chunk.hash)
+    format!(
+        "{}:{}:{}",
+        chunk.history_type.as_str(),
+        chunk.source,
+        chunk.chunk.hash
+    )
 }
 
 fn point_payload(chunk: &IndexedChunk) -> HashMap<String, Value> {

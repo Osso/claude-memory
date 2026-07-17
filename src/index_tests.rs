@@ -109,6 +109,15 @@ fn identical_prompt_and_answer_text_have_distinct_history_hashes() {
     assert_ne!(history_hash(&prompt), history_hash(&answer));
 }
 
+#[test]
+fn identical_prompt_text_from_session_and_archive_has_distinct_history_hashes() {
+    let session = make_chunk("same-content");
+    let mut archive = session.clone();
+    archive.source = "archive".to_string();
+
+    assert_ne!(history_hash(&session), history_hash(&archive));
+}
+
 #[tokio::test]
 async fn qdrant_history_filters_isolate_type_and_source() {
     let collection = format!("test-session-history-{}", uuid::Uuid::new_v4());

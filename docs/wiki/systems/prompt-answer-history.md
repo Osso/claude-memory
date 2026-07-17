@@ -20,9 +20,9 @@ BM25 vector layout. Each point stores:
 - `session_id` — session identifier when available
 - `hash` — persisted history identity
 
-The persisted hash is `type:chunk_hash`. A prompt and an answer with identical
-text therefore remain distinct points. Point identity is derived from the same
-history hash.
+The persisted hash is `type:source:chunk_hash`. Identical text therefore remains
+distinct across prompt/answer and session/archive views. Point identity is
+derived from the same history hash.
 
 ## Index inputs
 
