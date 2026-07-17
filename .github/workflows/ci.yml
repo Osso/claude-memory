@@ -15,12 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout path dependencies
-        run: |
-          mkdir -p ../../lib
-          git clone --depth 1 https://github.com/Osso/llm-sdk ../../lib/llm-sdk
-          git clone --depth 1 https://github.com/Osso/llm-agent ../../lib/llm-agent
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
