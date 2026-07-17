@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
 #[path = "kb_search_markdown.rs"]
@@ -22,7 +23,25 @@ use kb_search_text::{build_snippet, token_counts, tokenize};
 pub const DEFAULT_KB_DIR: &str = "/syncthing/Sync/KB";
 
 const INDEX_FILE_NAME: &str = "index.json";
+const NODES_FILE_NAME: &str = "nodes.tsv";
+const MANIFEST_FILE_NAME: &str = "manifest.tsv";
 const MIN_SCORE: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextIndexNode {
+    pub path: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub heading_path: String,
+    pub normalized_body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextManifestEntry {
+    pub path: String,
+    pub mtime_ns: u128,
+    pub size: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbSearchResult {
@@ -85,6 +104,233 @@ pub fn build_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
         nodes: node_count,
         index_path,
     })
+}
+
+pub fn build_text_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
+    let files = collect_markdown_files(kb_dir);
+    let mut nodes = Vec::new();
+    let mut manifest = Vec::new();
+
+    for path in &files {
+        let relative = relative_path(kb_dir, path);
+        let (markdown, entry) = read_stable_markdown(kb_dir, path)?;
+        let sections = split_markdown_sections(&relative, &markdown);
+        let line_count = markdown.lines().count();
+        for (index, section) in sections.iter().enumerate() {
+            nodes.push(TextIndexNode {
+                path: relative.clone(),
+                line_start: section.source_line,
+                line_end: sections
+                    .get(index + 1)
+                    .map_or(line_count, |next| next.source_line.saturating_sub(1)),
+                heading_path: section.heading_path.clone(),
+                normalized_body: normalized_section_body(section),
+            });
+        }
+        manifest.push(entry);
+    }
+
+    std::fs::create_dir_all(index_dir)
+        .with_context(|| format!("failed to create {}", index_dir.display()))?;
+    let nodes_path = index_dir.join(NODES_FILE_NAME);
+    std::fs::write(&nodes_path, render_text_nodes(&nodes))?;
+    std::fs::write(
+        index_dir.join(MANIFEST_FILE_NAME),
+        render_text_manifest(&manifest),
+    )?;
+
+    Ok(KbBuildSummary {
+        files: manifest.len(),
+        nodes: nodes.len(),
+        index_path: nodes_path,
+    })
+}
+
+pub fn load_text_nodes(index_dir: &Path) -> Result<Vec<TextIndexNode>> {
+    let path = index_dir.join(NODES_FILE_NAME);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    parse_text_nodes(&text).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+pub fn load_text_manifest(index_dir: &Path) -> Result<Vec<TextManifestEntry>> {
+    let path = index_dir.join(MANIFEST_FILE_NAME);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    parse_text_manifest(&text).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+pub fn validate_text_manifest(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+    let expected = load_text_manifest(index_dir)?;
+    let files = collect_markdown_files(kb_dir);
+    if files.len() != expected.len() {
+        bail!("stale KB text index: Markdown file set changed");
+    }
+    for (path, expected_entry) in files.iter().zip(expected.iter()) {
+        let actual = manifest_entry(kb_dir, path)?;
+        if !manifest_entries_match(expected_entry, &actual) {
+            bail!("stale KB text index: {} changed", actual.path);
+        }
+    }
+    Ok(())
+}
+
+fn read_stable_markdown(kb_dir: &Path, path: &Path) -> Result<(String, TextManifestEntry)> {
+    let before = manifest_entry(kb_dir, path)?;
+    let markdown = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let after = manifest_entry(kb_dir, path)?;
+    if !manifest_entries_match(&before, &after) {
+        bail!(
+            "Markdown changed while building text index: {}",
+            before.path
+        );
+    }
+    Ok((markdown, after))
+}
+
+fn manifest_entry(kb_dir: &Path, path: &Path) -> Result<TextManifestEntry> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?;
+    Ok(TextManifestEntry {
+        path: relative_path(kb_dir, path),
+        mtime_ns: modified.as_nanos(),
+        size: metadata.len(),
+    })
+}
+
+fn manifest_entries_match(left: &TextManifestEntry, right: &TextManifestEntry) -> bool {
+    left.path == right.path && left.mtime_ns == right.mtime_ns && left.size == right.size
+}
+
+fn normalized_section_body(section: &MarkdownSection) -> String {
+    let mut lines = section.text.lines();
+    let first = lines.next().unwrap_or_default();
+    let body = if is_markdown_heading(first) {
+        lines.collect::<Vec<_>>().join(" ")
+    } else {
+        section.text.clone()
+    };
+    body.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let hashes = trimmed
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    (1..=6).contains(&hashes)
+        && trimmed
+            .get(hashes..)
+            .is_some_and(|title| !title.trim().is_empty())
+}
+
+fn render_text_nodes(nodes: &[TextIndexNode]) -> String {
+    nodes
+        .iter()
+        .map(|node| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                escape_tsv(&node.path),
+                node.line_start,
+                node.line_end,
+                escape_tsv(&node.heading_path),
+                escape_tsv(&node.normalized_body)
+            )
+        })
+        .collect()
+}
+
+fn parse_text_nodes(text: &str) -> Result<Vec<TextIndexNode>> {
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            parse_text_node(line).with_context(|| format!("nodes.tsv row {}", index + 1))
+        })
+        .collect()
+}
+
+fn parse_text_node(line: &str) -> Result<TextIndexNode> {
+    let fields: Vec<&str> = line.split('\t').collect();
+    if fields.len() != 5 {
+        bail!("expected 5 fields");
+    }
+    let line_start: usize = fields[1].parse().context("invalid line_start")?;
+    let line_end: usize = fields[2].parse().context("invalid line_end")?;
+    if line_start == 0 || line_end < line_start {
+        bail!("invalid line range {line_start}..{line_end}");
+    }
+    Ok(TextIndexNode {
+        path: unescape_tsv(fields[0]).context("invalid path")?,
+        line_start,
+        line_end,
+        heading_path: unescape_tsv(fields[3]).context("invalid heading_path")?,
+        normalized_body: unescape_tsv(fields[4]).context("invalid normalized_body")?,
+    })
+}
+
+fn render_text_manifest(entries: &[TextManifestEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}\t{}\t{}\n",
+                escape_tsv(&entry.path),
+                entry.mtime_ns,
+                entry.size
+            )
+        })
+        .collect()
+}
+
+fn parse_text_manifest(text: &str) -> Result<Vec<TextManifestEntry>> {
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            parse_text_manifest_entry(line)
+                .with_context(|| format!("manifest.tsv row {}", index + 1))
+        })
+        .collect()
+}
+
+fn parse_text_manifest_entry(line: &str) -> Result<TextManifestEntry> {
+    let fields: Vec<&str> = line.split('\t').collect();
+    if fields.len() != 3 {
+        bail!("expected 3 fields");
+    }
+    Ok(TextManifestEntry {
+        path: unescape_tsv(fields[0]).context("invalid path")?,
+        mtime_ns: fields[1].parse().context("invalid mtime_ns")?,
+        size: fields[2].parse().context("invalid size")?,
+    })
+}
+
+fn escape_tsv(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn unescape_tsv(value: &str) -> Result<String> {
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => output.push('\\'),
+            Some('t') => output.push('\t'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            _ => bail!("invalid TSV escape"),
+        }
+    }
+    Ok(output)
 }
 
 pub fn search_default_kb(query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {

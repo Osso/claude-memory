@@ -2,6 +2,186 @@ use super::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn text_index_files_round_trip_generated_sections() {
+    let root = unique_temp_dir("kb-text-index-contract");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("state")).unwrap();
+    std::fs::write(
+        kb_dir.join("state/router.md"),
+        "# Router\nLocal network overview.\n\n## Firewall\nBlock unsolicited WAN traffic.\n",
+    )
+    .unwrap();
+
+    let summary = build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes = load_text_nodes(&index_dir).unwrap();
+    let manifest = load_text_manifest(&index_dir).unwrap();
+
+    assert_eq!(summary.files, 1);
+    assert_eq!(summary.nodes, 2);
+    assert_eq!(summary.index_path, index_dir.join("nodes.tsv"));
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].path, "state/router.md");
+    assert_eq!(nodes[0].heading_path, "Router");
+    assert_eq!(nodes[1].heading_path, "Router > Firewall");
+    assert_eq!(manifest.len(), 1);
+    assert_eq!(manifest[0].path, "state/router.md");
+    assert!(manifest[0].mtime_ns > 0);
+    assert!(manifest[0].size > 0);
+
+    let nodes_text = std::fs::read_to_string(index_dir.join("nodes.tsv")).unwrap();
+    let manifest_text = std::fs::read_to_string(index_dir.join("manifest.tsv")).unwrap();
+    assert!(!nodes_text.starts_with('{'));
+    assert!(!manifest_text.starts_with('{'));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn text_index_stores_full_normalized_section_body() {
+    let root = unique_temp_dir("kb-text-index-normalized-body");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(
+        kb_dir.join("notes.md"),
+        "# Notes\n  First line with spacing.\nSecond\tline.\n\nThird line remains searchable.\n",
+    )
+    .unwrap();
+
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes = load_text_nodes(&index_dir).unwrap();
+
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(
+        nodes[0].normalized_body,
+        "First line with spacing. Second line. Third line remains searchable."
+    );
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn manifest_detects_size_or_mtime_changes() {
+    let root = unique_temp_dir("kb-text-index-stale");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    let path = kb_dir.join("notes.md");
+    std::fs::write(&path, "# Notes\nOriginal.\n").unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    assert!(validate_text_manifest(&kb_dir, &index_dir).is_ok());
+
+    std::fs::write(&path, "# Notes\nChanged content with a different size.\n").unwrap();
+    let error = validate_text_manifest(&kb_dir, &index_dir).unwrap_err();
+
+    assert!(error.to_string().contains("stale KB text index"));
+    assert!(error.to_string().contains("notes.md"));
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn headingless_hash_prefix_remains_in_normalized_body() {
+    let root = unique_temp_dir("kb-text-index-leading-hashes");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(
+        kb_dir.join("notes.md"),
+        "####### literal text\nimportant body\n",
+    )
+    .unwrap();
+
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes = load_text_nodes(&index_dir).unwrap();
+
+    assert_eq!(
+        nodes[0].normalized_body,
+        "####### literal text important body"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn empty_markdown_heading_marker_remains_in_normalized_body() {
+    let root = unique_temp_dir("kb-text-index-empty-heading");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(kb_dir.join("notes.md"), "# \nimportant body\n").unwrap();
+
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes = load_text_nodes(&index_dir).unwrap();
+
+    assert_eq!(nodes[0].normalized_body, "# important body");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn text_index_order_ranges_and_escaping_are_deterministic() {
+    let root = unique_temp_dir("kb-text-index-deterministic");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(kb_dir.join("z.md"), "# Zed\nLast.\n").unwrap();
+    std::fs::write(
+        kb_dir.join("a\tb.md"),
+        "# Alpha\tBeta\nFirst.\n\n## Child\nSecond.\n",
+    )
+    .unwrap();
+
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes = load_text_nodes(&index_dir).unwrap();
+
+    assert_eq!(nodes[0].path, "a\tb.md");
+    assert_eq!(nodes[0].heading_path, "Alpha\tBeta");
+    assert_eq!((nodes[0].line_start, nodes[0].line_end), (1, 3));
+    assert_eq!((nodes[1].line_start, nodes[1].line_end), (4, 5));
+    assert_eq!(nodes[2].path, "z.md");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn text_index_parser_rejects_invalid_ranges_with_row_context() {
+    let root = unique_temp_dir("kb-text-index-invalid-range");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("nodes.tsv"), "notes.md\t10\t2\tNotes\tbody\n").unwrap();
+
+    let error = load_text_nodes(&root).unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains("nodes.tsv row 1"));
+    assert!(message.contains("line range"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn manifest_compares_mtime_and_size_independently() {
+    let baseline = TextManifestEntry {
+        path: "notes.md".to_string(),
+        mtime_ns: 10,
+        size: 20,
+    };
+
+    assert!(!manifest_entries_match(
+        &baseline,
+        &TextManifestEntry {
+            mtime_ns: 11,
+            ..baseline.clone()
+        }
+    ));
+    assert!(!manifest_entries_match(
+        &baseline,
+        &TextManifestEntry {
+            size: 21,
+            ..baseline.clone()
+        }
+    ));
+}
+
+#[test]
 fn build_and_search_persisted_kb_index() {
     let root = unique_temp_dir("kb-page-index-search");
     let kb_dir = root.join("kb");
