@@ -26,9 +26,10 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 - [x] Reject the query when the KB source is missing or the manifest is stale.
 - [x] Return the matching source path and heading for a query that targets a persisted section.
 - [x] Require content retrieval to name the KB source and an exact inclusive line range.
-- [x] Make distinct query-term coverage dominate field-location bonuses: multi-term body matches outrank single heading/path matches, while one-term matches remain available.
-- [x] Return the real KB query `frontend design skill load immediately` with `memory/corrections.md` first.
-- [ ] Improve result diversity for the real KB query `claude bash hook codex unsafe`; relevant bash-hook material is found, but results remain duplicate-heavy.
+- [x] Keep only results in the best distinct query-term coverage tier up to the requested limit; do not fill remaining slots with weaker matches, and exclude archive results when nonarchive matches exist in that tier.
+- [x] Keep at most one matching section per source document before applying the limit.
+- [x] Return the real KB query `frontend design skill load immediately` with two relevant results and `memory/corrections.md` first, rather than a noisy third.
+- [x] Return the real KB query `claude bash hook codex unsafe` with distinct documents.
 
 ### Enrich integration
 
