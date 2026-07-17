@@ -3,7 +3,6 @@ use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{PointStruct, ScrollPointsBuilder, UpsertPointsBuilder, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
 
 use crate::embed::Embedder;
@@ -24,7 +23,8 @@ fn is_unseen_chunk(
     existing: &HashSet<String>,
     seen: &mut HashSet<String>,
 ) -> bool {
-    !existing.contains(&chunk.chunk.hash) && seen.insert(chunk.chunk.hash.clone())
+    let hash = history_hash(chunk);
+    !existing.contains(&hash) && seen.insert(hash)
 }
 
 /// Get all existing chunk hashes from Qdrant.
@@ -82,7 +82,6 @@ pub(crate) async fn index_chunks(
     embedder: &Embedder,
     chunks: &[IndexedChunk],
     batch_size: usize,
-    next_id: &AtomicU64,
     collection: &str,
     delay_ms: u64,
 ) -> Result<usize> {
@@ -92,7 +91,7 @@ pub(crate) async fn index_chunks(
     for batch in chunks.chunks(batch_size) {
         wait_before_next_batch(delay, delay_ms, indexed).await;
 
-        let Some(points) = embed_batch_points(embedder, batch, next_id).await else {
+        let Some(points) = embed_batch_points(embedder, batch).await else {
             continue;
         };
 
@@ -116,7 +115,6 @@ async fn wait_before_next_batch(delay: std::time::Duration, delay_ms: u64, index
 async fn embed_batch_points(
     embedder: &Embedder,
     batch: &[IndexedChunk],
-    next_id: &AtomicU64,
 ) -> Option<Vec<PointStruct>> {
     let texts: Vec<&str> = batch
         .iter()
@@ -130,26 +128,18 @@ async fn embed_batch_points(
         }
     };
 
-    Some(build_points(batch, embeddings, next_id))
+    Some(build_points(batch, embeddings))
 }
 
-fn build_points(
-    batch: &[IndexedChunk],
-    embeddings: Vec<Vec<f32>>,
-    next_id: &AtomicU64,
-) -> Vec<PointStruct> {
+fn build_points(batch: &[IndexedChunk], embeddings: Vec<Vec<f32>>) -> Vec<PointStruct> {
     batch
         .iter()
         .zip(embeddings)
-        .map(|(chunk, embedding)| build_single_point(chunk, embedding, next_id))
+        .map(|(chunk, embedding)| build_single_point(chunk, embedding))
         .collect()
 }
 
-fn build_single_point(
-    chunk: &IndexedChunk,
-    embedding: Vec<f32>,
-    _next_id: &AtomicU64,
-) -> PointStruct {
+fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>) -> PointStruct {
     let id = point_id_for_chunk(chunk);
     let named = build_named_vectors(embedding, &chunk.chunk.text);
     PointStruct::new(id, named, point_payload(chunk))
@@ -157,23 +147,28 @@ fn build_single_point(
 
 fn point_id_for_chunk(chunk: &IndexedChunk) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(chunk.chunk.hash.as_bytes());
+    hasher.update(history_hash(chunk).as_bytes());
     let digest = hasher.finalize();
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest[..16]);
     Uuid::from_bytes(bytes).to_string()
 }
 
+pub(crate) fn history_hash(chunk: &IndexedChunk) -> String {
+    format!("{}:{}", chunk.history_type.as_str(), chunk.chunk.hash)
+}
+
 fn point_payload(chunk: &IndexedChunk) -> HashMap<String, Value> {
     [
         ("text", chunk.chunk.text.clone().into()),
+        ("type", chunk.history_type.as_str().into()),
         ("source", chunk.source.clone().into()),
         ("path", chunk.path.clone().into()),
         (
             "session_id",
             chunk.session_id.clone().unwrap_or_default().into(),
         ),
-        ("hash", chunk.chunk.hash.clone().into()),
+        ("hash", history_hash(chunk).into()),
     ]
     .into_iter()
     .map(|(key, value): (&str, Value)| (key.to_string(), value))

@@ -4,7 +4,7 @@ Semantic memory search for Claude Code sessions and knowledge base.
 
 ## Architecture
 
-- **Vector store**: Qdrant (localhost:6334)
+- **Session-history vector store**: Qdrant collection `claude-session-history` (localhost:6334)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
 
@@ -13,22 +13,26 @@ Semantic memory search for Claude Code sessions and knowledge base.
 Manual CLI invocation + Claude Code hooks:
 
 ```bash
-# Index all sources
+# Index active and archived Claude transcript chunks
 claude-memory index
 
 # Search
 claude-memory search "query"
+claude-memory search --type prompts "query"
+claude-memory search --type answers "query"
 
 # Stats
 claude-memory stats
 ```
 
-## Data Sources
+`index` reads active `.jsonl` sessions and archived `.jsonl.zst` sessions only.
+Prompt and answer searches are filtered views over the shared
+`claude-session-history` collection. There is no `index --kb` command; KB
+Markdown uses the separate `kb-page-index` and `ingest-kb` surfaces.
 
-- Session archives: `~/.claude/archive/*.jsonl.zst`
-- Active sessions: `~/.claude/projects/**/sessions/*.jsonl`
-- Project summaries: `~/.claude/projects/**/summary.md`
-- Knowledge base: `/syncthing/Sync/KB/**/*.md`
+Project summaries, KB Markdown, manual memories, and the
+`claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
+session-history indexing targets or alternate search paths.
 
 ## Build & Install
 

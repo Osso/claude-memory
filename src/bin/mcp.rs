@@ -3,14 +3,14 @@
 use anyhow::{Context, Result};
 use claude_memory::config;
 use claude_memory::embed::Embedder;
+use claude_memory::extract::HistoryType;
 use claude_memory::graph;
+use claude_memory::index::{COLLECTION_SESSION_HISTORY, history_filter};
 use claude_memory::llm::{self, RawResult};
 use claude_memory::memory_unit::manual_memory_write_guidance;
 use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
 use qdrant_client::Qdrant;
-use qdrant_client::qdrant::{
-    Condition, Document, Filter, Fusion, PrefetchQueryBuilder, Query, QueryPointsBuilder,
-};
+use qdrant_client::qdrant::{Document, Fusion, PrefetchQueryBuilder, Query, QueryPointsBuilder};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
@@ -37,9 +37,6 @@ fn log(msg: &str) {
 }
 
 const QDRANT_URL: &str = "http://localhost:6334";
-const COLLECTION_PROMPTS: &str = "claude-memory";
-const COLLECTION_ANSWERS: &str = "claude-answers";
-
 /// Lazy-initialized Qdrant client.
 static QDRANT: OnceCell<Qdrant> = OnceCell::const_new();
 
@@ -53,10 +50,8 @@ async fn get_qdrant() -> Result<&'static Qdrant> {
                 .build()
                 .context("failed to connect to Qdrant")?;
             log("get_qdrant: client built, ensuring collections");
-            ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
-            log("get_qdrant: prompts collection ok");
-            ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
-            log("get_qdrant: answers collection ok");
+            ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
+            log("get_qdrant: session-history collection ok");
             claude_memory::memory_unit::ensure_memory_units_collection(&client).await?;
             log("get_qdrant: memory-units collection ok");
             Ok(client)
@@ -149,9 +144,7 @@ pub struct SearchParams {
     query: String,
     #[schemars(description = "Maximum results (default: 5)")]
     limit: Option<usize>,
-    #[schemars(
-        description = "Filter by source type: \"memory\" (legacy manual), \"session\", \"archive\", \"summary\", \"kb\""
-    )]
+    #[schemars(description = "Filter by source: \"session\" or \"archive\"")]
     source: Option<String>,
 }
 
@@ -176,11 +169,11 @@ impl MemoryService {
     }
 
     #[tool(
-        description = "Search user prompts, questions, and knowledge base. Use to find what was asked or discussed."
+        description = "Search user prompts and questions from session history. Use to find what was asked or discussed."
     )]
     async fn prompt_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         log("tool: prompt_search called");
-        match self.do_search(params, COLLECTION_PROMPTS).await {
+        match self.do_search(params, HistoryType::Prompt).await {
             Ok(r) => {
                 log("tool: prompt_search ok");
                 r
@@ -197,7 +190,7 @@ impl MemoryService {
     )]
     async fn answer_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         log("tool: answer_search called");
-        match self.do_search(params, COLLECTION_ANSWERS).await {
+        match self.do_search(params, HistoryType::Answer).await {
             Ok(r) => {
                 log("tool: answer_search ok");
                 r
@@ -255,11 +248,11 @@ impl MemoryService {
         Ok(format_entries(&entries))
     }
 
-    async fn do_search(&self, params: SearchParams, collection: &str) -> Result<String> {
-        log_search_request(collection, &params.query);
+    async fn do_search(&self, params: SearchParams, history_type: HistoryType) -> Result<String> {
+        log_search_request(history_type, &params.query);
         let client = get_qdrant().await?;
         let limit = params.limit.unwrap_or(5);
-        let points = self.search_points(client, collection, &params).await?;
+        let points = self.search_points(client, history_type, &params).await?;
         if points.is_empty() {
             return Ok("No results found.".to_string());
         }
@@ -274,20 +267,22 @@ impl MemoryService {
     async fn run_hybrid_search(
         &self,
         client: &Qdrant,
-        collection: &str,
+        history_type: HistoryType,
         query_vec: Vec<f32>,
         query_text: &str,
         limit: usize,
         source: Option<&str>,
     ) -> Result<Vec<qdrant_client::qdrant::ScoredPoint>> {
         let over_fetch = ((limit * 4) as u64).max(20);
-        let mut qb = make_hybrid_query(collection, query_vec, query_text, limit as u64, over_fetch);
-        if let Some(src) = source {
-            qb = qb.filter(Filter::must([Condition::matches(
-                "source",
-                src.to_string(),
-            )]));
-        }
+        let mut qb = make_hybrid_query(
+            COLLECTION_SESSION_HISTORY,
+            query_vec,
+            query_text,
+            limit as u64,
+            over_fetch,
+        );
+        let sources: Vec<&str> = source.into_iter().collect();
+        qb = qb.filter(history_filter(history_type, &sources));
         Ok(client
             .query(qb)
             .await
@@ -298,7 +293,7 @@ impl MemoryService {
     async fn search_points(
         &self,
         client: &Qdrant,
-        collection: &str,
+        history_type: HistoryType,
         params: &SearchParams,
     ) -> Result<Vec<qdrant_client::qdrant::ScoredPoint>> {
         if !config::search_enabled() {
@@ -309,7 +304,7 @@ impl MemoryService {
         let points = self
             .run_hybrid_search(
                 client,
-                collection,
+                history_type,
                 query_vec,
                 &params.query,
                 20,
@@ -364,10 +359,12 @@ async fn filter_search_results<'a>(
     filtered
 }
 
-fn log_search_request(collection: &str, query: &str) {
+fn log_search_request(history_type: HistoryType, query: &str) {
+    let query_preview: String = query.chars().take(80).collect();
     log(&format!(
-        "do_search: collection={collection} query={:?}",
-        &query[..query.len().min(80)]
+        "do_search: collection={} type={} query={query_preview:?}",
+        COLLECTION_SESSION_HISTORY,
+        history_type.as_str(),
     ));
 }
 
@@ -430,17 +427,15 @@ fn format_entries(entries: &[(String, String, String)]) -> String {
     const MAX_BYTES: usize = 50_000;
     let total = entries.len();
     let mut output = format!("{total} entries found.\n\n");
-    let mut shown = 0;
-    for (i, (category, project, text)) in entries.iter().enumerate() {
-        let entry = format_entry(i, category, project, text);
+    for (index, (category, project, text)) in entries.iter().enumerate() {
+        let entry = format_entry(index, category, project, text);
         if output.len() + entry.len() > MAX_BYTES {
             output.push_str(&format!(
-                "[truncated at 50KB — showing {shown}/{total} entries]\n"
+                "[truncated at 50KB — showing {index}/{total} entries]\n"
             ));
             return output;
         }
         output.push_str(&entry);
-        shown += 1;
     }
     output
 }
@@ -459,9 +454,31 @@ fn format_entry(i: usize, category: &str, project: &str, text: &str) -> String {
     entry
 }
 
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for MemoryService {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            instructions: Some(
+                "Claude memory MCP server - search semantic memories across sessions; manual memory_write storage is disabled and returns docs/local guidance".into(),
+            ),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            ..Default::default()
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let service = MemoryService::new();
+    let server = service.serve(stdio()).await?;
+    server.waiting().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
     async fn enrich_with_graph_returns_empty_when_graph_disabled() {
         let related = enrich_with_graph_when_enabled("Rust", false).await;
@@ -485,25 +502,4 @@ mod tests {
         assert!(response.contains("Do not store this in Qdrant"));
         assert!(response.contains("docs/local/memory.md"));
     }
-}
-
-#[tool_handler(router = self.tool_router)]
-impl ServerHandler for MemoryService {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "Claude memory MCP server - search semantic memories across sessions; manual memory_write storage is disabled and returns docs/local guidance".into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let service = MemoryService::new();
-    let server = service.serve(stdio()).await?;
-    server.waiting().await?;
-    Ok(())
 }

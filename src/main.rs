@@ -44,10 +44,6 @@ enum Command {
         #[arg(long)]
         projects: Option<PathBuf>,
 
-        /// Knowledge base directory (default: /syncthing/Sync/KB)
-        #[arg(long)]
-        kb: Option<PathBuf>,
-
         /// Batch size for embedding
         #[arg(long, default_value = "10")]
         batch_size: usize,
@@ -264,6 +260,15 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
+        Command::Analyze { .. }
+        | Command::MemoryDelete { .. }
+        | Command::MemoryWrite { .. }
+        | Command::Backfill { .. } => run_memory_command(command).await,
+    }
+}
+
+async fn run_memory_command(command: Command) -> Result<()> {
+    match command {
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
         Command::MemoryDelete { id } => run_memory_delete(id).await,
         Command::MemoryWrite { text, project } => run_memory_write(text, project).await,
@@ -274,6 +279,7 @@ async fn run_command(command: Command) -> Result<()> {
             min_user_turns,
             max_sessions,
         } => run_backfill_cmd(projects, archive, state_file, min_user_turns, max_sessions).await,
+        _ => unreachable!("non-memory command dispatched to run_memory_command"),
     }
 }
 
@@ -360,11 +366,10 @@ async fn run_indexing_command(command: Command) -> Result<()> {
         Command::Index {
             archive,
             projects,
-            kb,
             batch_size,
             fresh,
             delay_ms,
-        } => run_index_cmd(archive, projects, kb, batch_size, fresh, delay_ms).await,
+        } => run_index_cmd(archive, projects, batch_size, fresh, delay_ms).await,
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
         Command::IngestKb {
             kb,
@@ -554,10 +559,7 @@ fn update_analysis_counts(counts: &mut AnalysisCounts, outcome: &analyze::Analys
             facts,
             inserted,
             merged,
-        } => {
-            counts.notable_facts += facts;
-            println!("NOTABLE FACTS: {facts} extracted ({inserted} inserted, {merged} merged)");
-        }
+        } => record_notable_facts(counts, *facts, *inserted, *merged),
         AnalysisOutcome::NoFriction { .. } => counts.no_friction += 1,
         AnalysisOutcome::Discarded { turn, reason } => {
             counts.discarded += 1;
@@ -567,14 +569,21 @@ fn update_analysis_counts(counts: &mut AnalysisCounts, outcome: &analyze::Analys
             turn,
             unit,
             deduped,
-        } => {
-            counts.stored += 1;
-            let dedup_label = if *deduped {
-                " (merged with existing)"
-            } else {
-                ""
-            };
-            println!("[turn {turn}] STORED{dedup_label}: {}", unit.text);
-        }
+        } => record_stored_memory(counts, *turn, &unit.text, *deduped),
     }
+}
+
+fn record_notable_facts(counts: &mut AnalysisCounts, facts: usize, inserted: usize, merged: usize) {
+    counts.notable_facts += facts;
+    println!("NOTABLE FACTS: {facts} extracted ({inserted} inserted, {merged} merged)");
+}
+
+fn record_stored_memory(counts: &mut AnalysisCounts, turn: u32, text: &str, deduped: bool) {
+    counts.stored += 1;
+    let dedup_label = if deduped {
+        " (merged with existing)"
+    } else {
+        ""
+    };
+    println!("[turn {turn}] STORED{dedup_label}: {text}");
 }

@@ -1,10 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
-use qdrant_client::qdrant::{ScoredPoint, Value};
+use qdrant_client::Qdrant;
+use qdrant_client::qdrant::{
+    PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, Value,
+};
 
 use crate::chunk::Chunk;
-use crate::extract::IndexedChunk;
-use crate::index::{build_search_results, filter_new, get_string};
+use crate::extract::{HistoryType, IndexedChunk};
+use crate::index::{
+    QDRANT_URL, build_search_results, filter_new, get_string, history_filter, history_hash,
+};
+use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
 fn make_chunk(hash: &str) -> IndexedChunk {
     IndexedChunk {
@@ -12,6 +18,7 @@ fn make_chunk(hash: &str) -> IndexedChunk {
             text: format!("text for {}", hash),
             hash: hash.to_string(),
         },
+        history_type: HistoryType::Prompt,
         source: "session".to_string(),
         path: "/some/path".to_string(),
         session_id: None,
@@ -65,7 +72,7 @@ fn filter_new_keeps_new_items() {
 #[test]
 fn filter_new_removes_existing_hashes() {
     let chunks = vec![make_chunk("aaa"), make_chunk("bbb")];
-    let existing: HashSet<String> = ["aaa".to_string()].into();
+    let existing: HashSet<String> = [history_hash(&chunks[0])].into();
     let result = filter_new(&chunks, &existing);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].chunk.hash, "bbb");
@@ -80,7 +87,7 @@ fn filter_new_empty_input_returns_empty() {
 #[test]
 fn filter_new_all_duplicates_returns_empty() {
     let chunks = vec![make_chunk("aaa"), make_chunk("bbb")];
-    let existing: HashSet<String> = ["aaa".to_string(), "bbb".to_string()].into();
+    let existing: HashSet<String> = chunks.iter().map(history_hash).collect();
     assert!(filter_new(&chunks, &existing).is_empty());
 }
 
@@ -91,6 +98,83 @@ fn filter_new_deduplicates_within_input() {
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].chunk.hash, "aaa");
     assert_eq!(result[1].chunk.hash, "bbb");
+}
+
+#[test]
+fn identical_prompt_and_answer_text_have_distinct_history_hashes() {
+    let prompt = make_chunk("same-content");
+    let mut answer = prompt.clone();
+    answer.history_type = HistoryType::Answer;
+
+    assert_ne!(history_hash(&prompt), history_hash(&answer));
+}
+
+#[tokio::test]
+async fn qdrant_history_filters_isolate_type_and_source() {
+    let collection = format!("test-session-history-{}", uuid::Uuid::new_v4());
+    let client = Qdrant::from_url(QDRANT_URL).build().unwrap();
+    ensure_hybrid_collection(&client, &collection)
+        .await
+        .unwrap();
+
+    let points = vec![
+        history_point(1, HistoryType::Prompt, "session"),
+        history_point(2, HistoryType::Prompt, "archive"),
+        history_point(3, HistoryType::Answer, "session"),
+        history_point(4, HistoryType::Answer, "archive"),
+    ];
+    client
+        .upsert_points(UpsertPointsBuilder::new(&collection, points))
+        .await
+        .unwrap();
+
+    let prompt_sources =
+        query_history_sources(&client, &collection, HistoryType::Prompt, &[]).await;
+    let archived_answers =
+        query_history_sources(&client, &collection, HistoryType::Answer, &["archive"]).await;
+    client.delete_collection(&collection).await.unwrap();
+
+    assert_eq!(prompt_sources, vec!["archive", "session"]);
+    assert_eq!(archived_answers, vec!["archive"]);
+}
+
+fn history_point(id: u64, history_type: HistoryType, source: &str) -> PointStruct {
+    let text = format!("{} {source}", history_type.as_str());
+    let payload: HashMap<String, Value> = [
+        ("text".to_string(), str_value(&text)),
+        ("type".to_string(), str_value(history_type.as_str())),
+        ("source".to_string(), str_value(source)),
+        ("path".to_string(), str_value("fixture.jsonl")),
+        ("session_id".to_string(), str_value("fixture")),
+        (
+            "hash".to_string(),
+            str_value(&format!("{}:{id}", history_type.as_str())),
+        ),
+    ]
+    .into();
+    PointStruct::new(id, build_named_vectors(vec![1.0; 1024], &text), payload)
+}
+
+async fn query_history_sources(
+    client: &Qdrant,
+    collection: &str,
+    history_type: HistoryType,
+    sources: &[&str],
+) -> Vec<String> {
+    let search = SearchPointsBuilder::new(collection, vec![1.0; 1024], 10)
+        .vector_name("dense")
+        .with_payload(true)
+        .filter(history_filter(history_type, sources));
+    let mut matches: Vec<String> = client
+        .search_points(search)
+        .await
+        .unwrap()
+        .result
+        .iter()
+        .map(|point| get_string(&point.payload, "source"))
+        .collect();
+    matches.sort();
+    matches
 }
 
 // --- get_string ---

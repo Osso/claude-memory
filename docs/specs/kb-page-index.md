@@ -1,8 +1,4 @@
-The KB PageIndex feature provides persistent, heading-aware retrieval over the local Markdown knowledge base at `/syncthing/Sync/KB`. It is the source of KB context for prompt enrichment without requiring KB facts to be duplicated into vector memory units.
-
-Decision: KB PageIndex remains alongside legacy KB Markdown chunks in prompt
-search. PageIndex is the primary structured KB path; prompt-search KB chunks
-stay available as a faster broad vector fallback and for MCP compatibility.
+The KB PageIndex feature provides persistent, heading-aware retrieval over the local Markdown knowledge base at `/syncthing/Sync/KB`. It is the source of KB context for prompt enrichment without requiring KB facts to be duplicated into vector memory units. It is separate from [prompt and answer history](prompt-answer-history.md), which indexes transcript chunks only.
 
 ## What it must do
 
@@ -80,6 +76,6 @@ stay available as a faster broad vector fallback and for MCP compatibility.
 ## Out of scope
 
 - Vector embeddings for KB sections; KB PageIndex is the raw structured retrieval path.
-- Replacing legacy KB chunks in prompt search; those chunks remain as fallback.
+- Session-history vector indexing; see [prompt-answer-history.md](prompt-answer-history.md).
 - LLM-guided PageIndex traversal is covered by the parity spec; the default KB query mode remains deterministic lexical scoring over persisted heading nodes.
 - Replacing transcript PageIndex; session PageIndex and KB PageIndex are separate surfaces.

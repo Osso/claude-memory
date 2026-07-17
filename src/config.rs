@@ -28,7 +28,7 @@ impl Default for Config {
 }
 
 pub fn load() -> &'static Config {
-    CONFIG.get_or_init(|| load_inner())
+    CONFIG.get_or_init(load_inner)
 }
 
 pub fn graph_enabled() -> bool {

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 pub async fn run_index_cmd(
     archive: Option<PathBuf>,
     projects: Option<PathBuf>,
-    kb: Option<PathBuf>,
     batch_size: usize,
     fresh: bool,
     delay_ms: u64,
@@ -13,16 +12,7 @@ pub async fn run_index_cmd(
     let home = dirs::home_dir().expect("no home directory");
     let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
     let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
-    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-    index::run_index(
-        &archive_dir,
-        &projects_dir,
-        &kb_dir,
-        batch_size,
-        fresh,
-        delay_ms,
-    )
-    .await
+    index::run_index(&archive_dir, &projects_dir, batch_size, fresh, delay_ms).await
 }
 
 pub async fn run_index_file_cmd(path: &Path, batch_size: usize) -> Result<()> {
@@ -75,11 +65,15 @@ pub async fn run_kb_page_index_query(
     }
 
     let results = kb_search::search_or_build(&kb_dir, &index_dir, query, limit)?;
+    print_kb_query_results(&results);
+    Ok(())
+}
+
+fn print_kb_query_results(results: &[kb_search::KbSearchResult]) {
     if results.is_empty() {
         println!("(no KB notes found)");
-        return Ok(());
+        return;
     }
-
     for (index, result) in results.iter().enumerate() {
         println!(
             "{}. [kb] {}#{} > {} (score: {})",
@@ -92,7 +86,6 @@ pub async fn run_kb_page_index_query(
         println!("   reason: {}", result.reason);
         println!("   next: {}\n", result.next_content_command);
     }
-    Ok(())
 }
 
 pub fn run_kb_page_index_document(doc: &str, index: Option<PathBuf>) -> Result<()> {
@@ -186,11 +179,15 @@ pub async fn run_transcript_page_index_query(
     }
 
     let results = page_index::query_index(&index_dir, query, limit)?;
+    print_transcript_query_results(&results);
+    Ok(())
+}
+
+fn print_transcript_query_results(results: &[page_index::PageIndexQueryResult]) {
     if results.is_empty() {
         println!("(no transcript notes found)");
-        return Ok(());
+        return;
     }
-
     for (index, result) in results.iter().enumerate() {
         println!(
             "{}. [transcript] {}#{} > {} (score: {})",
@@ -204,7 +201,6 @@ pub async fn run_transcript_page_index_query(
         println!("   reason: {}", result.reason);
         println!("   next: {}\n", result.next_content_command);
     }
-    Ok(())
 }
 
 fn print_tree_walk_response(response: &page_index_agentic::TreeWalkResponse) {

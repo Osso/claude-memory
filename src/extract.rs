@@ -49,23 +49,8 @@ fn read_session_turns_from<R: std::io::BufRead>(reader: R) -> Result<Vec<Turn>> 
 
     for line in reader.lines() {
         let line = line.context("failed to read line")?;
-        let line = line.trim();
-        if line.is_empty() {
+        let Some((role, content)) = parse_turn_line(&line) else {
             continue;
-        }
-        let msg: Message = match serde_json::from_str(line) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let role = match message_role(&msg) {
-            Some(role) => role,
-            None => continue,
-        };
-
-        let content = match message_content(msg) {
-            Some(c) => c,
-            None => continue,
         };
 
         let turn = build_turn(role, content, turn_index);
@@ -77,6 +62,17 @@ fn read_session_turns_from<R: std::io::BufRead>(reader: R) -> Result<Vec<Turn>> 
     }
 
     Ok(turns)
+}
+
+fn parse_turn_line(line: &str) -> Option<(Role, serde_json::Value)> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let message: Message = serde_json::from_str(line).ok()?;
+    let role = message_role(&message)?;
+    let content = message_content(message)?;
+    Some((role, content))
 }
 
 fn build_turn(role: Role, content: serde_json::Value, turn_index: u32) -> Turn {
@@ -170,9 +166,25 @@ fn trimmed_block_text(block: &serde_json::Value) -> Option<&str> {
     if text.is_empty() { None } else { Some(text) }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum HistoryType {
+    Prompt,
+    Answer,
+}
+
+impl HistoryType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Answer => "answer",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexedChunk {
     pub chunk: Chunk,
+    pub history_type: HistoryType,
     pub source: String,
     pub path: String,
     pub session_id: Option<String>,
@@ -199,37 +211,18 @@ struct ContentBlock {
     text: Option<String>,
 }
 
-/// Extract chunks from a session summary markdown file.
-pub fn extract_summary(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
-    let text = std::fs::read_to_string(path).context("failed to read summary")?;
-    let session_id = path
-        .parent()
-        .and_then(|p| p.parent())
-        .and_then(|p| p.file_name())
-        .map(|s| s.to_string_lossy().to_string());
-
-    let rel_path = path
-        .strip_prefix(base_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string_lossy().to_string());
-
-    Ok(chunk_text(&text)
-        .into_iter()
-        .map(|chunk| IndexedChunk {
-            chunk,
-            source: "summary".to_string(),
-            path: rel_path.clone(),
-            session_id: session_id.clone(),
-        })
-        .collect())
-}
-
 /// Extract user messages from an uncompressed JSONL file.
 pub fn extract_jsonl(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
     let file = File::open(path).context("failed to open JSONL")?;
     let reader = BufReader::new(file);
     let metadata = session_metadata(path, base_path);
-    extract_chunks_from_reader(reader, extract_user_message, metadata, "session")
+    extract_chunks_from_reader(
+        reader,
+        extract_user_message,
+        metadata,
+        HistoryType::Prompt,
+        "session",
+    )
 }
 
 /// Extract user messages from a zstd-compressed JSONL file.
@@ -238,7 +231,13 @@ pub fn extract_zst(path: &Path) -> Result<Vec<IndexedChunk>> {
     let decoder = zstd::Decoder::new(file).context("failed to create zstd decoder")?;
     let reader = BufReader::new(decoder);
     let metadata = archive_metadata(path);
-    extract_chunks_from_reader(reader, extract_user_message, metadata, "archive")
+    extract_chunks_from_reader(
+        reader,
+        extract_user_message,
+        metadata,
+        HistoryType::Prompt,
+        "archive",
+    )
 }
 
 /// Extract assistant responses from an uncompressed JSONL file.
@@ -246,7 +245,13 @@ pub fn extract_jsonl_answers(path: &Path, base_path: &Path) -> Result<Vec<Indexe
     let file = File::open(path).context("failed to open JSONL")?;
     let reader = BufReader::new(file);
     let metadata = session_metadata(path, base_path);
-    extract_chunks_from_reader(reader, extract_assistant_message, metadata, "session")
+    extract_chunks_from_reader(
+        reader,
+        extract_assistant_message,
+        metadata,
+        HistoryType::Answer,
+        "session",
+    )
 }
 
 /// Extract assistant responses from a zstd-compressed JSONL file.
@@ -255,7 +260,13 @@ pub fn extract_zst_answers(path: &Path) -> Result<Vec<IndexedChunk>> {
     let decoder = zstd::Decoder::new(file).context("failed to create zstd decoder")?;
     let reader = BufReader::new(decoder);
     let metadata = archive_metadata(path);
-    extract_chunks_from_reader(reader, extract_assistant_message, metadata, "archive")
+    extract_chunks_from_reader(
+        reader,
+        extract_assistant_message,
+        metadata,
+        HistoryType::Answer,
+        "archive",
+    )
 }
 
 #[cfg(test)]
@@ -272,6 +283,7 @@ fn extract_chunks_from_reader<R, F>(
     reader: BufReader<R>,
     extractor: F,
     metadata: ChunkMetadata,
+    history_type: HistoryType,
     source: &str,
 ) -> Result<Vec<IndexedChunk>>
 where
@@ -279,7 +291,7 @@ where
     F: Fn(Message) -> Vec<String>,
 {
     let texts = collect_messages(reader, extractor)?;
-    Ok(build_indexed_chunks(texts, metadata, source))
+    Ok(build_indexed_chunks(texts, metadata, history_type, source))
 }
 
 fn collect_messages<R, F>(reader: BufReader<R>, extractor: F) -> Result<Vec<String>>
@@ -290,7 +302,7 @@ where
     let mut texts = Vec::new();
     for message in reader
         .lines()
-        .filter_map(Result::ok)
+        .map_while(Result::ok)
         .filter_map(parse_message)
     {
         texts.extend(extractor(message));
@@ -387,6 +399,7 @@ fn extract_text_block(block: ContentBlock) -> Option<String> {
 fn build_indexed_chunks(
     texts: Vec<String>,
     metadata: ChunkMetadata,
+    history_type: HistoryType,
     source: &str,
 ) -> Vec<IndexedChunk> {
     if texts.is_empty() {
@@ -398,6 +411,7 @@ fn build_indexed_chunks(
         .into_iter()
         .map(|chunk| IndexedChunk {
             chunk,
+            history_type,
             source: source.to_string(),
             path: metadata.path.clone(),
             session_id: metadata.session_id.clone(),
@@ -552,31 +566,4 @@ not json at all
         let result = extract_assistant_messages(make_reader(data)).unwrap();
         assert_eq!(result, vec!["Assistant: Pi answer"]);
     }
-}
-
-/// Extract chunks from a markdown file.
-pub fn extract_markdown(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
-    let text = std::fs::read_to_string(path).context("failed to read markdown")?;
-
-    let rel_path = path
-        .strip_prefix(base_path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string_lossy().to_string());
-
-    // Files under memory/ subdir are tagged as source=memory
-    let source = if rel_path.starts_with("memory/") {
-        "memory"
-    } else {
-        "kb"
-    };
-
-    Ok(chunk_text(&text)
-        .into_iter()
-        .map(|chunk| IndexedChunk {
-            chunk,
-            source: source.to_string(),
-            path: rel_path.clone(),
-            session_id: None,
-        })
-        .collect())
 }

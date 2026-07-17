@@ -27,6 +27,12 @@ Known legacy gate: `claude-memory deduplicate` still checks for
 `ANTHROPIC_API_KEY` before it calls the shared LLM merge path. That preflight is
 not representative of the default backend behavior.
 
+## Session-history search
+
+The implementation details for the shared collection, payload fields, source
+kinds, extraction, identity, and deduplication are in
+[prompt-answer-history.md](prompt-answer-history.md).
+
 ## `claude-memory enrich`
 
 Purpose: inject small, relevant context into a Claude Code `UserPromptSubmit`
@@ -61,10 +67,10 @@ Purpose: manual lookup from the terminal.
 - With search disabled, it falls back to substring filtering over stored memory
   units.
 
-`claude-memory search --type prompts <query>` searches prompt history and legacy
-KB vector chunks. `--type answers` searches assistant responses. Both paths use
-`src/index_search.rs` and require `[search].enabled = true`; if disabled they
-return no results rather than using substring fallback.
+`claude-memory search --type prompts <query>` searches the prompt view of
+session history. `--type answers` searches the answer view. Both paths use the
+shared `claude-session-history` collection with required history-type filters
+and require `[search].enabled = true`; if disabled they return no results.
 
 ## MCP Search Tools
 
@@ -72,8 +78,8 @@ Purpose: let Claude Code query indexed history through MCP.
 
 Tools in `src/bin/mcp.rs`:
 
-- `prompt_search`: user prompts, questions, and legacy KB vector chunks.
-- `answer_search`: assistant responses and solutions.
+- `prompt_search`: user prompts and questions from session history.
+- `answer_search`: assistant responses and solutions from session history.
 - `memory_list`: exact category/project listing of memory entries.
 - `memory_write`: storage disabled; returns guidance to write Markdown memory.
 

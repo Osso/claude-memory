@@ -4,13 +4,13 @@ use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
+use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use crate::embed::Embedder;
 use crate::extract::{
-    IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_markdown, extract_summary,
-    extract_zst, extract_zst_answers,
+    HistoryType, IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_zst,
+    extract_zst_answers,
 };
 use crate::qdrant_hybrid::ensure_hybrid_collection;
 
@@ -19,17 +19,19 @@ mod index_search;
 #[path = "index_writer.rs"]
 mod index_writer;
 mod search_results;
+pub use index_search::history_filter;
 pub use index_search::{
-    search_answer_sources, search_answers, search_memories, search_prompt_sources, search_prompts,
+    search_answer_sources, search_answers, search_prompt_sources, search_prompts,
 };
 pub(crate) use index_writer::filter_new;
+#[cfg(test)]
+pub(crate) use index_writer::history_hash;
 use index_writer::{get_existing_hashes, index_chunks};
 #[cfg(test)]
 pub(crate) use search_results::{build_search_results, get_string};
 
 pub const QDRANT_URL: &str = "http://localhost:6334";
-const COLLECTION_PROMPTS: &str = "claude-memory";
-const COLLECTION_ANSWERS: &str = "claude-answers";
+pub const COLLECTION_SESSION_HISTORY: &str = "claude-session-history";
 
 pub struct SearchResult {
     pub text: String,
@@ -43,10 +45,7 @@ pub struct SearchResult {
 struct IndexState {
     client: Qdrant,
     embedder: Embedder,
-    prompt_next_id: AtomicU64,
-    answer_next_id: AtomicU64,
-    prompt_hashes: HashSet<String>,
-    answer_hashes: HashSet<String>,
+    hashes: Mutex<HashSet<String>>,
     batch_size: usize,
     delay_ms: u64,
 }
@@ -55,7 +54,6 @@ struct IndexState {
 pub async fn run_index(
     archive_dir: &Path,
     projects_dir: &Path,
-    kb_dir: &Path,
     batch_size: usize,
     fresh: bool,
     delay_ms: u64,
@@ -65,9 +63,8 @@ pub async fn run_index(
     let jsonls = collect_jsonl_files(projects_dir);
     let archives = collect_archive_files(archive_dir);
 
-    eprintln!("\n=== Indexing prompts (user messages, summaries, KB) ===");
-    let prompts_indexed =
-        index_all_prompts(&state, projects_dir, &jsonls, &archives, kb_dir).await?;
+    eprintln!("\n=== Indexing session prompts (user messages) ===");
+    let prompts_indexed = index_all_prompts(&state, projects_dir, &jsonls, &archives).await?;
 
     eprintln!("\n=== Indexing answers (assistant responses) ===");
     let answers_indexed = index_all_answers(&state, projects_dir, &jsonls, &archives).await?;
@@ -84,51 +81,31 @@ async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Resu
         .build()
         .context("failed to connect to Qdrant")?;
 
-    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
-    ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
-    crate::memory_unit::ensure_memory_units_collection(&client).await?;
-    let (prompt_hashes, answer_hashes) = load_hashes(&client, fresh).await?;
-    eprintln!(
-        "Found {} prompt chunks, {} answer chunks",
-        prompt_hashes.len(),
-        answer_hashes.len()
-    );
-    Ok(build_index_state(
-        client,
-        prompt_hashes,
-        answer_hashes,
-        batch_size,
-        delay_ms,
-    ))
+    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
+    let hashes = load_hashes(&client, fresh).await?;
+    eprintln!("Found {} session-history chunks", hashes.len());
+    Ok(build_index_state(client, hashes, batch_size, delay_ms))
 }
 
-async fn load_hashes(client: &Qdrant, fresh: bool) -> Result<(HashSet<String>, HashSet<String>)> {
+async fn load_hashes(client: &Qdrant, fresh: bool) -> Result<HashSet<String>> {
     if fresh {
         eprintln!("Fresh index requested, ignoring existing data");
-        return Ok((HashSet::new(), HashSet::new()));
+        return Ok(HashSet::new());
     }
     eprintln!("Loading existing hashes for resume...");
-    let prompt_hashes = get_existing_hashes(client, COLLECTION_PROMPTS).await?;
-    let answer_hashes = get_existing_hashes(client, COLLECTION_ANSWERS).await?;
-    Ok((prompt_hashes, answer_hashes))
+    get_existing_hashes(client, COLLECTION_SESSION_HISTORY).await
 }
 
 fn build_index_state(
     client: Qdrant,
-    prompt_hashes: HashSet<String>,
-    answer_hashes: HashSet<String>,
+    hashes: HashSet<String>,
     batch_size: usize,
     delay_ms: u64,
 ) -> IndexState {
-    let prompt_next_id = AtomicU64::new(prompt_hashes.len() as u64);
-    let answer_next_id = AtomicU64::new(answer_hashes.len() as u64);
     IndexState {
         client,
         embedder: Embedder::new(),
-        prompt_next_id,
-        answer_next_id,
-        prompt_hashes,
-        answer_hashes,
+        hashes: Mutex::new(hashes),
         batch_size,
         delay_ms,
     }
@@ -176,16 +153,8 @@ async fn index_all_prompts(
     projects_dir: &Path,
     jsonls: &[walkdir::DirEntry],
     archives: &[std::fs::DirEntry],
-    kb_dir: &Path,
 ) -> Result<usize> {
-    let mut indexed = 0;
-
-    indexed += index_summaries(state, projects_dir, indexed).await?;
-    indexed += index_session_prompts(state, jsonls, projects_dir, indexed).await?;
-    indexed += index_archive_prompts(state, archives, indexed).await?;
-    indexed += index_kb_files(state, kb_dir, indexed).await?;
-
-    Ok(indexed)
+    index_history(state, projects_dir, jsonls, archives, HistoryType::Prompt).await
 }
 
 async fn index_all_answers(
@@ -194,269 +163,113 @@ async fn index_all_answers(
     jsonls: &[walkdir::DirEntry],
     archives: &[std::fs::DirEntry],
 ) -> Result<usize> {
-    let mut indexed = 0;
-
-    indexed += index_session_answers(state, jsonls, projects_dir, indexed).await?;
-    indexed += index_archive_answers(state, archives, indexed).await?;
-
-    Ok(indexed)
+    index_history(state, projects_dir, jsonls, archives, HistoryType::Answer).await
 }
 
-async fn index_summaries(
+async fn index_history(
     state: &IndexState,
     projects_dir: &Path,
-    base_indexed: usize,
+    jsonls: &[walkdir::DirEntry],
+    archives: &[std::fs::DirEntry],
+    history_type: HistoryType,
 ) -> Result<usize> {
-    if !projects_dir.exists() {
-        return Ok(0);
-    }
-    let summaries = collect_summary_entries(projects_dir);
+    let session_paths: Vec<_> = jsonls
+        .iter()
+        .map(|entry| entry.path().to_path_buf())
+        .collect();
+    let archive_paths: Vec<_> = archives.iter().map(std::fs::DirEntry::path).collect();
+    let kind = history_type.as_str();
 
+    let indexed_sessions =
+        index_history_paths(state, &session_paths, "Sessions", kind, 0, |path| {
+            extract_session_history(path, projects_dir, history_type)
+        })
+        .await?;
+    let indexed_archives = index_history_paths(
+        state,
+        &archive_paths,
+        "Archives",
+        kind,
+        indexed_sessions,
+        |path| extract_archive_history(path, history_type),
+    )
+    .await?;
+    Ok(indexed_sessions + indexed_archives)
+}
+
+async fn index_history_paths<F>(
+    state: &IndexState,
+    paths: &[std::path::PathBuf],
+    label: &str,
+    kind: &str,
+    base_indexed: usize,
+    extract: F,
+) -> Result<usize>
+where
+    F: Fn(&Path) -> Result<Vec<IndexedChunk>>,
+{
     let mut indexed = 0;
-    eprintln!("Processing {} summaries...", summaries.len());
-    for (i, entry) in summaries.iter().enumerate() {
-        indexed += index_summary_entry(state, entry.path(), projects_dir).await?;
-        eprint!(
-            "\r  Summaries: {}/{} (indexed: {})",
-            i + 1,
-            summaries.len(),
-            base_indexed + indexed
-        );
+    eprintln!(
+        "Processing {} {} ({kind})...",
+        paths.len(),
+        label.to_lowercase()
+    );
+    for (position, path) in paths.iter().enumerate() {
+        match extract(path) {
+            Ok(chunks) => indexed += index_new_chunks(state, &chunks).await?,
+            Err(error) => tracing::warn!("Failed to extract {}: {}", path.display(), error),
+        }
+        report_index_progress(label, position, paths.len(), base_indexed + indexed);
     }
     eprintln!();
     Ok(indexed)
 }
 
-fn collect_summary_entries(projects_dir: &Path) -> Vec<walkdir::DirEntry> {
-    WalkDir::new(projects_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .path()
-                .file_name()
-                .is_some_and(|name| name == "summary.md")
-        })
-        .collect()
+fn report_index_progress(label: &str, position: usize, total: usize, indexed: usize) {
+    eprint!("\r  {label}: {}/{total} (indexed: {indexed})", position + 1);
 }
 
-async fn index_summary_entry(
-    state: &IndexState,
+fn extract_session_history(
     path: &Path,
     projects_dir: &Path,
-) -> Result<usize> {
-    let chunks = match extract_summary(path, projects_dir) {
-        Ok(chunks) => chunks,
-        Err(error) => {
-            tracing::warn!("Failed to extract {}: {}", path.display(), error);
-            return Ok(0);
-        }
-    };
-
-    index_new_chunks(
-        state,
-        &chunks,
-        &state.prompt_hashes,
-        &state.prompt_next_id,
-        COLLECTION_PROMPTS,
-    )
-    .await
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    match history_type {
+        HistoryType::Prompt => extract_jsonl(path, projects_dir),
+        HistoryType::Answer => extract_jsonl_answers(path, projects_dir),
+    }
 }
 
-async fn index_session_prompts(
-    state: &IndexState,
-    jsonls: &[walkdir::DirEntry],
-    projects_dir: &Path,
-    base_indexed: usize,
-) -> Result<usize> {
-    let mut indexed = 0;
-    eprintln!("Processing {} active sessions (prompts)...", jsonls.len());
-    for (i, entry) in jsonls.iter().enumerate() {
-        let path = entry.path();
-        match extract_jsonl(path, projects_dir) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.prompt_hashes,
-                    &state.prompt_next_id,
-                    COLLECTION_PROMPTS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
-        }
-        eprint!(
-            "\r  Sessions: {}/{} (indexed: {})",
-            i + 1,
-            jsonls.len(),
-            base_indexed + indexed
-        );
+fn extract_archive_history(path: &Path, history_type: HistoryType) -> Result<Vec<IndexedChunk>> {
+    match history_type {
+        HistoryType::Prompt => extract_zst(path),
+        HistoryType::Answer => extract_zst_answers(path),
     }
-    eprintln!();
-    Ok(indexed)
-}
-
-async fn index_archive_prompts(
-    state: &IndexState,
-    archives: &[std::fs::DirEntry],
-    base_indexed: usize,
-) -> Result<usize> {
-    let mut indexed = 0;
-    eprintln!("Processing {} archives (prompts)...", archives.len());
-    for (i, entry) in archives.iter().enumerate() {
-        let path = entry.path();
-        match extract_zst(&path) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.prompt_hashes,
-                    &state.prompt_next_id,
-                    COLLECTION_PROMPTS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
-        }
-        eprint!(
-            "\r  Archives: {}/{} (indexed: {})",
-            i + 1,
-            archives.len(),
-            base_indexed + indexed
-        );
-    }
-    eprintln!();
-    Ok(indexed)
-}
-
-async fn index_kb_files(state: &IndexState, kb_dir: &Path, base_indexed: usize) -> Result<usize> {
-    if !kb_dir.exists() {
-        return Ok(0);
-    }
-    let markdowns: Vec<_> = WalkDir::new(kb_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
-        .collect();
-
-    let mut indexed = 0;
-    eprintln!("Processing {} KB files...", markdowns.len());
-    for (i, entry) in markdowns.iter().enumerate() {
-        let path = entry.path();
-        match extract_markdown(path, kb_dir) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.prompt_hashes,
-                    &state.prompt_next_id,
-                    COLLECTION_PROMPTS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract {}: {}", path.display(), e),
-        }
-        eprint!(
-            "\r  KB: {}/{} (indexed: {})",
-            i + 1,
-            markdowns.len(),
-            base_indexed + indexed
-        );
-    }
-    eprintln!();
-    Ok(indexed)
-}
-
-async fn index_session_answers(
-    state: &IndexState,
-    jsonls: &[walkdir::DirEntry],
-    projects_dir: &Path,
-    base_indexed: usize,
-) -> Result<usize> {
-    let mut indexed = 0;
-    eprintln!("Processing {} active sessions (answers)...", jsonls.len());
-    for (i, entry) in jsonls.iter().enumerate() {
-        let path = entry.path();
-        match extract_jsonl_answers(path, projects_dir) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.answer_hashes,
-                    &state.answer_next_id,
-                    COLLECTION_ANSWERS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract answers {}: {}", path.display(), e),
-        }
-        eprint!(
-            "\r  Sessions: {}/{} (indexed: {})",
-            i + 1,
-            jsonls.len(),
-            base_indexed + indexed
-        );
-    }
-    eprintln!();
-    Ok(indexed)
-}
-
-async fn index_archive_answers(
-    state: &IndexState,
-    archives: &[std::fs::DirEntry],
-    base_indexed: usize,
-) -> Result<usize> {
-    let mut indexed = 0;
-    eprintln!("Processing {} archives (answers)...", archives.len());
-    for (i, entry) in archives.iter().enumerate() {
-        let path = entry.path();
-        match extract_zst_answers(&path) {
-            Ok(chunks) => {
-                indexed += index_new_chunks(
-                    state,
-                    &chunks,
-                    &state.answer_hashes,
-                    &state.answer_next_id,
-                    COLLECTION_ANSWERS,
-                )
-                .await?;
-            }
-            Err(e) => tracing::warn!("Failed to extract answers {}: {}", path.display(), e),
-        }
-        eprint!(
-            "\r  Archives: {}/{} (indexed: {})",
-            i + 1,
-            archives.len(),
-            base_indexed + indexed
-        );
-    }
-    eprintln!();
-    Ok(indexed)
 }
 
 /// Filter and index new chunks, returning the count indexed.
-async fn index_new_chunks(
-    state: &IndexState,
-    chunks: &[IndexedChunk],
-    existing: &HashSet<String>,
-    next_id: &AtomicU64,
-    collection: &str,
-) -> Result<usize> {
-    let new_chunks = filter_new(chunks, existing);
+async fn index_new_chunks(state: &IndexState, chunks: &[IndexedChunk]) -> Result<usize> {
+    let new_chunks = {
+        let hashes = state.hashes.lock().await;
+        filter_new(chunks, &hashes)
+    };
     if new_chunks.is_empty() {
         return Ok(0);
     }
-    index_chunks(
+
+    let indexed = index_chunks(
         &state.client,
         &state.embedder,
         &new_chunks,
         state.batch_size,
-        next_id,
-        collection,
+        COLLECTION_SESSION_HISTORY,
         state.delay_ms,
     )
-    .await
+    .await?;
+
+    let mut hashes = state.hashes.lock().await;
+    hashes.extend(new_chunks.iter().map(index_writer::history_hash));
+    Ok(indexed)
 }
 
 /// Index a single conversation file (both prompts and answers).
@@ -465,35 +278,15 @@ pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
         .build()
         .context("failed to connect to Qdrant")?;
 
-    ensure_hybrid_collection(&client, COLLECTION_PROMPTS).await?;
-    ensure_hybrid_collection(&client, COLLECTION_ANSWERS).await?;
+    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
 
-    let prompt_hashes = get_existing_hashes(&client, COLLECTION_PROMPTS).await?;
-    let answer_hashes = get_existing_hashes(&client, COLLECTION_ANSWERS).await?;
-    let prompt_next_id = AtomicU64::new(prompt_hashes.len() as u64);
-    let answer_next_id = AtomicU64::new(answer_hashes.len() as u64);
+    let hashes = get_existing_hashes(&client, COLLECTION_SESSION_HISTORY).await?;
 
     let embedder = Embedder::new();
     let mut total = 0;
 
-    total += index_file_prompts(
-        path,
-        &client,
-        &embedder,
-        batch_size,
-        &prompt_hashes,
-        &prompt_next_id,
-    )
-    .await?;
-    total += index_file_answers(
-        path,
-        &client,
-        &embedder,
-        batch_size,
-        &answer_hashes,
-        &answer_next_id,
-    )
-    .await?;
+    total += index_file_prompts(path, &client, &embedder, batch_size, &hashes).await?;
+    total += index_file_answers(path, &client, &embedder, batch_size, &hashes).await?;
 
     Ok(total)
 }
@@ -504,7 +297,6 @@ async fn index_file_prompts(
     embedder: &Embedder,
     batch_size: usize,
     hashes: &HashSet<String>,
-    next_id: &AtomicU64,
 ) -> Result<usize> {
     let chunks = if path.to_string_lossy().ends_with(".jsonl.zst") {
         extract_zst(path)?
@@ -524,8 +316,7 @@ async fn index_file_prompts(
         embedder,
         &new_chunks,
         batch_size,
-        next_id,
-        COLLECTION_PROMPTS,
+        COLLECTION_SESSION_HISTORY,
         0,
     )
     .await
@@ -537,7 +328,6 @@ async fn index_file_answers(
     embedder: &Embedder,
     batch_size: usize,
     hashes: &HashSet<String>,
-    next_id: &AtomicU64,
 ) -> Result<usize> {
     let chunks = if path.to_string_lossy().ends_with(".jsonl.zst") {
         extract_zst_answers(path)?
@@ -557,8 +347,7 @@ async fn index_file_answers(
         embedder,
         &new_chunks,
         batch_size,
-        next_id,
-        COLLECTION_ANSWERS,
+        COLLECTION_SESSION_HISTORY,
         0,
     )
     .await
@@ -570,16 +359,20 @@ pub async fn show_stats() -> Result<()> {
         .build()
         .context("failed to connect to Qdrant")?;
 
-    for (label, name) in [
-        ("Prompts", COLLECTION_PROMPTS),
-        ("Answers", COLLECTION_ANSWERS),
-    ] {
-        if let Ok(info) = client.collection_info(name).await {
-            let points = info.result.and_then(|r| r.points_count).unwrap_or(0);
-            println!("{} ({}): {} points", label, name, points);
-        } else {
-            println!("{} ({}): not found", label, name);
-        }
+    if let Ok(info) = client.collection_info(COLLECTION_SESSION_HISTORY).await {
+        let points = info
+            .result
+            .and_then(|result| result.points_count)
+            .unwrap_or(0);
+        println!(
+            "Session history ({}): {} points",
+            COLLECTION_SESSION_HISTORY, points
+        );
+    } else {
+        println!(
+            "Session history ({}): not found",
+            COLLECTION_SESSION_HISTORY
+        );
     }
 
     Ok(())

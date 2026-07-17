@@ -1,11 +1,11 @@
 # claude-memory
 
-Semantic memory for Claude Code. Indexes conversation history and knowledge base files into a hybrid vector store, then exposes search via MCP tools and CLI.
+Semantic memory for Claude Code. Indexes active and archived Claude transcript chunks into one session-history collection, then exposes separate memory, history, and PageIndex surfaces through MCP tools and the CLI.
 
 ## What it does
 
-- **Memory-unit search** over durable distilled memories, with substring fallback when semantic search is disabled
-- **Prompt/answer history search** over indexed conversations using Ollama embeddings and Qdrant
+- **Memory-unit search** over durable distilled memories, with substring search when semantic search is disabled
+- **Prompt/answer history search** over active and archived transcript chunks using Ollama embeddings and Qdrant
 - **KB PageIndex** for traceable Markdown knowledge-base retrieval with exact content fetches
 - **Prompt enrichment hook** injects small labeled memory and KB context into Claude Code prompts automatically
 - **Optional graph context** reads CozoDB entity relationships only when `[graph].enabled = true`
@@ -27,13 +27,18 @@ Claude Code ──MCP──► claude-memory-mcp ──► Qdrant (vectors + BM2
 
 ## Data sources
 
-| Source | Path | Description |
-|--------|------|-------------|
-| Session archives | `~/.claude/archive/*.jsonl.zst` | Compressed past conversations |
-| Active sessions | `~/.claude/projects/**/sessions/*.jsonl` | Current project conversations |
-| Project summaries | `~/.claude/projects/**/summary.md` | Project summary files |
-| Knowledge base | `/syncthing/Sync/KB/**/*.md` | Markdown knowledge base |
-| Local project memories | `docs/local/` in each project | Explicitly recorded project-local context |
+Session-history indexing reads only:
+
+| Source | Path | Payload source |
+|--------|------|---------------|
+| Active sessions | `~/.claude/projects/**/*.jsonl` | `source=session` |
+| Session archives | `~/.claude/archive/*.jsonl.zst` | `source=archive` |
+
+Project summaries, KB Markdown, manual memories, and the
+`claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
+session-history indexing targets or alternate search paths. KB PageIndex,
+`ingest-kb`, memory-unit search, and transcript PageIndex use separate surfaces.
+Local project memories remain editable Markdown under `docs/local/`.
 
 ## Setup
 
@@ -73,13 +78,13 @@ Produces two binaries:
 ## CLI commands
 
 ```
-claude-memory index              # Index all sources
-claude-memory index --fresh      # Re-index everything from scratch
-claude-memory index-file <path>  # Index a single conversation file
+claude-memory index              # Index active and archived transcript chunks
+claude-memory index --fresh      # Re-index transcript chunks from scratch
+claude-memory index-file <path>  # Index one conversation file (prompts + answers)
 claude-memory ingest-kb          # Extract KB Markdown facts into memory units
 claude-memory search <q>                 # Search memories by default
-claude-memory search --type prompts <q>  # Search user prompts and KB
-claude-memory search --type answers <q>  # Search assistant responses
+claude-memory search --type prompts <q>  # Search the prompt history view
+claude-memory search --type answers <q>  # Search the answer history view
 claude-memory kb-page-index build        # Build the persistent KB PageIndex
 claude-memory kb-page-index query <q>    # Query KB notes through PageIndex
 claude-memory transcript-page-index build     # Build transcript PageIndex trees
@@ -152,8 +157,8 @@ The MCP server exposes four tools:
 | Tool | Description |
 |------|-------------|
 | `memory_write` | Disabled for storage; returns guidance to write project memories under `docs/local/` |
-| `prompt_search` | Search prompts, questions, and legacy KB vector chunks |
-| `answer_search` | Search assistant responses and solutions |
+| `prompt_search` | Search user prompts and questions from session history |
+| `answer_search` | Search assistant responses and solutions from session history |
 | `memory_list` | List all memories matching category/project filters |
 
 ### Claude Code integration
@@ -221,7 +226,8 @@ Short version:
   context, and optional graph reads.
 - CLI `search <query>` targets memory units by default.
 - CLI `search --type prompts|answers` and MCP `prompt_search` / `answer_search`
-  query Qdrant prompt/answer collections when semantic search is enabled.
+  query filtered views of the single `claude-session-history` collection when
+  semantic search is enabled.
 - KB PageIndex is the exact Markdown retrieval surface.
 - Transcript PageIndex is CLI-only source inspection and is not injected into
   prompts by default.

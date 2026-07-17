@@ -79,18 +79,12 @@ fn sanitize_relationships(
         if let Some((new_src, new_relation, new_dst)) =
             sanitize::sanitize_triplet(src, relation, dst)
         {
-            track_cleaned_triplet(
-                &mut cleaned,
-                &mut seen,
-                &mut stats,
-                src,
-                relation,
-                dst,
+            let candidate = CleanedCandidate {
+                original: (src, relation, dst),
                 source_text,
-                new_src,
-                new_relation,
-                new_dst,
-            );
+                sanitized: (new_src, new_relation, new_dst),
+            };
+            track_cleaned_triplet(&mut cleaned, &mut seen, &mut stats, candidate);
         } else {
             stats.relationships_removed += 1;
         }
@@ -99,24 +93,31 @@ fn sanitize_relationships(
     (cleaned, stats)
 }
 
+struct CleanedCandidate<'a> {
+    original: (&'a str, &'a str, &'a str),
+    source_text: &'a str,
+    sanitized: (String, String, String),
+}
+
 fn track_cleaned_triplet(
     cleaned: &mut Vec<(String, String, String, String)>,
     seen: &mut BTreeSet<(String, String, String)>,
     stats: &mut GraphCleanStats,
-    src: &str,
-    relation: &str,
-    dst: &str,
-    source_text: &str,
-    new_src: String,
-    new_relation: String,
-    new_dst: String,
+    candidate: CleanedCandidate<'_>,
 ) {
+    let (src, relation, dst) = candidate.original;
+    let (new_src, new_relation, new_dst) = candidate.sanitized;
     let was_rewritten = new_src != src || new_relation != relation || new_dst != dst;
     if was_rewritten {
         stats.relationships_rewritten += 1;
     }
     if seen.insert((new_src.clone(), new_relation.clone(), new_dst.clone())) {
-        cleaned.push((new_src, new_relation, new_dst, source_text.to_string()));
+        cleaned.push((
+            new_src,
+            new_relation,
+            new_dst,
+            candidate.source_text.to_string(),
+        ));
         stats.relationships_kept += 1;
     } else {
         stats.relationships_removed += 1;
