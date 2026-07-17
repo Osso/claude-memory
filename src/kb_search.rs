@@ -218,9 +218,10 @@ pub fn search_text_index(
         return Ok(Vec::new());
     }
     let scoring_terms = unique_tokens(phrase_tokens.clone());
+    let coverage_stride = coverage_score_stride(scoring_terms.len());
     let mut results: Vec<KbSearchResult> = load_text_nodes(index_dir)?
         .into_iter()
-        .filter_map(|node| score_text_node(node, &scoring_terms, &phrase_tokens))
+        .filter_map(|node| score_text_node(node, &scoring_terms, &phrase_tokens, coverage_stride))
         .collect();
     for result in &mut results {
         let command = text_content_command(&result.path, &result.node_id, kb_dir, index_dir);
@@ -243,22 +244,28 @@ fn score_text_node(
     node: TextIndexNode,
     scoring_terms: &[String],
     phrase_tokens: &[String],
+    coverage_stride: usize,
 ) -> Option<KbSearchResult> {
     let heading_tokens = text_index_tokens(&node.heading_path);
     let path_tokens = text_index_tokens(&node.path);
     let body_tokens = text_index_tokens(&node.normalized_body);
+    let matched_terms =
+        matched_term_count(scoring_terms, &heading_tokens, &path_tokens, &body_tokens);
+    if matched_terms == 0 {
+        return None;
+    }
     let structural_frequency =
         structural_term_frequency(scoring_terms, &heading_tokens, &path_tokens);
     let body_frequency = body_term_frequency(scoring_terms, &body_tokens);
-    if structural_frequency == 0 && body_frequency == 0 {
-        return None;
-    }
     let length_divisor = integer_sqrt(body_tokens.len().max(1)).max(1);
     let phrase_bonus =
         usize::from(contains_token_sequence(&body_tokens, phrase_tokens)) * PHRASE_BONUS;
-    let score = structural_frequency * SCORE_SCALE
+    let secondary_score = structural_frequency * SCORE_SCALE
         + body_frequency * SCORE_SCALE / length_divisor
         + phrase_bonus;
+    let score = matched_terms
+        .saturating_mul(coverage_stride)
+        .saturating_add(secondary_score);
     let locator = format!("{}-{}", node.line_start, node.line_end);
     let title = node
         .heading_path
@@ -316,6 +323,31 @@ fn unique_tokens(tokens: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter(|token| seen.insert(token.clone()))
         .collect()
+}
+
+fn coverage_score_stride(query_term_count: usize) -> usize {
+    let maximum_score_per_term =
+        TERM_FREQUENCY_CAP * (HEADING_WEIGHT + PATH_WEIGHT + BODY_WEIGHT) * SCORE_SCALE;
+    query_term_count
+        .saturating_mul(maximum_score_per_term)
+        .saturating_add(PHRASE_BONUS)
+        .saturating_add(1)
+}
+
+fn matched_term_count(
+    query_tokens: &[String],
+    heading_tokens: &[String],
+    path_tokens: &[String],
+    body_tokens: &[String],
+) -> usize {
+    query_tokens
+        .iter()
+        .filter(|term| {
+            heading_tokens.contains(term)
+                || path_tokens.contains(term)
+                || body_tokens.contains(term)
+        })
+        .count()
 }
 
 fn structural_term_frequency(

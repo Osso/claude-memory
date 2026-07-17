@@ -26,10 +26,9 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 - [x] Reject the query when the KB source is missing or the manifest is stale.
 - [x] Return the matching source path and heading for a query that targets a persisted section.
 - [x] Require content retrieval to name the KB source and an exact inclusive line range.
-- [ ] Avoid weak long-query matches that share only one or two incidental terms.
-- [ ] Rank exact operational rules above generic bookmark/reference material for common agent prompts.
-- [ ] Return useful results for the real KB query `frontend design skill load immediately`.
-- [ ] Return useful results for the real KB query `claude bash hook codex unsafe`.
+- [x] Make distinct query-term coverage dominate field-location bonuses: multi-term body matches outrank single heading/path matches, while one-term matches remain available.
+- [x] Return the real KB query `frontend design skill load immediately` with `memory/corrections.md` first.
+- [ ] Improve result diversity for the real KB query `claude bash hook codex unsafe`; relevant bash-hook material is found, but results remain duplicate-heavy.
 
 ### Enrich integration
 
@@ -63,6 +62,8 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 - `src/kb_search_tests.rs`
   - `stale_text_search_rejects_without_automatic_rebuild`
   - `text_search_uses_deterministic_path_order_for_ties`
+  - `multi_term_body_match_outranks_single_structural_term`
+  - `adjacent_coverage_levels_outrank_maximum_structural_frequency`
   - `search_kb_context_fetches_exact_node_content_for_enrich`
 - `src/enrich_cmd.rs`
   - `fresh_text_index_result_formats_for_enrich_with_explicit_content_roots`

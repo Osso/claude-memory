@@ -229,6 +229,66 @@ fn text_search_weights_heading_over_path_over_body() {
 }
 
 #[test]
+fn multi_term_body_match_outranks_single_structural_term() {
+    let root = unique_temp_dir("kb-text-search-coverage");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(kb_dir.join("dev/ecdysis")).unwrap();
+    std::fs::create_dir_all(kb_dir.join("memory")).unwrap();
+    std::fs::write(
+        kb_dir.join("dev/ecdysis/SKILL.md"),
+        "# SKILL\nUnrelated reference.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("memory/corrections.md"),
+        "# Corrections\n\n## Process\nFrontend design skill must load immediately.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    let results = search_text_index(
+        &kb_dir,
+        &index_dir,
+        "frontend design skill load immediately",
+        2,
+    )
+    .unwrap();
+
+    assert_eq!(results[0].path, "memory/corrections.md");
+    assert_eq!(results[1].path, "dev/ecdysis/SKILL.md");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn adjacent_coverage_levels_outrank_maximum_structural_frequency() {
+    let root = unique_temp_dir("kb-text-search-adjacent-coverage");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    let noisy_dir =
+        kb_dir.join("alpha-beta-gamma-delta/alpha-beta-gamma-delta/alpha-beta-gamma-delta");
+    std::fs::create_dir_all(&noisy_dir).unwrap();
+    std::fs::write(
+        noisy_dir.join("noise.md"),
+        "# Alpha Beta Gamma Delta Alpha Beta Gamma Delta Alpha Beta Gamma Delta\n",
+    )
+    .unwrap();
+    std::fs::write(
+        kb_dir.join("complete.md"),
+        "# Complete\nAlpha beta gamma delta epsilon.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+
+    let results =
+        search_text_index(&kb_dir, &index_dir, "alpha beta gamma delta epsilon", 2).unwrap();
+
+    assert_eq!(results[0].path, "complete.md");
+    assert!(results[0].score > results[1].score);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn text_search_caps_term_frequency() {
     let root = unique_temp_dir("kb-text-search-frequency-cap");
     let kb_dir = root.join("kb");
