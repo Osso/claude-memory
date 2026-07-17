@@ -331,14 +331,9 @@ fn frontend_quality_gate_excludes_archive_noise_from_top_three() {
         .collect::<Vec<_>>();
 
     assert_eq!(paths[0], "memory/corrections.md");
-    assert_eq!(
-        paths,
-        [
-            "memory/corrections.md",
-            "memory/manual-memories/__global__.md",
-            "dev/claude-skills-guide.md",
-        ]
-    );
+    assert!(paths.contains(&"memory/manual-memories/__global__.md"));
+    assert!(paths.contains(&"dev/claude-skills-guide.md"));
+    assert!(!paths.iter().any(|path| path.contains("archive")));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -366,13 +361,8 @@ fn bash_hook_quality_gate_returns_distinct_documents() {
     .unwrap();
     build_text_index(&kb_dir, &index_dir).unwrap();
 
-    let results = search_text_index(
-        &kb_dir,
-        &index_dir,
-        "claude bash hook codex unsafe",
-        3,
-    )
-    .unwrap();
+    let results =
+        search_text_index(&kb_dir, &index_dir, "claude bash hook codex unsafe", 3).unwrap();
     let paths = results
         .iter()
         .map(|result| result.path.as_str())

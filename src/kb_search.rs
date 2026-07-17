@@ -229,13 +229,18 @@ pub fn search_text_index(
         result.next_content_command = command;
     }
     results.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
+        let left_coverage = left.score / coverage_stride;
+        let right_coverage = right.score / coverage_stride;
+        right_coverage
+            .cmp(&left_coverage)
+            .then_with(|| is_archive_path(&left.path).cmp(&is_archive_path(&right.path)))
+            .then_with(|| right.score.cmp(&left.score))
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.heading.cmp(&right.heading))
             .then_with(|| left.node_id.cmp(&right.node_id))
     });
+    let mut seen_paths = HashSet::new();
+    results.retain(|result| seen_paths.insert(result.path.clone()));
     results.truncate(limit);
     Ok(results)
 }
@@ -323,6 +328,11 @@ fn unique_tokens(tokens: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter(|token| seen.insert(token.clone()))
         .collect()
+}
+
+fn is_archive_path(path: &str) -> bool {
+    path.split('/')
+        .any(|component| component.to_ascii_lowercase().contains("archive"))
 }
 
 fn coverage_score_stride(query_term_count: usize) -> usize {
