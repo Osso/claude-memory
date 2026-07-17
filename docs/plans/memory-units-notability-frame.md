@@ -1,7 +1,10 @@
 # Memory Units: Notability Frame
 
+> Historical prompt-design artifact. The memory-unit analyzer and runtime path
+> were retired; this frame is not an active extraction contract.
+
 Source: adapted from codealmanac `prompts/base/notability.md` and `prompts/base/purpose.md`
-Purpose: Foundation for the extractor prompt (step [2] in the friction-memory pipeline).
+Historical purpose: foundation for the former extractor prompt (step [2] in the retired friction-memory pipeline).
 
 The extractor should apply this frame when deciding whether a friction moment yields
 a storable preload. The output is a 1-3 sentence preload, not a wiki page — adapt

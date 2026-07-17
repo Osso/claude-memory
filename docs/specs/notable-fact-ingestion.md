@@ -1,39 +1,54 @@
 # Notable-fact ingestion
 
-## Status
+Notable-fact ingestion is retired. This specification records the removal
+boundary and the compatibility reader that remains for KB export; implementation
+notes live in [the retirement wiki note](../wiki/systems/notable-fact-ingestion.md).
 
-Notable-fact ingestion is retired. The analyzer and writer module were removed
-with the transcript analyzer deletion. `analyze` and `backfill` no longer exist,
-and no active notable-fact writer remains.
+## What it must do
 
-Existing durable notable-fact records remain readable by the completed
-`claude-memory-export-kb` compatibility path. The export writes canonical
-Markdown under `/syncthing/Sync/KB/memory/notable-facts/`. Migration/export
-readers retain legacy source recognition for parity. This change does not delete
-notable-fact points or collections.
+### Retired pipeline
 
-## Retired contract
+- [x] Keep `analyze` and `backfill` out of the public CLI.
+- [x] Do not write or retrieve notable-fact records at runtime.
+- [x] Remove the notable-fact analyzer/writer module and graph-related runtime paths.
 
-The former contract extracted project facts from session traversal, stored them
-in `claude-notable-facts`, and deduplicated sightings. That pipeline is no
-longer an active feature. These are historical design requirements, not current
-runtime behavior:
+### Preserved compatibility
 
-- session traversal for notable-fact extraction;
-- almanac-style fact prompting and JSON parsing;
-- notable-fact collection writes and write-time merge handling;
-- analyzer and backfill integration;
-- notable-fact retrieval or prompt enrichment.
+- [x] Allow completed KB export to read existing notable-fact records.
+- [x] Preserve legacy source recognition and parity accounting for migration/export readers.
+- [x] Make no claim that notable-fact Qdrant points or collections were deleted.
 
-## Remaining surfaces
+### Current retrieval
 
-- Completed KB Markdown export can read existing notable-fact records.
-- Legacy migration/export compatibility readers remain available.
-- Prompt/answer history remains in `claude-session-history`.
-- KB PageIndex and transcript PageIndex remain separate retrieval surfaces.
-- Memory-unit read, deduplication, and enrich paths remain separate from this
-  retired pipeline.
+- [x] Use unified prompt/answer history plus KB PageIndex for prompt enrichment.
+- [x] Keep Transcript PageIndex as a separate CLI navigation surface.
 
-See [retrieval flows](../wiki/systems/retrieval-flows.md),
-[KB Markdown export](kb-markdown-export.md), and
-[storage migration](storage-migration.md).
+## How it works
+
+- [docs/wiki/systems/notable-fact-ingestion.md](../wiki/systems/notable-fact-ingestion.md) describes the retired boundary.
+- [kb-markdown-export.md](kb-markdown-export.md) describes the compatibility export.
+- [storage-migration.md](storage-migration.md) describes legacy migration readers.
+- [prompt-answer-history.md](prompt-answer-history.md) describes active history retrieval.
+
+## Implementation inventory
+
+- `src/kb_export.rs` — compatibility classification for legacy notable-fact records.
+- `src/bin/claude-memory-export-kb.rs` — guarded export reader.
+
+Deleted analyzer/writer and graph runtime modules are intentionally absent.
+
+## Tests asserting this spec
+
+- `tests/kb_export.rs` — legacy notable-fact classification and export behavior.
+- Migration tests — legacy source recognition and parity behavior.
+- `src/main_tests.rs` — retired command surface.
+
+## Known gaps (current cycle)
+
+None for the retirement boundary.
+
+## Out of scope
+
+- Reintroducing notable-fact extraction, writes, or runtime retrieval.
+- Reintroducing graph commands or graph enrichment.
+- Deleting legacy Qdrant collections or points.

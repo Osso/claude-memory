@@ -43,8 +43,9 @@ memories and the `claude-memory`, `claude-session-prompts`, and
 `claude-answers` stores are not normal indexing targets or alternate search paths
 for this surface. The separate [`claude-memory-migrate` storage migration](storage-migration.md)
 reads `claude-memory` and `claude-answers` only as one-time migration inputs.
-KB PageIndex, memory-unit search, and transcript PageIndex remain separate
-features. The former KB-to-memory-unit ingestion path is retired.
+KB PageIndex and transcript PageIndex remain separate features. Legacy
+memory-unit data is compatibility-only, and the former KB-to-memory-unit
+ingestion path is retired.
 
 ## Deduplication and writes
 
@@ -82,4 +83,4 @@ score; absent string payloads become empty fields.
 
 - KB PageIndex provides exact Markdown retrieval and prompt-enrichment context.
 - Transcript PageIndex provides local transcript navigation.
-- Analyzer-created memory units remain a separate enrichment surface.
+- Legacy memory-unit records are not a runtime enrichment surface; export and migration readers may inspect them for compatibility.

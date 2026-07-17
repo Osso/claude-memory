@@ -4,11 +4,11 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 
 ## Architecture
 
-- **Session-history vector store**: Qdrant collection `claude-session-history` (localhost:6334)
+- **Unified session-history store**: Qdrant collection `claude-session-history` (localhost:6334)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
 - **KB retrieval**: persistent KB PageIndex over Markdown
-- **Migration/export**: guarded legacy migration and completed durable-memory KB export
+- **Migration/export**: guarded legacy migration and durable-memory KB export
 
 ## Usage
 
@@ -16,28 +16,25 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 claude-memory index
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
-claude-memory deduplicate
+claude-memory kb-page-index query "query"
+claude-memory transcript-page-index build
 claude-memory enrich
 claude-memory stats
 ```
 
 `index` reads active `.jsonl` sessions and archived `.jsonl.zst` sessions only.
 Prompt and answer searches are filtered views over `claude-session-history`.
-KB Markdown uses the separate `kb-page-index` surface. The former `ingest-kb`
-command is retired.
+`enrich` reads unified prompt/answer history and KB PageIndex results only.
+Transcript PageIndex remains CLI-only navigation and is not injected by default.
 
-The transcript analyzer and `analyze`/`backfill` commands are retired. The
-notable-fact analyzer/writer module is removed; no active notable-fact writer
-remains. Memory-unit readers, listing/deletion, deduplication, and enrich
-retrieval remain active. Prompt/answer history, KB PageIndex, and transcript
-PageIndex remain separate retrieval surfaces.
+The memory-unit and graph runtime paths are retired. `deduplicate`,
+`build-graph`, `graph-clean`, and `graph-dump` are retired commands. The
+`src/memory_unit.rs`, `src/dedup.rs`, `src/graph.rs`, `src/graph/`, and
+`src/graph_cmds.rs` runtime modules were deleted.
 
-Project summaries, KB Markdown, manual memories, and the
-`claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
-session-history indexing targets or alternate search paths. Legacy
-`source=summary` and `source=kb` recognition remains for migration/export
-compatibility; legacy Qdrant data and collections are not changed by this
-retirement.
+Migration/export compatibility readers still recognize legacy collection data
+and legacy `source=summary` / `source=kb` values where required for parity.
+This retirement does not claim deletion of any Qdrant collection or point.
 
 ## Build & Install
 
@@ -55,8 +52,7 @@ Code. After rebuilding, restart Claude Code to reload it.
 `apply --backup-dir <directory>` for legacy history migration. The completed
 `claude-memory-export-kb` flow writes canonical durable-memory Markdown and a
 manifest under `/syncthing/Sync/KB/memory`, then rebuilds KB PageIndex.
-Neither tool deletes source points or collections. No collection deletion is
-claimed here.
+Neither tool deletes source points or collections.
 
 ## Dependencies
 

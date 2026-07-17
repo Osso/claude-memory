@@ -50,7 +50,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Group turns into navigable exchange nodes with exact turn ranges.
 - [x] Preserve assistant tool-call counts in transcript node summaries.
 - [x] Fetch exact turn text for a node id or turn range.
-- [x] Transcript PageIndex must not write memory units and must not replace friction-driven memory creation.
+- [x] Transcript PageIndex must not write memory units; legacy memory-unit creation and retrieval are retired.
 - [x] Keep Transcript PageIndex CLI-only until query quality and full-corpus build cost justify an MCP tool.
 
 ### CLI and retrieval surfaces
@@ -76,7 +76,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ### Enrich integration
 
-- [x] `claude-memory enrich` may include KB PageIndex output when it fits hook latency and output budgets.
+- [x] `claude-memory enrich` may include KB PageIndex output alongside unified prompt/answer history when it fits hook latency and output budgets.
 - [x] `claude-memory enrich` must label KB PageIndex context as `KB PageIndex`.
 - [x] `claude-memory enrich` must not inject Transcript PageIndex results by default.
 
@@ -92,7 +92,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 - `src/kb_search.rs`, `src/page_index.rs`, and `src/page_index_agentic.rs` implement the Rust document model, persistent index layout, CLI/tool loop, and retrieval modes.
 - [kb-page-index.md](kb-page-index.md) describes the current KB PageIndex implementation.
-- [friction-memory-creation.md](friction-memory-creation.md) describes transcript mining for durable memory creation, which remains separate.
+- [friction-memory-creation.md](friction-memory-creation.md) records the retired transcript-mining boundary.
 
 ## Implementation inventory
 
@@ -103,7 +103,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - `src/enrich_cmd.rs` — prompt hook integration for KB PageIndex context.
 - `src/main.rs` — CLI declaration and dispatch for KB PageIndex and Transcript PageIndex commands.
 - `src/main_tests.rs` — CLI parsing tests for PageIndex commands.
-- `src/extract.rs` — Claude transcript parsing used by transcript PageIndex and friction analysis.
+- `src/extract.rs` — Claude transcript parsing used by transcript PageIndex and session-history indexing.
 
 ## Tests asserting this spec
 
@@ -149,4 +149,4 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - Transcript PageIndex MCP tool exposure before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.
 - Replacing prompt/answer vector history.
-- Replacing friction-driven memory creation.
+- Reintroducing friction-driven memory creation or memory-unit runtime retrieval.

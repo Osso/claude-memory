@@ -4,13 +4,9 @@ use claude_memory::index;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
-mod dedup;
-mod graph_cmds;
 mod indexing_cmds;
 mod kb_page_index_cli;
 mod transcript_page_index_cli;
-use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
-use graph_cmds::{run_build_graph, run_graph_clean_cmd, run_graph_dump};
 use indexing_cmds::{
     run_index_cmd, run_index_file_cmd, run_kb_page_index_build, run_kb_page_index_content,
     run_kb_page_index_document, run_kb_page_index_query, run_kb_page_index_structure,
@@ -93,46 +89,10 @@ enum Command {
         target: SearchTarget,
     },
 
-    /// Deduplicate existing memory entries (merge similar ones via LLM)
-    Deduplicate {
-        /// Similarity threshold (0.0-1.0) for merging
-        #[arg(long, default_value = "0.88")]
-        threshold: f32,
-
-        /// Dry run: show what would be merged without actually merging
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Build graph from existing memory entries (extract entities/relationships)
-    BuildGraph {
-        /// Also scan KB files for graph extraction
-        #[arg(long)]
-        kb: bool,
-        /// Clear the existing graph before rebuilding
-        #[arg(long)]
-        fresh: bool,
-    },
-    /// Clean the existing graph in-place using current validation rules
-    GraphClean {
-        /// Maximum cleanup passes before stopping
-        #[arg(long, default_value = "5")]
-        max_passes: usize,
-        /// Dry run: report what would change without writing
-        #[arg(long)]
-        dry_run: bool,
-    },
     /// Enrich a prompt with memory context (for UserPromptSubmit hook)
     Enrich {
         /// Maximum memory results
         #[arg(short, long, default_value = "5")]
-        limit: usize,
-    },
-
-    /// Dump graph entities and relationships
-    GraphDump {
-        /// Maximum entries to show
-        #[arg(short, long, default_value = "50")]
         limit: usize,
     },
 
@@ -170,14 +130,7 @@ async fn run_command(command: Command) -> Result<()> {
             limit,
             target,
         } => run_search(query, limit, target).await,
-        Command::Deduplicate { threshold, dry_run } => run_deduplicate(threshold, dry_run).await,
-        Command::BuildGraph { kb, fresh } => run_build_graph(kb, fresh).await,
-        Command::GraphClean {
-            max_passes,
-            dry_run,
-        } => run_graph_clean_cmd(max_passes, dry_run),
         Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
-        Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
     }
 }
@@ -309,23 +262,4 @@ fn print_results(results: &[index::SearchResult]) -> Result<()> {
         println!();
     }
     Ok(())
-}
-
-async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        anyhow::bail!("ANTHROPIC_API_KEY must be set for deduplication (needs LLM to merge)");
-    }
-    let entries = load_all_memories().await?;
-    eprintln!("Loaded {} memory entries", entries.len());
-    if entries.is_empty() {
-        return Ok(());
-    }
-    let clusters = cluster_similar(&entries, threshold).await?;
-    let merge_count = clusters.iter().filter(|c| c.len() > 1).count();
-    eprintln!("Found {} clusters to merge", merge_count);
-    if dry_run {
-        print_clusters(&entries, &clusters);
-        return Ok(());
-    }
-    merge_clusters(&entries, &clusters).await
 }

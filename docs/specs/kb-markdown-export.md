@@ -8,7 +8,7 @@ compatibility checks.
 
 ## Preserved behavior
 
-- Memory-unit and existing notable-fact records can be classified and exported.
+- Legacy memory-unit and existing notable-fact records can be classified and exported by compatibility readers.
 - Legacy manual records remain supported through source validation.
 - `source=summary` and `source=kb` recognition remains for compatibility;
   summary records are non-durable and KB vectors are excluded with manifest
@@ -31,7 +31,7 @@ export does not imply deletion of any legacy collection.
 
 ## Related contracts
 
-- [Memory units](memory-units.md)
+- [Legacy memory-unit compatibility](memory-units.md)
 - [KB PageIndex](kb-page-index.md)
 - [Prompt and answer history](prompt-answer-history.md)
 - [Storage migration](storage-migration.md)

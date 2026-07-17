@@ -1,15 +1,15 @@
 # Memory units
 
-Memory units are compact durable preloads stored separately from raw prompt and
-answer history. The former friction analyzer is retired. Remaining paths cover
-collection access, search, listing/deletion, deduplication, and prompt enrich.
+Memory-unit runtime retrieval is retired. `memory_unit.rs`, the dedicated
+runtime search/listing/deletion path, and `dedup.rs` were deleted. `enrich` no
+longer searches or injects memory-unit records.
 
-`enrich` retrieves relevant units when semantic search is enabled and labels
-them as possibly useful hints, not authoritative facts. Manual project memory
-lives in `docs/local/memory.md`; cross-project rules live in
-`/home/osso/AgentConfig/rules`.
+Legacy memory-unit records remain relevant only to compatibility readers used by
+KB export and migration/parity workflows. Those readers preserve source
+classification and export behavior where required; this retirement does not
+claim deletion of the `claude-memory-units` collection or its records.
 
-No active transcript analyzer populates memory units automatically. This change
-does not delete the `claude-memory-units` collection or its records. Prompt /
-answer history, KB PageIndex, transcript PageIndex, completed KB export, and
-migration/export compatibility readers remain separate surfaces.
+The current runtime retrieval path is unified prompt/answer history plus KB
+PageIndex. Transcript PageIndex remains a separate CLI navigation surface.
+
+This page records the retired runtime boundary, not an active memory-unit API.

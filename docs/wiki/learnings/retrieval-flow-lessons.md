@@ -1,23 +1,23 @@
 # Retrieval Flow Lessons
 
 These notes capture design lessons from maintaining the retrieval surfaces.
+Some entries describe the retired graph and memory-unit paths and are preserved
+as historical context only.
 
 ## Keep Runtime Flows Separate
 
-`enrich`, CLI search, MCP search, KB PageIndex, Transcript PageIndex, and graph
-lookup are separate products. A fix in one path does not prove the others are
-covered. When changing retrieval behavior, check each caller explicitly.
+`enrich`, CLI search, MCP search, KB PageIndex, and Transcript PageIndex are
+separate products. A fix in one path does not prove the others are covered.
+When changing retrieval behavior, check each caller explicitly.
 
-## Put Optional Context Behind Gates
+## Retired Optional Context Paths
 
-Graph context is useful only when intentionally enabled. It must be gated at both
-write/extraction time and read/enrichment time:
+The former graph context path required coordinated write and read gates. That
+lesson is historical: `build-graph`, `graph-clean`, `graph-dump`, graph
+enrichment, and the graph runtime modules are retired.
 
-- extraction: `build-graph`
-- hook output: `claude-memory enrich`
-- MCP output: `prompt_search` / `answer_search`
-
-A disabled subsystem can still leak stale context if only the writer is gated.
+The former memory-unit enrichment path is also retired. Current `enrich` uses
+unified prompt/answer history plus KB PageIndex only.
 
 ## Prefer Local Defaults, But Document Overrides
 
@@ -28,14 +28,13 @@ override path, not assume a single hosted provider.
 
 ## Search Is Not One Thing
 
-There are three main lookup families:
+Current runtime lookup has two source families:
 
-- memory units: durable distilled facts and preloads
 - prompt/answer history: raw conversation chunks in Qdrant
 - PageIndex: traceable document/structure/content retrieval
 
-Naming matters. Broad words like "search" hide different storage, gates,
-ranking, and output contracts.
+Legacy memory-unit and graph collections may still be named by compatibility
+readers, but they are not runtime search surfaces.
 
 ## Traceability Beats Magic Injection
 

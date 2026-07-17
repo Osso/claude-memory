@@ -42,8 +42,8 @@ The two surfaces intentionally stay separate:
 
 - KB PageIndex is a structured KB retrieval surface.
 - Transcript PageIndex is a source-inspection surface for Claude/Codex sessions.
-- Friction-driven memory creation remains the only automatic path that writes
-  durable transcript-derived memory units.
+- No active runtime path writes durable transcript-derived memory units;
+  legacy records are compatibility-only.
 
 ## Bounded Parity
 

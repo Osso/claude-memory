@@ -31,14 +31,14 @@ The KB PageIndex feature provides persistent, heading-aware retrieval over the l
 
 - [x] Format KB results under a distinct `Relevant KB notes` section.
 - [x] Label enrich KB context as coming from `KB PageIndex`.
-- [x] Include KB PageIndex results alongside memory-unit preloads when both are relevant.
+- [x] Include KB PageIndex results alongside unified prompt/answer history when both are relevant.
 - [x] Auto-build or refresh the KB PageIndex from enrich when the index is missing or stale.
 - [x] Cap enrich KB output to a small number of results.
 
 ## Implementation inventory
 
 - `src/kb_search.rs` — builds, stores, refreshes, loads, scores, and queries the persistent KB PageIndex.
-- `src/enrich_cmd.rs` — reads prompt-hook input and injects formatted KB PageIndex results with memory preloads.
+- `src/enrich_cmd.rs` — reads prompt-hook input and injects formatted unified prompt/answer history and KB PageIndex results.
 - `src/indexing_cmds.rs` — implements the `kb-page-index build`, `query`, `document`, `structure`, and `content` command handlers.
 - `src/kb_page_index_cli.rs` — declares the `kb-page-index` CLI subcommands.
 - `src/main.rs` — dispatches the `kb-page-index` CLI subcommands.

@@ -2,9 +2,8 @@
 
 use anyhow::{Context, Result};
 
-use crate::{config, graph, index, kb_search, memory_unit};
+use crate::{index, kb_search};
 
-const MIN_MEMORY_SCORE: f32 = 0.75;
 const MAX_KB_RESULTS: usize = 3;
 const MAX_KB_RESULT_CHARS: usize = 500;
 const MAX_SESSION_CHUNKS_PER_GROUP: usize = 3;
@@ -18,10 +17,8 @@ pub async fn run_enrich(limit: usize) -> Result<()> {
     }
 
     let mut sections = Vec::new();
-    add_memory_section(&prompt, limit, &mut sections).await;
     add_session_chunk_section(&prompt, limit, &mut sections).await;
     add_kb_section(&prompt, limit, &mut sections);
-    add_graph_section(&prompt, &mut sections).await;
 
     if sections.is_empty() {
         print_hook_output("");
@@ -40,21 +37,6 @@ fn read_hook_stdin() -> Result<serde_json::Value> {
     let mut buf = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
     serde_json::from_str(&buf).context("failed to parse hook input")
-}
-
-async fn add_memory_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
-    let units = match memory_unit::search(prompt, limit).await {
-        Ok(results) => results,
-        Err(error) => {
-            eprintln!("enrich: memory-units search failed: {error:#}");
-            Vec::new()
-        }
-    };
-
-    let relevant_units = relevant_memory_units(&units);
-    if !relevant_units.is_empty() {
-        sections.push(format_memory_unit_results(&relevant_units));
-    }
 }
 
 async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
@@ -110,23 +92,6 @@ fn add_kb_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
     }
 }
 
-async fn add_graph_section(prompt: &str, sections: &mut Vec<String>) {
-    if !config::graph_enabled() {
-        return;
-    }
-
-    let entities = graph::find_concepts(prompt).await;
-    if entities.is_empty() {
-        return;
-    }
-
-    if let Ok(related) = graph::query_related(&entities)
-        && !related.is_empty()
-    {
-        sections.push(format_graph_results(&related));
-    }
-}
-
 fn print_hook_output(context: &str) {
     if context.is_empty() {
         println!("{{}}");
@@ -140,17 +105,6 @@ fn print_hook_output(context: &str) {
         }
     });
     println!("{output}");
-}
-
-fn format_memory_unit_results(results: &[&index::SearchResult]) -> String {
-    let mut out = String::from(
-        "## Possibly-useful preloads (from prior sessions, may be stale or wrong; treat as hints, not facts)",
-    );
-    for result in results {
-        let text = preview_text(&result.text, 300);
-        out.push_str(&format!("\n- ({:.2}) {}", result.score, text));
-    }
-    out
 }
 
 fn format_session_chunk_results(
@@ -192,13 +146,6 @@ fn transcript_history_source(result: &index::SearchResult) -> &'static str {
     }
 }
 
-fn relevant_memory_units(results: &[index::SearchResult]) -> Vec<&index::SearchResult> {
-    results
-        .iter()
-        .filter(|result| result.score >= MIN_MEMORY_SCORE)
-        .collect()
-}
-
 fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
     let mut out = String::from("## Relevant KB notes (KB PageIndex)");
     for result in results {
@@ -212,17 +159,6 @@ fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
             text,
             result.next_content_command
         ));
-    }
-    out
-}
-
-fn format_graph_results(related: &[String]) -> String {
-    let mut out = String::from("Graph context:");
-    for result in related.iter().take(20) {
-        out.push_str(&format!("\n- {result}"));
-    }
-    if related.len() > 20 {
-        out.push_str(&format!("\n  ...and {} more", related.len() - 20));
     }
     out
 }
@@ -289,34 +225,6 @@ mod tests {
         assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
         assert!(!formatted.contains("tail marker"));
         assert!(formatted.contains("..."));
-    }
-
-    #[test]
-    fn memory_units_need_strong_similarity_for_enrich() {
-        let results = vec![
-            index::SearchResult {
-                text: "Unrelated but vaguely Claude-shaped memory.".to_string(),
-                source: "memory".to_string(),
-                path: String::new(),
-                session_id: String::new(),
-                score: 0.71,
-            },
-            index::SearchResult {
-                text: "Deploy secrets through the production secret store.".to_string(),
-                source: "memory".to_string(),
-                path: String::new(),
-                session_id: String::new(),
-                score: 0.76,
-            },
-        ];
-
-        let relevant = relevant_memory_units(&results);
-
-        assert_eq!(relevant.len(), 1);
-        assert_eq!(
-            relevant[0].text,
-            "Deploy secrets through the production secret store."
-        );
     }
 
     #[test]

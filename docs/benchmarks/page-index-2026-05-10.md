@@ -1,6 +1,10 @@
 # PageIndex Benchmark - 2026-05-10
 
-This benchmark compares the current PageIndex implementation against two
+Historical benchmark captured before the memory-unit and graph runtime
+retirement. The `claude-memory enrich` row measures the pre-retirement
+composition and is not a current latency or source-composition claim.
+
+This benchmark compares the PageIndex implementation against two
 baselines available on this machine:
 
 - `rg` over `/syncthing/Sync/KB/**/*.md`
@@ -53,7 +57,7 @@ Ten prompts were used for the query benchmark:
 | `claude-memory search --type prompts --limit 3` | legacy prompt/vector search | 1.24s | 0.124s | Fast, but results are transcript chunks and often not KB-specific. |
 | `kb-page-index query --mode lexical --limit 3` | KB PageIndex | 5.43s | 0.543s | Returns document id, node id, score/reason, and exact `content` command. Cost is dominated by loading/parsing the JSON index per CLI process. |
 | `transcript-page-index query --mode lexical --limit 3` | 424-session bounded transcript index | 1.46s | 0.146s | Faster than KB PageIndex on this smaller index, but lexical transcript quality is noisy on broad prompts. |
-| `claude-memory enrich` | memory units + KB PageIndex | 9.17s | 0.917s | Within a 15s hook timeout for this 10-prompt run, but close enough that p95 should be measured before increasing limits. |
+| `claude-memory enrich` (pre-retirement) | memory units + KB PageIndex | 9.17s | 0.917s | Historical measurement only; not the current enrich source composition. |
 
 The default KB PageIndex cache initially failed hook lookup with `missing field
 title`, meaning it was still in the old schema. Rebuilding the default KB index

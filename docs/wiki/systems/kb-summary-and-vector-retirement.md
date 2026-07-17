@@ -10,8 +10,8 @@ This slice retires the obsolete KB-to-memory-unit ingestion path and the stale
 - No active summary producer or summary search path is part of retrieval.
 - Transcript PageIndex `PageIndexNode.summary` remains node metadata, not a
   summary-vector path.
-- KB PageIndex remains the structured exact-content KB retrieval path.
-- Prompt/answer history remains a separate session-history surface.
+- KB PageIndex remains the structured exact-content KB retrieval path and is the second `enrich` source.
+- Prompt/answer history remains a separate session-history surface and is the history source used by `enrich`.
 - The transcript analyzer and notable-fact analyzer/writer are also retired;
   `analyze` and `backfill` are not available.
 
@@ -25,9 +25,10 @@ Legacy readers retain source recognition for parity:
   excluded KB vector, with manifest accounting.
 
 The durable-memory KB export is completed. Existing exported Markdown remains
-available through KB PageIndex. This slice does not write live notable facts,
-delete points, or delete collections. Legacy Qdrant contents remain outside the
-retirement boundary.
+available through KB PageIndex. Compatibility readers still recognize legacy
+memory-unit and notable-fact records where needed for export or migration. This
+slice does not write live notable facts, delete points, or delete collections.
+Legacy Qdrant contents remain outside the retirement boundary.
 
 ## Related contracts
 

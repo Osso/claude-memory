@@ -1,6 +1,10 @@
 # Transcript-Mining Analyzer + Memory Units
 
-Status: design locked, implementation pending
+> Historical design plan. The analyzer, memory-unit runtime, and graph paths
+> described here were later retired; it is not a current implementation plan.
+> See `docs/wiki/systems/retrieval-flows.md` for the current runtime boundary.
+
+Status: superseded
 Date: 2026-04-28
 
 ## Goal

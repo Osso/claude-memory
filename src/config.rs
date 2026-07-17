@@ -4,13 +4,7 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Config {
-    pub graph: GraphConfig,
     pub search: SearchConfig,
-}
-
-#[derive(Debug)]
-pub struct GraphConfig {
-    pub enabled: bool,
 }
 
 #[derive(Debug)]
@@ -21,7 +15,6 @@ pub struct SearchConfig {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            graph: GraphConfig { enabled: false },
             search: SearchConfig { enabled: false },
         }
     }
@@ -29,10 +22,6 @@ impl Default for Config {
 
 pub fn load() -> &'static Config {
     CONFIG.get_or_init(load_inner)
-}
-
-pub fn graph_enabled() -> bool {
-    load().graph.enabled
 }
 
 pub fn search_enabled() -> bool {
@@ -58,9 +47,6 @@ fn load_inner() -> Config {
 fn parse_config(raw: &str) -> Config {
     match toml::from_str::<toml::Table>(raw) {
         Ok(table) => Config {
-            graph: GraphConfig {
-                enabled: table_enabled(&table, "graph"),
-            },
             search: SearchConfig {
                 enabled: table_enabled(&table, "search"),
             },
@@ -97,21 +83,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_graph_disabled() {
-        let cfg = Config::default();
-        assert!(!cfg.graph.enabled);
-    }
-
-    #[test]
     fn default_search_disabled() {
         let cfg = Config::default();
         assert!(!cfg.search.enabled);
-    }
-
-    #[test]
-    fn parse_graph_enabled_true() {
-        let cfg = parse_config("[graph]\nenabled = true");
-        assert!(cfg.graph.enabled);
     }
 
     #[test]
@@ -121,14 +95,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_missing_graph_table_returns_default() {
-        let cfg = parse_config("[other]\nfoo = 1");
-        assert!(!cfg.graph.enabled);
-    }
-
-    #[test]
     fn parse_malformed_toml_returns_default() {
         let cfg = parse_config("not = [ valid toml !!!@#");
-        assert!(!cfg.graph.enabled);
+        assert!(!cfg.search.enabled);
     }
 }

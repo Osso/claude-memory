@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use claude_memory::config;
 use claude_memory::embed::Embedder;
 use claude_memory::extract::HistoryType;
-use claude_memory::graph;
 use claude_memory::index::{COLLECTION_SESSION_HISTORY, history_filter};
 use claude_memory::llm::{self, RawResult};
 use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
@@ -184,8 +183,7 @@ impl MemoryService {
         if filtered.is_empty() {
             return Ok("No results found.".to_string());
         }
-        let graph_context = enrich_with_graph(&params.query).await;
-        Ok(format_search_output(&filtered, &graph_context))
+        Ok(format_search_output(&filtered))
     }
 
     async fn run_hybrid_search(
@@ -310,41 +308,12 @@ fn log_ref_scores(stage: &str, points: &[&qdrant_client::qdrant::ScoredPoint]) {
     ));
 }
 
-fn format_search_output(
-    points: &[&qdrant_client::qdrant::ScoredPoint],
-    graph_context: &[String],
-) -> String {
-    let mut output: String = points
+fn format_search_output(points: &[&qdrant_client::qdrant::ScoredPoint]) -> String {
+    points
         .iter()
         .enumerate()
         .map(|(index, point)| format_scored_point(index, point))
-        .collect();
-    if graph_context.is_empty() {
-        return output;
-    }
-
-    output.push_str("Related (graph):\n");
-    for relation in graph_context {
-        output.push_str(&format!("  - {relation}\n"));
-    }
-    output
-}
-
-/// Query graph for related entities to enrich search results.
-async fn enrich_with_graph(query: &str) -> Vec<String> {
-    enrich_with_graph_when_enabled(query, config::graph_enabled()).await
-}
-
-async fn enrich_with_graph_when_enabled(query: &str, graph_enabled: bool) -> Vec<String> {
-    if !graph_enabled {
-        return vec![];
-    }
-
-    let entities = graph::find_concepts(query).await;
-    if entities.is_empty() {
-        return vec![];
-    }
-    graph::query_related(&entities).unwrap_or_default()
+        .collect()
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -372,13 +341,6 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn enrich_with_graph_returns_empty_when_graph_disabled() {
-        let related = enrich_with_graph_when_enabled("Rust", false).await;
-
-        assert!(related.is_empty());
-    }
 
     #[test]
     fn mcp_server_instructions_describe_history_search_only() {

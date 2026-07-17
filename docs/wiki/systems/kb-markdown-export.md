@@ -46,6 +46,8 @@ points or collections. Completion of the export is not collection deletion.
 ## Separate work
 
 Prompt/answer history remains in `claude-session-history`. The former KB-to-
-memory-unit ingestion path is retired. Memory-unit read, deduplication, and
-enrich paths remain active. Transcript analyzer and notable-fact writer removal
-are separate runtime retirement changes documented in the related specs.
+memory-unit ingestion path is retired. Memory-unit and graph runtime search,
+deduplication, and enrich paths are also retired. Export and migration readers
+remain available for legacy compatibility; they do not claim deletion of source
+points or collections. Transcript analyzer and notable-fact writer removal are
+documented in the related specs.

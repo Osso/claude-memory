@@ -6,7 +6,7 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 
 - [x] Reject `claude-memory ingest-kb`; the CLI command is no longer part of the public surface.
 - [x] Expose no replacement KB-to-memory-unit writer through the public CLI.
-- [x] Leave manual-memory and memory-unit reader/dedup/enrich paths available; notable-fact analyzer/writer behavior is retired.
+- [x] Leave no memory-unit or graph runtime reader/dedup/enrich path available; export/migration compatibility readers remain.
 
 ### Preserved retrieval and history
 
@@ -20,13 +20,13 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 
 - [x] Keep legacy `source=summary` and `source=kb` recognition in export/migration classification for parity, even though neither is an active search or ingestion path.
 
-No active summary producer or summary search path existed before this retirement. PageIndex node summaries are unrelated and remain active.
+No active summary producer or summary search path existed before this retirement. PageIndex node summaries are unrelated and remain active. Memory-unit and graph runtime modules are deleted.
 
 ## How it works
 
 - [docs/wiki/systems/kb-summary-and-vector-retirement.md](../wiki/systems/kb-summary-and-vector-retirement.md) describes the retired and preserved paths.
 - [kb-page-index.md](kb-page-index.md) defines the KB retrieval contract.
-- [memory-units.md](memory-units.md) defines the separate memory-unit contract.
+- [memory-units.md](memory-units.md) defines the legacy memory-unit compatibility boundary.
 - [prompt-answer-history.md](prompt-answer-history.md) defines transcript history search.
 - [storage-migration.md](storage-migration.md) defines legacy source recognition during migration.
 
@@ -53,6 +53,6 @@ None for this slice.
 
 - Reintroducing KB Markdown facts as memory units.
 - Removing or migrating legacy Qdrant collections or points.
-- Changing manual memory, memory-unit, prompt/answer history, or PageIndex APIs.
+- Reintroducing manual-memory, memory-unit, graph, prompt/answer history, or PageIndex runtime paths.
 - Treating `PageIndexNode.summary` as the retired summary-vector feature.
 - Claiming that legacy points or collections were deleted.

@@ -1,37 +1,52 @@
 # Friction-driven memory creation
 
-## Status
-
 The transcript analyzer and friction-memory creation pipeline are retired.
-`claude-memory analyze <session_jsonl>` and `claude-memory backfill` are no
-longer CLI commands. `src/analyze.rs` and `src/backfill.rs` were removed, so
-completed transcripts are not automatically classified, validated, or written
-as memory units by this pipeline.
+This specification records the removal boundary; implementation notes live in
+[the retirement wiki note](../wiki/systems/friction-memory-creation.md).
 
-This retirement does not delete the `claude-memory-units` collection or its
-records. Existing memory-unit read, listing/deletion, deduplication, and enrich
-paths remain. Prompt/answer history and both PageIndex surfaces remain active.
+## What it must do
 
-## Retired contract
+### Retired pipeline
 
-The former contract classified assistant friction, extracted a short preload,
-validated it against the eventual session resolution, retried failed candidates,
-and stored accepted candidates with source metadata. Backfill walked live and
-archived sessions with processed-session state. Those behaviors are historical
-only; no active analyzer writer remains for them.
+- [x] Reject the retired `claude-memory analyze` and `claude-memory backfill` command paths.
+- [x] Do not classify completed transcripts or write new memory-unit records automatically.
+- [x] Remove the analyzer, backfill, and memory-unit runtime retrieval/deduplication paths.
 
-## Remaining surfaces
+### Preserved compatibility
 
-- `memory_unit.rs` retains memory-unit schema, collection access, search,
-  listing/deletion, and deduplication support.
-- `enrich` can retrieve memory units as possibly useful hints.
-- Prompt/answer history remains a filtered view over
-  `claude-session-history`.
-- KB PageIndex remains the exact Markdown retrieval path.
-- Transcript PageIndex remains CLI-only transcript navigation.
-- The completed KB export and migration compatibility readers remain separate
-  from transcript analysis.
+- [x] Keep legacy memory-unit and notable-fact records readable where KB export or migration/parity requires them.
+- [x] Preserve legacy source recognition and provenance needed by compatibility readers.
+- [x] Make no Qdrant collection- or point-deletion claim as part of this retirement.
 
-See [retrieval flows](../wiki/systems/retrieval-flows.md),
-[memory units](memory-units.md), and
-[prompt/answer history](prompt-answer-history.md).
+### Current retrieval
+
+- [x] Use unified prompt/answer history plus KB PageIndex for prompt enrichment.
+- [x] Keep Transcript PageIndex as a separate CLI navigation surface.
+
+## How it works
+
+- [docs/wiki/systems/friction-memory-creation.md](../wiki/systems/friction-memory-creation.md) describes the retired boundary.
+- [memory-units.md](memory-units.md) describes legacy memory-unit compatibility.
+- [prompt-answer-history.md](prompt-answer-history.md) describes active history retrieval.
+- [kb-page-index.md](kb-page-index.md) describes active KB retrieval.
+
+## Implementation inventory
+
+No analyzer, backfill, memory-unit runtime, or deduplication module remains.
+Compatibility readers are listed in [memory-units.md](memory-units.md) and
+[notable-fact-ingestion.md](notable-fact-ingestion.md).
+
+## Tests asserting this spec
+
+- `src/main_tests.rs` — retired command surface.
+- `tests/kb_export.rs` and migration tests — compatibility reader behavior.
+
+## Known gaps (current cycle)
+
+None for the retirement boundary.
+
+## Out of scope
+
+- Reintroducing automatic friction analysis or memory-unit writes.
+- Reintroducing memory-unit or graph runtime retrieval.
+- Deleting legacy Qdrant collections or points.
