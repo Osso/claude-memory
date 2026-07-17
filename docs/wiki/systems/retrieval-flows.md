@@ -32,10 +32,14 @@ PageIndex path writes memory units or graph records.
 
 KB text search gives distinct query-term coverage priority over field-location
 bonuses. A multi-term body match therefore outranks a single heading/path match,
-while one-term matches remain eligible. The real-KB query `frontend design skill
-load immediately` puts `memory/corrections.md` first. The query `claude bash hook
-codex unsafe` finds relevant bash-hook material, but its results remain
-duplicate-heavy; diversity is not solved by this scoring change.
+while one-term matches remain eligible. Within equal coverage, archive-path results
+are demoted. Before applying the top-N limit, search keeps at most one section per
+source document, making the returned documents distinct. The real-KB query
+`frontend design skill load immediately` keeps `memory/corrections.md` first and
+excludes archive noise from its top three; `claude bash hook codex unsafe` returns
+three distinct documents. AMDGPU-first ordering and empty-query behavior remain
+covered by quality gates. Broader corpus quality and current TSV benchmark data
+remain open gaps.
 
 ## Retired runtime paths
 

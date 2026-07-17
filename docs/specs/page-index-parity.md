@@ -43,6 +43,9 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Preserve heading source line numbers.
 - [x] Record source freshness in `manifest.tsv`.
 - [x] Reject query/content when Markdown files are added, changed, deleted, or otherwise make the manifest stale; rebuild is explicit.
+- [x] Rank results by distinct query-term coverage before secondary score, demoting archive paths only within equal coverage.
+- [x] Keep at most one matching section per source document before applying the top-N limit.
+- [x] Preserve the frontend top-three, bash-hook document-diversity, AMDGPU-first, and absent-query quality gates.
 
 ### Transcript behavior
 
@@ -122,6 +125,9 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
     - `stale_text_search_rejects_without_automatic_rebuild`
     - `text_search_weights_heading_over_path_over_body`
     - `text_search_rewards_exact_phrase`
+    - `frontend_quality_gate_excludes_archive_noise_from_top_three`
+    - `bash_hook_quality_gate_returns_distinct_documents`
+    - `quality_gate_preserves_amdgpu_first_and_absent_query_behavior`
   - `src/page_index.rs`
     - `fixture_transcripts_prove_structure_content_query_and_no_memory_units`
     - `session_index_groups_prompt_and_answer_in_one_node`
@@ -148,7 +154,8 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
 - [x] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
-- [x] Benchmark build time, output size, and query quality against the current flat implementation and `rg`.
+- [ ] Re-run build-time, output-size, and query-quality benchmarks for the current TSV text index; the historical PageIndex benchmark no longer measures this runtime.
+- [ ] Evaluate KB result quality beyond the targeted frontend, bash-hook, AMDGPU-first, and absent-query gates.
 
 ## Out of scope
 
