@@ -41,7 +41,7 @@ session-history indexing targets or alternate search paths.
 ./deploy.sh
 ```
 
-`deploy.sh` installs all three binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
+`deploy.sh` installs all four binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
 
 No systemd service — the MCP server runs as a stdio child process of Claude Code. After rebuilding, restart Claude Code to reload it.
 

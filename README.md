@@ -73,10 +73,11 @@ Local project memories remain editable Markdown under `docs/local/`.
 cargo build --release
 ```
 
-Produces three binaries:
+Produces four binaries:
 - `claude-memory` — CLI for indexing and searching
 - `claude-memory-mcp` — MCP server for Claude Code integration
 - `claude-memory-migrate` — guarded legacy Qdrant storage migration CLI
+- `claude-memory-export-kb` — guarded durable-memory to KB Markdown export CLI
 
 ## CLI commands
 
@@ -98,6 +99,11 @@ claude-memory graph-dump         # Show graph contents
 claude-memory deduplicate        # Merge similar memories via LLM
 claude-memory enrich             # Enrich prompt with context (hook use)
 claude-memory stats              # Show collection statistics
+
+# Durable-memory to KB Markdown export (plan/apply/verify)
+claude-memory-export-kb plan
+claude-memory-export-kb apply --kb-root /syncthing/Sync/KB
+claude-memory-export-kb verify --kb-root /syncthing/Sync/KB
 
 # One-time legacy storage migration (read-only plan/verify; apply requires a backup root)
 claude-memory-migrate plan

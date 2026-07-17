@@ -8,6 +8,7 @@ pub mod enrich_cmd;
 pub mod extract;
 pub mod graph;
 pub mod index;
+pub mod kb_export;
 pub mod kb_ingest;
 pub mod kb_search;
 pub mod llm;
