@@ -231,9 +231,9 @@ pub fn search_text_index(
     results.sort_by(|left, right| {
         let left_coverage = left.score / coverage_stride;
         let right_coverage = right.score / coverage_stride;
-        right_coverage
-            .cmp(&left_coverage)
-            .then_with(|| is_archive_path(&left.path).cmp(&is_archive_path(&right.path)))
+        is_archive_path(&left.path)
+            .cmp(&is_archive_path(&right.path))
+            .then_with(|| right_coverage.cmp(&left_coverage))
             .then_with(|| right.score.cmp(&left.score))
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.heading.cmp(&right.heading))

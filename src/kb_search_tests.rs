@@ -308,7 +308,7 @@ fn frontend_quality_gate_excludes_archive_noise_from_top_three() {
     .unwrap();
     std::fs::write(
         kb_dir.join("dev/claude-skills-guide.md"),
-        "# Guide\nThe frontend design skill should load immediately for frontend tasks.\n",
+        "# Guide\nThe frontend design skill should activate for interface tasks.\n",
     )
     .unwrap();
     std::fs::write(
