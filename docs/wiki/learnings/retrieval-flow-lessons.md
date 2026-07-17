@@ -31,13 +31,16 @@ override path, not assume a single hosted provider.
 Current runtime lookup has two source families:
 
 - prompt/answer history: raw conversation chunks in Qdrant
-- PageIndex: traceable document/structure/content retrieval
+- KB PageIndex: deterministic TSV search plus exact source line-range retrieval
+- Transcript PageIndex: traceable document/structure/content retrieval
 
 Legacy memory-unit, migration, and export collections are no longer runtime
 search surfaces; Qdrant now contains only `claude-session-history`.
 
 ## Traceability Beats Magic Injection
 
-KB PageIndex and Transcript PageIndex should stay traceable: document id, node
-id, source path, and content command. Prompt enrichment should stay small and
-labeled because injected context is easy to over-trust.
+KB PageIndex and Transcript PageIndex should stay traceable. KB results expose
+source path, line range, and a custom content command with explicit `--kb` and
+`--index` paths; Transcript results expose document/node references and content
+commands. Prompt enrichment should stay small and labeled because injected
+context is easy to over-trust.

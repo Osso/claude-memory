@@ -1,5 +1,4 @@
 use clap::Subcommand;
-use claude_memory::page_index_agentic;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -31,39 +30,19 @@ pub enum KbPageIndexCommand {
         /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
         #[arg(long)]
         index: Option<PathBuf>,
-
-        /// Retrieval mode
-        #[arg(long, value_enum, default_value_t = page_index_agentic::RetrievalMode::Lexical)]
-        mode: page_index_agentic::RetrievalMode,
     },
 
-    /// Print document metadata from the persistent KB PageIndex
-    Document {
-        /// Document id or source path
-        doc: String,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-
-    /// Print nested document structure without node text
-    Structure {
-        /// Document id or source path
-        doc: String,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
-
-    /// Print exact indexed text for a node id or line range
+    /// Print exact Markdown text for an indexed line range
     Content {
-        /// Document id or source path
+        /// Document source path
         doc: String,
 
-        /// Node id or inclusive line range like 4-8
+        /// Inclusive line range like 4-8
         locator: String,
+
+        /// Knowledge base directory
+        #[arg(long)]
+        kb: Option<PathBuf>,
 
         /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
         #[arg(long)]

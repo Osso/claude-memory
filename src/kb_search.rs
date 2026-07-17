@@ -1,8 +1,6 @@
 //! Persistent heading-aware PageIndex for the local Markdown knowledge base.
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -10,20 +8,10 @@ use walkdir::WalkDir;
 
 #[path = "kb_search_markdown.rs"]
 mod kb_search_markdown;
-#[path = "kb_search_model.rs"]
-mod kb_search_model;
-#[path = "kb_search_text.rs"]
-mod kb_search_text;
-use kb_search_markdown::{MarkdownSection, fallback_heading, split_markdown_sections};
-pub use kb_search_model::{
-    KbDocContent, KbDocMetadata, KbDocStructure, KbIndexedDoc, KbIndexedFile, KbIndexedNode,
-    KbNodeStructure, KbPageIndex,
-};
-use kb_search_text::{build_snippet, token_counts, tokenize};
+use kb_search_markdown::{MarkdownSection, split_markdown_sections};
 
 pub const DEFAULT_KB_DIR: &str = "/syncthing/Sync/KB";
 
-const INDEX_FILE_NAME: &str = "index.json";
 const NODES_FILE_NAME: &str = "nodes.tsv";
 const MANIFEST_FILE_NAME: &str = "manifest.tsv";
 const HEADING_WEIGHT: usize = 600;
@@ -32,7 +20,6 @@ const BODY_WEIGHT: usize = 100;
 const TERM_FREQUENCY_CAP: usize = 3;
 const PHRASE_BONUS: usize = 1_000;
 const SCORE_SCALE: usize = 100;
-const MIN_SCORE: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextIndexNode {
@@ -48,6 +35,14 @@ pub struct TextManifestEntry {
     pub path: String,
     pub mtime_ns: u128,
     pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KbDocContent {
+    pub doc_id: String,
+    pub source_path: String,
+    pub locator: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,43 +72,8 @@ pub fn default_index_dir() -> PathBuf {
         .join("claude-memory/kb-page-index")
 }
 
-pub fn build_default_index() -> Result<KbBuildSummary> {
-    build_index(Path::new(DEFAULT_KB_DIR), &default_index_dir())
-}
-
-pub fn build_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
-    let files = collect_markdown_files(kb_dir);
-    let indexed_files = files
-        .iter()
-        .map(|path| build_file_fingerprint(kb_dir, path))
-        .collect::<Result<Vec<_>>>()?;
-    let docs = files
-        .iter()
-        .map(|path| build_doc(kb_dir, path))
-        .collect::<Result<Vec<_>>>()?;
-    let node_count = docs.iter().map(|doc| count_nodes(&doc.nodes)).sum();
-    let index = KbPageIndex {
-        source_dir: kb_dir.to_string_lossy().to_string(),
-        built_at: Utc::now(),
-        files: indexed_files,
-        docs,
-    };
-
-    std::fs::create_dir_all(index_dir)
-        .with_context(|| format!("failed to create {}", index_dir.display()))?;
-    let index_path = index_path(index_dir);
-    let json = serde_json::to_string_pretty(&index).context("failed to serialize KB PageIndex")?;
-    std::fs::write(&index_path, json)
-        .with_context(|| format!("failed to write {}", index_path.display()))?;
-
-    Ok(KbBuildSummary {
-        files: index.files.len(),
-        nodes: node_count,
-        index_path,
-    })
-}
-
 pub fn build_text_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
+    ensure_disjoint_directories(kb_dir, index_dir)?;
     let files = collect_markdown_files(kb_dir);
     let mut nodes = Vec::new();
     let mut manifest = Vec::new();
@@ -137,6 +97,10 @@ pub fn build_text_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummar
         manifest.push(entry);
     }
 
+    if index_dir.exists() {
+        std::fs::remove_dir_all(index_dir)
+            .with_context(|| format!("failed to replace {}", index_dir.display()))?;
+    }
     std::fs::create_dir_all(index_dir)
         .with_context(|| format!("failed to create {}", index_dir.display()))?;
     let nodes_path = index_dir.join(NODES_FILE_NAME);
@@ -153,21 +117,64 @@ pub fn build_text_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummar
     })
 }
 
-pub fn load_text_nodes(index_dir: &Path) -> Result<Vec<TextIndexNode>> {
+fn ensure_disjoint_directories(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+    let kb_dir = std::fs::canonicalize(kb_dir)
+        .with_context(|| format!("failed to resolve {}", kb_dir.display()))?;
+    let index_dir = resolve_future_path(index_dir)?;
+    if kb_dir.starts_with(&index_dir) || index_dir.starts_with(&kb_dir) {
+        bail!(
+            "KB and index directories overlap: {} and {}",
+            kb_dir.display(),
+            index_dir.display()
+        );
+    }
+    Ok(())
+}
+
+fn resolve_future_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current directory")?
+            .join(path)
+    };
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        missing.push(
+            existing
+                .file_name()
+                .context("path has no existing ancestor")?,
+        );
+        existing = existing.parent().context("path has no existing ancestor")?;
+    }
+    let mut resolved = std::fs::canonicalize(existing)
+        .with_context(|| format!("failed to resolve {}", existing.display()))?;
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn load_text_nodes(index_dir: &Path) -> Result<Vec<TextIndexNode>> {
     let path = index_dir.join(NODES_FILE_NAME);
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     parse_text_nodes(&text).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-pub fn load_text_manifest(index_dir: &Path) -> Result<Vec<TextManifestEntry>> {
+fn load_text_manifest(index_dir: &Path) -> Result<Vec<TextManifestEntry>> {
     let path = index_dir.join(MANIFEST_FILE_NAME);
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read {}", path.display()))?;
     parse_text_manifest(&text).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-pub fn validate_text_manifest(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+fn validate_text_manifest(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+    if !kb_dir.is_dir() {
+        bail!("KB directory does not exist: {}", kb_dir.display());
+    }
     let expected = load_text_manifest(index_dir)?;
     let files = collect_markdown_files(kb_dir);
     if files.len() != expected.len() {
@@ -215,6 +222,11 @@ pub fn search_text_index(
         .into_iter()
         .filter_map(|node| score_text_node(node, &scoring_terms, &phrase_tokens))
         .collect();
+    for result in &mut results {
+        let command = text_content_command(&result.path, &result.node_id, kb_dir, index_dir);
+        result.content_command = command.clone();
+        result.next_content_command = command;
+    }
     results.sort_by(|left, right| {
         right
             .score
@@ -254,10 +266,6 @@ fn score_text_node(
         .next()
         .unwrap_or(&node.heading_path)
         .to_string();
-    let command = format!(
-        "claude-memory kb-page-index content {} {}",
-        node.path, locator
-    );
     Some(KbSearchResult {
         doc_id: node.path.clone(),
         path: node.path,
@@ -267,9 +275,23 @@ fn score_text_node(
         node_id: locator,
         title,
         reason: format!("matched deterministic text index; score {score}"),
-        content_command: command.clone(),
-        next_content_command: command,
+        content_command: String::new(),
+        next_content_command: String::new(),
     })
+}
+
+fn text_content_command(path: &str, locator: &str, kb_dir: &Path, index_dir: &Path) -> String {
+    format!(
+        "claude-memory kb-page-index content {} {} --kb {} --index {}",
+        shell_quote(path),
+        shell_quote(locator),
+        shell_quote(&kb_dir.to_string_lossy()),
+        shell_quote(&index_dir.to_string_lossy())
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn text_index_tokens(text: &str) -> Vec<String> {
@@ -493,7 +515,7 @@ fn unescape_tsv(value: &str) -> Result<String> {
 }
 
 pub fn search_default_kb(query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
-    search_or_build(
+    search_kb(
         Path::new(DEFAULT_KB_DIR),
         &default_index_dir(),
         query,
@@ -502,7 +524,7 @@ pub fn search_default_kb(query: &str, limit: usize) -> Result<Vec<KbSearchResult
 }
 
 pub fn search_default_kb_context(query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
-    search_or_build_context(
+    search_kb_context(
         Path::new(DEFAULT_KB_DIR),
         &default_index_dir(),
         query,
@@ -510,162 +532,81 @@ pub fn search_default_kb_context(query: &str, limit: usize) -> Result<Vec<KbSear
     )
 }
 
-pub fn search_or_build(
+pub fn search_kb(
     kb_dir: &Path,
     index_dir: &Path,
     query: &str,
     limit: usize,
 ) -> Result<Vec<KbSearchResult>> {
-    ensure_fresh_index(kb_dir, index_dir)?;
-    search_index(index_dir, query, limit)
+    search_text_index(kb_dir, index_dir, query, limit)
 }
 
-pub fn search_or_build_context(
+pub fn search_kb_context(
     kb_dir: &Path,
     index_dir: &Path,
     query: &str,
     limit: usize,
 ) -> Result<Vec<KbSearchResult>> {
-    ensure_fresh_index(kb_dir, index_dir)?;
-    search_index(index_dir, query, limit)?
+    search_text_index(kb_dir, index_dir, query, limit)?
         .into_iter()
         .map(|mut result| {
-            let content = document_content(index_dir, Path::new(&result.doc_id), &result.node_id)?;
+            let content = text_document_content(
+                kb_dir,
+                index_dir,
+                Path::new(&result.doc_id),
+                &result.node_id,
+            )?;
             result.text = content.text;
             Ok(result)
         })
         .collect()
 }
 
-pub fn search_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let query_tokens = tokenize(query);
-    if query_tokens.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let index = load_index(index_dir)?;
-    let mut results = Vec::new();
-    for doc in &index.docs {
-        for node in flatten_nodes(&doc.nodes) {
-            if let Some(result) = score_node(doc, node, query, &query_tokens) {
-                results.push(result);
-            }
-        }
-    }
-
-    results.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then_with(|| left.path.cmp(&right.path))
-            .then_with(|| left.heading.cmp(&right.heading))
-    });
-    results.truncate(limit);
-    Ok(results)
-}
-
-pub fn document_metadata(
-    index_dir: &Path,
-    doc_selector: impl AsRef<Path>,
-) -> Result<KbDocMetadata> {
-    let index = load_index(index_dir)?;
-    let doc = find_doc(&index, doc_selector.as_ref())?;
-    Ok(doc.metadata())
-}
-
-pub fn document_structure(
-    index_dir: &Path,
-    doc_selector: impl AsRef<Path>,
-) -> Result<KbDocStructure> {
-    let index = load_index(index_dir)?;
-    let doc = find_doc(&index, doc_selector.as_ref())?;
-    Ok(doc.structure_without_text())
-}
-
-pub fn document_content(
+pub fn text_document_content(
+    kb_dir: &Path,
     index_dir: &Path,
     doc_selector: impl AsRef<Path>,
     locator: &str,
 ) -> Result<KbDocContent> {
-    let index = load_index(index_dir)?;
-    let doc = find_doc(&index, doc_selector.as_ref())?;
-    let text = content_for_locator(doc, locator)?;
+    validate_text_manifest(kb_dir, index_dir)?;
+    let source_path = resolve_text_document_path(kb_dir, index_dir, doc_selector.as_ref())?;
+    let (start, end) = parse_line_range(locator)
+        .with_context(|| format!("locator must be an inclusive line range like 4-8: {locator}"))?;
+    let text = std::fs::read_to_string(kb_dir.join(&source_path))
+        .with_context(|| format!("failed to read {}", kb_dir.join(&source_path).display()))?;
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    if start > lines.len() || end > lines.len() {
+        bail!(
+            "line range {start}-{end} exceeds document length: {} has {} lines",
+            source_path,
+            lines.len()
+        );
+    }
     Ok(KbDocContent {
-        doc_id: doc.doc_id.clone(),
-        source_path: doc.source_path.clone(),
+        doc_id: source_path.clone(),
+        source_path,
         locator: locator.to_string(),
-        text,
+        text: lines[start - 1..end].concat(),
     })
 }
 
-pub fn query_index(index_dir: &Path, query: &str, limit: usize) -> Result<Vec<KbSearchResult>> {
-    search_index(index_dir, query, limit)
-}
-
-pub fn load_document(
-    kb_dir: &Path,
-    index_dir: &Path,
-    doc_selector: impl AsRef<Path>,
-) -> Result<KbIndexedDoc> {
-    ensure_fresh_index(kb_dir, index_dir)?;
-    let index = load_index(index_dir)?;
-    Ok(find_doc(&index, doc_selector.as_ref())?.clone())
-}
-
-pub fn load_content(
-    kb_dir: &Path,
-    index_dir: &Path,
-    doc_selector: impl AsRef<Path>,
-    locator: &str,
-) -> Result<String> {
-    ensure_fresh_index(kb_dir, index_dir)?;
-    Ok(document_content(index_dir, doc_selector, locator)?.text)
-}
-
-fn ensure_fresh_index(kb_dir: &Path, index_dir: &Path) -> Result<()> {
-    if !index_path(index_dir).exists() {
-        build_index(kb_dir, index_dir)?;
-        return Ok(());
-    }
-
-    let index = load_index(index_dir)?;
-    if index.source_dir != kb_dir.to_string_lossy() || index_is_stale(kb_dir, &index)? {
-        build_index(kb_dir, index_dir)?;
-    }
-    Ok(())
-}
-
-fn load_index(index_dir: &Path) -> Result<KbPageIndex> {
-    let path = index_path(index_dir);
-    let raw = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
-}
-
-fn find_doc<'a>(index: &'a KbPageIndex, selector: &Path) -> Result<&'a KbIndexedDoc> {
-    let normalized = normalize_doc_selector(&index.source_dir, selector);
+fn resolve_text_document_path(kb_dir: &Path, index_dir: &Path, selector: &Path) -> Result<String> {
+    let normalized = selector
+        .strip_prefix(kb_dir)
+        .unwrap_or(selector)
+        .to_string_lossy()
+        .to_string();
     let with_extension = ensure_markdown_extension(&normalized);
-    index
-        .docs
-        .iter()
-        .find(|doc| doc.doc_id == normalized || doc.source_path == normalized)
-        .or_else(|| {
-            index
-                .docs
-                .iter()
-                .find(|doc| doc.doc_id == with_extension || doc.source_path == with_extension)
+    load_text_manifest(index_dir)?
+        .into_iter()
+        .find(|entry| entry.path == normalized || entry.path == with_extension)
+        .map(|entry| entry.path)
+        .with_context(|| {
+            format!(
+                "document not found in KB text index: {}",
+                selector.display()
+            )
         })
-        .with_context(|| format!("document not found in KB PageIndex: {}", selector.display()))
-}
-
-fn normalize_doc_selector(source_dir: &str, selector: &Path) -> String {
-    let source_root = Path::new(source_dir);
-    let path = selector.strip_prefix(source_root).unwrap_or(selector);
-    path.to_string_lossy().to_string()
 }
 
 fn ensure_markdown_extension(selector: &str) -> String {
@@ -676,33 +617,6 @@ fn ensure_markdown_extension(selector: &str) -> String {
     }
 }
 
-fn content_for_locator(doc: &KbIndexedDoc, locator: &str) -> Result<String> {
-    if let Some(node) = find_node(&doc.nodes, locator) {
-        return Ok(format_content_text(&node.text));
-    }
-
-    if let Some((start, end)) = parse_line_range(locator) {
-        return content_for_line_range(doc, start, end);
-    }
-
-    bail!(
-        "locator must be a node id or inclusive line range like 4-8: {}",
-        locator
-    )
-}
-
-fn find_node<'a>(nodes: &'a [KbIndexedNode], node_id: &str) -> Option<&'a KbIndexedNode> {
-    for node in nodes {
-        if node.node_id == node_id {
-            return Some(node);
-        }
-        if let Some(child) = find_node(&node.nodes, node_id) {
-            return Some(child);
-        }
-    }
-    None
-}
-
 fn parse_line_range(locator: &str) -> Option<(usize, usize)> {
     let (start, end) = locator.split_once('-')?;
     let start = start.parse().ok()?;
@@ -711,75 +625,6 @@ fn parse_line_range(locator: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((start, end))
-}
-
-fn content_for_line_range(doc: &KbIndexedDoc, start: usize, end: usize) -> Result<String> {
-    let lines = doc.text.lines().collect::<Vec<_>>();
-    if start > lines.len() {
-        bail!(
-            "line range starts after end of document: {} has {} lines",
-            doc.doc_id,
-            lines.len()
-        );
-    }
-
-    let end = end.min(lines.len());
-    let selected = lines[start - 1..end].join("\n");
-    Ok(format_content_text(&selected))
-}
-
-fn format_content_text(text: &str) -> String {
-    if text.ends_with('\n') {
-        text.to_string()
-    } else {
-        format!("{text}\n")
-    }
-}
-
-fn index_is_stale(kb_dir: &Path, index: &KbPageIndex) -> Result<bool> {
-    let current_files = collect_markdown_files(kb_dir)
-        .iter()
-        .map(|path| build_file_fingerprint(kb_dir, path))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(current_files.len() != index.files.len()
-        || current_files
-            .iter()
-            .zip(index.files.iter())
-            .any(|(left, right)| left.path != right.path || left.fingerprint != right.fingerprint))
-}
-
-fn index_path(index_dir: &Path) -> PathBuf {
-    index_dir.join(INDEX_FILE_NAME)
-}
-
-fn build_doc(kb_dir: &Path, path: &Path) -> Result<KbIndexedDoc> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let rel_path = relative_path(kb_dir, path);
-    let sections = split_markdown_sections(&rel_path, &text);
-    let doc_description = sections.first().map(|section| section.title.clone());
-    let nodes = build_nested_nodes(&sections, None);
-
-    Ok(KbIndexedDoc {
-        doc_id: rel_path.clone(),
-        doc_name: fallback_heading(&rel_path),
-        doc_description,
-        source_path: rel_path,
-        line_count: text.lines().count(),
-        text,
-        nodes,
-    })
-}
-
-fn build_file_fingerprint(kb_dir: &Path, path: &Path) -> Result<KbIndexedFile> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(KbIndexedFile {
-        path: relative_path(kb_dir, path),
-        fingerprint: format!("{:x}", hasher.finalize()),
-    })
 }
 
 fn collect_markdown_files(kb_dir: &Path) -> Vec<PathBuf> {
@@ -797,201 +642,11 @@ fn collect_markdown_files(kb_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn build_nested_nodes(sections: &[MarkdownSection], parent: Option<&str>) -> Vec<KbIndexedNode> {
-    sections
-        .iter()
-        .filter(|section| section.parent.as_deref() == parent)
-        .map(|section| KbIndexedNode {
-            node_id: section.node_id.clone(),
-            title: section.title.clone(),
-            heading_path: section.heading_path.clone(),
-            level: section.level,
-            source_line: section.source_line,
-            token_counts: token_counts(&section.text),
-            text: section.text.clone(),
-            nodes: build_nested_nodes(sections, Some(&section.node_id)),
-        })
-        .collect()
-}
-
-fn flatten_nodes(nodes: &[KbIndexedNode]) -> Vec<&KbIndexedNode> {
-    let mut flattened = Vec::new();
-    for node in nodes {
-        flattened.push(node);
-        flattened.extend(flatten_nodes(&node.nodes));
-    }
-    flattened
-}
-
-fn count_nodes(nodes: &[KbIndexedNode]) -> usize {
-    nodes.len()
-        + nodes
-            .iter()
-            .map(|node| count_nodes(&node.nodes))
-            .sum::<usize>()
-}
-
-struct NodeMatchStats {
-    matched: usize,
-    occurrences: usize,
-    structural_matches: usize,
-    terms: Vec<String>,
-}
-
-fn score_node(
-    doc: &KbIndexedDoc,
-    node: &KbIndexedNode,
-    query: &str,
-    query_tokens: &[String],
-) -> Option<KbSearchResult> {
-    let structural_text = node_structural_text(doc, node);
-    let stats = node_match_stats(node, query_tokens, &structural_text);
-    if stats.matched < required_match_count(query_tokens.len()) {
-        return None;
-    }
-
-    let combined_text = format!("{structural_text}\n{}", node.text);
-    let phrase_score = phrase_score(&combined_text, query, query_tokens);
-    if is_link_dump_node(node) && phrase_score == 0 {
-        return None;
-    }
-
-    let score = score_node_match(&stats, phrase_score);
-    if score < MIN_SCORE {
-        return None;
-    }
-
-    Some(search_result_for_node(
-        doc,
-        node,
-        query_tokens,
-        score,
-        stats,
-    ))
-}
-
-fn node_structural_text(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
-    format!(
-        "{}\n{}\n{}",
-        doc.source_path, doc.doc_name, node.heading_path
-    )
-}
-
-fn score_node_match(stats: &NodeMatchStats, phrase_score: usize) -> usize {
-    let base_score = stats.matched * 10 + stats.occurrences + stats.structural_matches * 4;
-    base_score + phrase_score
-}
-
-fn is_link_dump_node(node: &KbIndexedNode) -> bool {
-    let mut non_empty_lines = 0usize;
-    let mut markdown_link_lines = 0usize;
-
-    for line in node.text.lines().map(str::trim) {
-        if line.is_empty() {
-            continue;
-        }
-
-        non_empty_lines += 1;
-        if line.starts_with("- [") && line.contains("](") {
-            markdown_link_lines += 1;
-        }
-    }
-
-    markdown_link_lines >= 10 && markdown_link_lines * 2 >= non_empty_lines
-}
-
-fn search_result_for_node(
-    doc: &KbIndexedDoc,
-    node: &KbIndexedNode,
-    query_tokens: &[String],
-    score: usize,
-    stats: NodeMatchStats,
-) -> KbSearchResult {
-    KbSearchResult {
-        doc_id: doc.doc_id.clone(),
-        path: doc.source_path.clone(),
-        heading: node.heading_path.clone(),
-        text: build_snippet(&node.text, query_tokens),
-        score,
-        node_id: node.node_id.clone(),
-        title: node.title.clone(),
-        reason: format!("matched query terms: {}", stats.terms.join(", ")),
-        content_command: content_command(doc, node),
-        next_content_command: content_command(doc, node),
-    }
-}
-
-fn content_command(doc: &KbIndexedDoc, node: &KbIndexedNode) -> String {
-    format!(
-        "claude-memory kb-page-index content {} {}",
-        doc.doc_id, node.node_id
-    )
-}
-
-fn node_match_stats(
-    node: &KbIndexedNode,
-    query_tokens: &[String],
-    structural_text: &str,
-) -> NodeMatchStats {
-    let structural_counts = token_counts(structural_text);
-    let mut matched_tokens = Vec::new();
-    let mut occurrences = 0usize;
-    let mut structural_matches = 0usize;
-
-    for token in query_tokens {
-        let body_count = node.token_counts.get(token).copied().unwrap_or(0);
-        let structural_count = structural_counts.get(token).copied().unwrap_or(0);
-        if body_count + structural_count > 0 {
-            matched_tokens.push(token.as_str());
-            occurrences += (body_count + structural_count).min(4);
-        }
-        if structural_count > 0 {
-            structural_matches += 1;
-        }
-    }
-
-    matched_tokens.sort_unstable();
-    matched_tokens.dedup();
-    let terms = matched_tokens
-        .iter()
-        .map(|token| (*token).to_string())
-        .collect();
-    NodeMatchStats {
-        matched: matched_tokens.len(),
-        occurrences,
-        structural_matches,
-        terms,
-    }
-}
-
-fn phrase_score(text: &str, query: &str, query_tokens: &[String]) -> usize {
-    let lower = text.to_lowercase();
-    let mut score = 0usize;
-    if lower.contains(&query.to_lowercase()) {
-        score += 25;
-    }
-    for pair in query_tokens.windows(2) {
-        let phrase = format!("{} {}", pair[0], pair[1]);
-        if lower.contains(&phrase) {
-            score += 6;
-        }
-    }
-    score
-}
-
 fn relative_path(base: &Path, path: &Path) -> String {
     path.strip_prefix(base)
         .unwrap_or(path)
         .to_string_lossy()
         .to_string()
-}
-
-fn required_match_count(query_token_count: usize) -> usize {
-    match query_token_count {
-        0 | 1 => 1,
-        2 | 3 => 2,
-        _ => 3,
-    }
 }
 
 #[cfg(test)]

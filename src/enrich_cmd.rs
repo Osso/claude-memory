@@ -179,6 +179,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fresh_text_index_result_formats_for_enrich_with_explicit_content_roots() {
+        let root = std::env::temp_dir().join(format!("enrich-kb-{}", uuid::Uuid::new_v4()));
+        let kb_dir = root.join("knowledge base");
+        let index_dir = root.join("text index");
+        std::fs::create_dir_all(&kb_dir).unwrap();
+        std::fs::write(
+            kb_dir.join("rules.md"),
+            "# Rules\n\n## Frontend\nLoad frontend design skill immediately.\n",
+        )
+        .unwrap();
+        kb_search::build_text_index(&kb_dir, &index_dir).unwrap();
+
+        let results = kb_search::search_kb_context(
+            &kb_dir,
+            &index_dir,
+            "frontend design skill immediately",
+            MAX_KB_RESULTS,
+        )
+        .unwrap();
+        let formatted = format_kb_results(&results);
+
+        assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
+        assert!(formatted.contains("rules.md > Rules > Frontend"));
+        assert!(formatted.contains(&format!("--kb '{}'", kb_dir.display())));
+        assert!(formatted.contains(&format!("--index '{}'", index_dir.display())));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn kb_results_include_source_path_and_heading() {
         let results = vec![kb_search::KbSearchResult {
             doc_id: "memory/corrections.md".to_string(),

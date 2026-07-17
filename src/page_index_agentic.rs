@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::{kb_search, llm, page_index};
+use crate::{llm, page_index};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum RetrievalMode {
@@ -69,22 +69,8 @@ pub trait TreeWalkPlanner {
     fn plan_content(&self, context: &TreeWalkContext) -> Result<Vec<ContentRequest>>;
 }
 
-pub struct KbTreeWalkCorpus {
-    kb_dir: PathBuf,
-    index_dir: PathBuf,
-}
-
 pub struct TranscriptTreeWalkCorpus {
     index_dir: PathBuf,
-}
-
-impl KbTreeWalkCorpus {
-    pub fn new(kb_dir: impl AsRef<Path>, index_dir: impl AsRef<Path>) -> Self {
-        Self {
-            kb_dir: kb_dir.as_ref().to_path_buf(),
-            index_dir: index_dir.as_ref().to_path_buf(),
-        }
-    }
 }
 
 impl TranscriptTreeWalkCorpus {
@@ -92,32 +78,6 @@ impl TranscriptTreeWalkCorpus {
         Self {
             index_dir: index_dir.as_ref().to_path_buf(),
         }
-    }
-}
-
-impl TreeWalkCorpus for KbTreeWalkCorpus {
-    fn search_candidates(&self, query: &str, limit: usize) -> Result<Vec<TreeWalkCandidate>> {
-        let results = kb_search::search_or_build(&self.kb_dir, &self.index_dir, query, limit)?;
-        let candidates = results.into_iter().map(kb_candidate).collect();
-        Ok(candidates)
-    }
-
-    fn metadata(&self, doc_id: &str) -> Result<Value> {
-        let metadata = kb_search::document_metadata(&self.index_dir, doc_id)?;
-        serde_json::to_value(metadata).context("failed to serialize KB metadata")
-    }
-
-    fn structure(&self, doc_id: &str) -> Result<Value> {
-        let structure = kb_search::document_structure(&self.index_dir, doc_id)?;
-        serde_json::to_value(structure).context("failed to serialize KB structure")
-    }
-
-    fn content(&self, doc_id: &str, locator: &str) -> Result<String> {
-        Ok(kb_search::document_content(&self.index_dir, doc_id, locator)?.text)
-    }
-
-    fn content_command(&self, doc_id: &str, locator: &str) -> String {
-        format!("claude-memory kb-page-index content {doc_id} {locator}")
     }
 }
 
@@ -156,16 +116,6 @@ impl TreeWalkCorpus for TranscriptTreeWalkCorpus {
     fn content_command(&self, doc_id: &str, locator: &str) -> String {
         format!("claude-memory transcript-page-index content {doc_id} {locator}")
     }
-}
-
-fn kb_candidate(result: kb_search::KbSearchResult) -> TreeWalkCandidate {
-    tree_walk_candidate(
-        result.doc_id,
-        result.node_id,
-        result.title,
-        result.score,
-        result.reason,
-    )
 }
 
 fn tree_walk_candidate(

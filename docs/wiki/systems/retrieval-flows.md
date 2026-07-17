@@ -19,8 +19,9 @@ Enrichment reads only:
 1. unified raw prompt/answer history chunks from `claude-session-history`;
 2. deterministic KB PageIndex context.
 
-The output labels the two sources separately. KB PageIndex remains the exact
-Markdown retrieval path. Transcript PageIndex is CLI-only navigation and is not
+The output labels the two sources separately. KB PageIndex uses the existing
+fresh TSV text index; missing or stale indexes cause enrichment to omit KB output
+until an explicit build. Transcript PageIndex is CLI-only navigation and is not
 injected by default.
 
 ### PageIndex

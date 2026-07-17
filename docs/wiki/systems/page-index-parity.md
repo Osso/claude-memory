@@ -7,21 +7,24 @@ history.
 
 ## Document Model
 
-KB PageIndex and Transcript PageIndex use the same nested document shape:
+KB PageIndex and Transcript PageIndex now have different user-facing surfaces:
 
-- document metadata identifies the source, family, title, description, and size
-- structure output returns node ids, titles, summaries, locators, and children
-  without full text
-- content output fetches exact text by node id or source range
-- query output returns traceable document/node references plus a follow-up
-  content command
+- KB build writes only `nodes.tsv` and `manifest.tsv`
+- KB query reads those files and rejects stale indexes without rebuilding
+- KB content requires the source KB and an exact inclusive line range
+- Transcript PageIndex retains document metadata, structure, exact content fetch,
+  and traceable query references
 
 The persistent KB model lives in `src/kb_search.rs`. The transcript model lives
 in `src/page_index.rs`.
 
 ## Retrieval Flow
 
-The intended retrieval loop mirrors PageIndex:
+KB retrieval is deterministic text search over the persisted TSV index. Its
+`document`, `structure`, and agentic query commands are retired. Rebuild the KB
+index explicitly after source changes, then query or fetch exact source lines.
+
+Transcript PageIndex retains the intended PageIndex retrieval loop:
 
 1. Search for candidate documents or nodes.
 2. Inspect document metadata.
@@ -29,8 +32,9 @@ The intended retrieval loop mirrors PageIndex:
 4. Fetch tight node or range content.
 5. Answer from fetched content with auditable references.
 
-`src/page_index_agentic.rs` contains the shared tree-walk abstraction. Lexical
-query mode remains available as a deterministic fallback and debugging path.
+`src/page_index_agentic.rs` contains the unchanged Transcript PageIndex
+tree-walk abstraction. Lexical query mode remains available there as a
+deterministic fallback and debugging path.
 
 ## Surfaces
 
@@ -40,8 +44,8 @@ through `claude-memory transcript-page-index` and remains CLI-only.
 
 The two surfaces intentionally stay separate:
 
-- KB PageIndex is a structured KB retrieval surface.
-- Transcript PageIndex is a source-inspection surface for Claude/Codex sessions.
+- KB PageIndex is a deterministic TSV text-retrieval surface; query follow-ups use exact source line ranges and explicit `--kb`/`--index` paths.
+- Transcript PageIndex is a source-inspection surface for Claude/Codex sessions and retains its document/structure/content flow.
 - No active runtime path writes durable transcript-derived memory units;
   legacy records are compatibility-only.
 

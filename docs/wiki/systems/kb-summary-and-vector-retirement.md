@@ -10,7 +10,8 @@ This slice retires the obsolete KB-to-memory-unit ingestion path and the stale
 - No active summary producer or summary search path is part of retrieval.
 - Transcript PageIndex `PageIndexNode.summary` remains node metadata, not a
   summary-vector path.
-- KB PageIndex remains the structured exact-content KB retrieval path and is the second `enrich` source.
+- KB PageIndex remains the deterministic TSV text retrieval path and is the second `enrich` source when its index is fresh.
+- `enrich` omits KB output when the index is missing or stale until an explicit rebuild.
 - Prompt/answer history remains a separate session-history surface and is the history source used by `enrich`.
 - The transcript analyzer and notable-fact analyzer/writer are also retired;
   `analyze` and `backfill` are not available.

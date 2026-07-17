@@ -22,9 +22,13 @@ claude-memory index
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
 
-# Build/query PageIndex surfaces
+# Build/query KB text index (build writes only nodes.tsv and manifest.tsv)
 claude-memory kb-page-index build --kb /syncthing/Sync/KB
-claude-memory kb-page-index query "query"
+claude-memory kb-page-index query "query" --kb /syncthing/Sync/KB
+# Fetch exact source lines from a fresh index
+claude-memory kb-page-index content path/to/note.md 4-8 --kb /syncthing/Sync/KB
+
+# Build transcript PageIndex (unchanged)
 claude-memory transcript-page-index build
 
 # Enrich a prompt and show collection statistics
@@ -37,6 +41,13 @@ Prompt and answer searches are filtered views over the shared
 `claude-session-history` collection. `enrich` uses those unified prompt/answer
 history results plus KB PageIndex results only. Transcript PageIndex remains a
 separate CLI navigation surface and is not injected by default.
+
+KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` reads those
+files and rejects a stale index without rebuilding; run `build` explicitly after
+source changes. KB `content` requires the KB source and an inclusive line range.
+Query results include a follow-up `content` command with explicit `--kb` and
+`--index` paths. The KB `document`, `structure`, and agentic query commands are
+retired. Transcript PageIndex behavior is unchanged.
 
 The former memory-unit and graph runtime paths are retired. The
 `deduplicate`, `build-graph`, `graph-clean`, and `graph-dump` commands are no

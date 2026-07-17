@@ -258,7 +258,6 @@ fn kb_page_index_accepts_query_paths_and_limit() {
                 limit,
                 kb,
                 index,
-                mode,
             },
     } = cli.command
     else {
@@ -268,51 +267,18 @@ fn kb_page_index_accepts_query_paths_and_limit() {
     assert_eq!(limit, 2);
     assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
     assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
-    assert_eq!(mode, page_index_agentic::RetrievalMode::Lexical);
 }
 
 #[test]
-fn kb_page_index_accepts_document_structure_and_content_commands() {
-    let document = Cli::parse_from([
-        "claude-memory",
-        "kb-page-index",
-        "document",
-        "guides/router.md",
-        "--index",
-        "/tmp/kb-index",
-    ]);
-    let Command::KbPageIndex {
-        command: KbPageIndexCommand::Document { doc, index },
-    } = document.command
-    else {
-        panic!("expected kb-page-index document command");
-    };
-    assert_eq!(doc, "guides/router.md");
-    assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
-
-    let structure = Cli::parse_from([
-        "claude-memory",
-        "kb-page-index",
-        "structure",
-        "guides/router.md",
-        "--index",
-        "/tmp/kb-index",
-    ]);
-    let Command::KbPageIndex {
-        command: KbPageIndexCommand::Structure { doc, index },
-    } = structure.command
-    else {
-        panic!("expected kb-page-index structure command");
-    };
-    assert_eq!(doc, "guides/router.md");
-    assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
-
+fn kb_page_index_accepts_content_command() {
     let content = Cli::parse_from([
         "claude-memory",
         "kb-page-index",
         "content",
         "guides/router.md",
-        "000002",
+        "4-8",
+        "--kb",
+        "/tmp/kb",
         "--index",
         "/tmp/kb-index",
     ]);
@@ -321,6 +287,7 @@ fn kb_page_index_accepts_document_structure_and_content_commands() {
             KbPageIndexCommand::Content {
                 doc,
                 locator,
+                kb,
                 index,
             },
     } = content.command
@@ -328,6 +295,7 @@ fn kb_page_index_accepts_document_structure_and_content_commands() {
         panic!("expected kb-page-index content command");
     };
     assert_eq!(doc, "guides/router.md");
-    assert_eq!(locator, "000002");
+    assert_eq!(locator, "4-8");
+    assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
     assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
 }

@@ -1,4 +1,4 @@
-PageIndex parity defines the contract for matching the useful architecture of `VectifyAI/PageIndex` reference commit `f50e529` inside `claude-memory`. The target is not a line-for-line port; it is a Rust-native PageIndex surface for local KB Markdown and Claude/Codex transcript history with the same core retrieval model: document metadata, structure without full text, exact content fetch, and optional agentic tree-walk retrieval. Implementation details belong in [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md).
+PageIndex parity defines the contract for matching the useful architecture of `VectifyAI/PageIndex` reference commit `f50e529` inside `claude-memory`. The target is not a line-for-line port; it is a Rust-native PageIndex surface for local KB Markdown and Claude/Codex transcript history. KB uses a deterministic text index; Transcript PageIndex retains the nested document model and optional agentic tree-walk retrieval. Implementation details belong in [docs/wiki/systems/page-index-parity.md](../wiki/systems/page-index-parity.md).
 
 Decision: PDF parsing and OCR support stay out of scope until there is a
 concrete need for document formats beyond Markdown KB notes and transcript
@@ -15,13 +15,14 @@ Transcript PageIndex for Claude/Codex sessions.
 
 Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
-- [x] Match the reference architectural flow: index a document, inspect metadata, inspect structure without full text, fetch tight content ranges, answer with traceable references.
-- [x] Keep the reference distinction between document structure and document content: structure output must not require dumping full node text.
-- [x] Use stable node identifiers that are suitable for follow-up content fetches.
+- [x] Preserve the reference architectural flow for Transcript PageIndex: inspect metadata and structure, fetch tight content ranges, and answer with traceable references.
+- [x] Keep the reference distinction between transcript structure and transcript content: structure output must not require dumping full turn text.
+- [x] Keep stable transcript node identifiers suitable for follow-up content fetches.
+- [x] Keep KB retrieval outside that JSON/nested-document CLI contract: KB uses deterministic TSV text search and exact source line ranges.
 
 ### Supported source families
 
-- [x] Support KB Markdown documents from `/syncthing/Sync/KB` as PageIndex documents.
+- [x] Support KB Markdown from `/syncthing/Sync/KB` through the deterministic TSV text index.
 - [x] Support live Claude transcripts from `~/.claude/projects` as PageIndex documents.
 - [x] Support archived Claude transcripts from `~/.claude/archive` as PageIndex documents.
 - [x] Support live Codex transcripts from `~/.codex/sessions` as PageIndex documents.
@@ -30,19 +31,18 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ### Document model
 
-- [x] Store document metadata: `doc_id`, source path, source family, document name/title, document description when available, and line/turn count.
-- [x] Store nested `nodes` with stable zero-padded `node_id`, title, source locator, optional summary, optional children, and internal text/content references.
-- [x] Preserve exact content internally so later fetch commands can return source text without re-reading the original file when the index is fresh.
-- [x] Provide structure serialization without node text for low-token inspection.
-- [x] Provide content serialization for specific node ids, line ranges, or turn ranges.
+- [x] Store transcript document metadata and nested nodes with stable locators.
+- [x] Store KB heading-aware nodes in `nodes.tsv` and source freshness metadata in `manifest.tsv`.
+- [x] Provide exact KB content retrieval from the source Markdown file by an inclusive line range.
+- [x] Preserve the transcript distinction between structure without full text and exact content fetch.
 
 ### KB Markdown behavior
 
-- [x] Build nested KB nodes from Markdown heading hierarchy.
-- [ ] Ignore Markdown headings inside fenced code blocks.
+- [x] Build heading-aware KB nodes from Markdown into `nodes.tsv`.
+- [x] Ignore Markdown headings inside fenced code blocks.
 - [x] Preserve heading source line numbers.
-- [x] Preserve section text for exact content fetch.
-- [x] Refresh or rebuild the persistent KB PageIndex when Markdown files are added, changed, or deleted.
+- [x] Record source freshness in `manifest.tsv`.
+- [x] Reject query/content when Markdown files are added, changed, deleted, or otherwise make the manifest stale; rebuild is explicit.
 
 ### Transcript behavior
 
@@ -55,28 +55,29 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ### CLI and retrieval surfaces
 
-- [x] `claude-memory kb-page-index build` builds the KB PageIndex.
-- [x] `claude-memory kb-page-index document <doc-id-or-path>` prints document metadata.
-- [x] `claude-memory kb-page-index structure <doc-id-or-path>` prints nested structure without node text.
-- [x] `claude-memory kb-page-index content <doc-id-or-path> <node-id-or-range>` prints exact KB source text.
-- [x] `claude-memory kb-page-index query <query>` returns traceable KB references and uses structure/content retrieval rather than flat snippet-only search.
+- [x] `claude-memory kb-page-index build` writes only `nodes.tsv` and `manifest.tsv`.
+- [x] `claude-memory kb-page-index query <query>` reads the persisted TSV index and rejects stale data without rebuilding.
+- [x] `claude-memory kb-page-index content <doc-path> <start-end> --kb <dir> --index <dir>` requires the KB source and returns the exact inclusive line range.
+- [x] KB query results include a custom follow-up content command with the selected `--kb` and `--index` paths.
+- [x] Retire the KB `document`, `structure`, and agentic query commands.
 - [x] `claude-memory transcript-page-index build` builds the transcript PageIndex.
 - [x] `claude-memory transcript-page-index document <doc-id-or-path>` prints transcript metadata.
 - [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
 - [x] `claude-memory transcript-page-index content <doc-id-or-path> <node-id-or-range>` prints exact turn text.
 - [x] `claude-memory transcript-page-index query <query>` returns traceable transcript references and a follow-up content command.
 
-### Agentic tree-walk retrieval
+### Transcript agentic tree-walk retrieval
 
-- [x] Provide a query mode that mirrors the reference tool loop: inspect document metadata, inspect structure, choose tight node/range targets, fetch content, answer from fetched content only.
+- [x] Keep the transcript query mode that mirrors the reference tool loop: inspect metadata and structure, choose tight targets, fetch content, and answer from fetched content only.
 - [x] Use the project `llm` backend abstraction for any model calls; do not add direct external API calls.
-- [x] Include the retrieval path in query output or logs so the selected document, node ids, and fetched ranges are auditable.
-- [x] Keep deterministic lexical search available as a debug/fallback mode and label it clearly when used.
-- [x] Treat Transcript PageIndex query as usable with deterministic traceable results first; agentic retrieval is optional parity behavior, not a prerequisite for transcript CLI usability.
+- [x] Include the retrieval path in transcript query output or logs so selected documents, node ids, and fetched ranges are auditable.
+- [x] Keep deterministic lexical search available for Transcript PageIndex and label it clearly when used.
+- [x] Keep KB query deterministic; KB agentic mode is retired.
 
 ### Enrich integration
 
 - [x] `claude-memory enrich` may include KB PageIndex output alongside unified prompt/answer history when it fits hook latency and output budgets.
+- [x] `claude-memory enrich` omits KB output when the text index is missing or stale until an explicit rebuild.
 - [x] `claude-memory enrich` must label KB PageIndex context as `KB PageIndex`.
 - [x] `claude-memory enrich` must not inject Transcript PageIndex results by default.
 
@@ -90,16 +91,17 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ## How it works
 
-- `src/kb_search.rs`, `src/page_index.rs`, and `src/page_index_agentic.rs` implement the Rust document model, persistent index layout, CLI/tool loop, and retrieval modes.
+- `src/kb_search.rs` implements the KB TSV text index and exact source line-range retrieval.
+- `src/page_index.rs` and `src/page_index_agentic.rs` implement the unchanged Transcript PageIndex document model and retrieval modes.
 - [kb-page-index.md](kb-page-index.md) describes the current KB PageIndex implementation.
 - [friction-memory-creation.md](friction-memory-creation.md) records the retired transcript-mining boundary.
 
 ## Implementation inventory
 
-- `src/kb_search.rs` — KB PageIndex builder/search path with nested document structure and content fetch.
+- `src/kb_search.rs` — KB TSV text-index builder/search path with exact source line-range content fetch.
 - `src/page_index.rs` — transcript outline builder for Claude/Codex sessions using the nested PageIndex document model.
-- `src/page_index_agentic.rs` — shared agentic/tree-walk retrieval mode and lexical fallback.
-- `src/indexing_cmds.rs` — CLI command handlers for PageIndex build/query/document/structure/content commands.
+- `src/page_index_agentic.rs` — Transcript PageIndex agentic/tree-walk retrieval mode and lexical fallback.
+- `src/indexing_cmds.rs` — CLI command handlers for KB build/query/content and Transcript PageIndex commands.
 - `src/enrich_cmd.rs` — prompt hook integration for KB PageIndex context.
 - `src/main.rs` — CLI declaration and dispatch for KB PageIndex and Transcript PageIndex commands.
 - `src/main_tests.rs` — CLI parsing tests for PageIndex commands.
@@ -108,12 +110,18 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ## Tests asserting this spec
 
 - Current tests assert the checked behavior above:
+  - `tests/kb_page_index_cli.rs`
+    - `explicit_build_writes_only_text_index_files`
+    - `query_reads_explicit_text_index`
+    - `stale_query_fails_without_rebuilding`
+    - `content_fetch_reads_exact_markdown_line_range`
+    - `content_fetch_preserves_exact_line_endings`
+    - `json_only_kb_commands_are_retired`
   - `src/kb_search.rs`
-    - `build_and_search_persisted_kb_index`
-    - `search_or_build_refreshes_stale_index`
-    - `fixture_markdown_proves_nested_structure_content_and_query`
-    - `search_or_build_refreshes_added_and_deleted_markdown_files`
-    - `long_queries_require_three_distinct_terms`
+    - `text_index_files_round_trip_generated_sections`
+    - `stale_text_search_rejects_without_automatic_rebuild`
+    - `text_search_weights_heading_over_path_over_body`
+    - `text_search_rewards_exact_phrase`
   - `src/page_index.rs`
     - `fixture_transcripts_prove_structure_content_query_and_no_memory_units`
     - `session_index_groups_prompt_and_answer_in_one_node`
@@ -126,7 +134,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
     - `transcript_page_index_accepts_document_structure_content_and_query_commands`
     - `kb_page_index_accepts_build_paths`
     - `kb_page_index_accepts_query_paths_and_limit`
-    - `kb_page_index_accepts_document_structure_and_content_commands`
+    - `kb_page_index_accepts_content_command`
   - `src/page_index_agentic.rs`
     - `tree_walk_inspects_metadata_structure_then_fetches_content`
     - `empty_agentic_plan_uses_labeled_lexical_fallback`
@@ -136,7 +144,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Add tests for the shared nested PageIndex document model.
 - [x] Add tests for structure output that omits full node text.
 - [x] Add tests for exact content fetch by node id and range.
-- [x] Add tests for KB new-file, changed-file, and deleted-file refresh.
+- [x] Add tests for KB stale-index rejection when files are added, changed, or deleted.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
 - [x] Add an agentic tree-walk test with a fake LLM/tool transcript before using a live model backend.
@@ -145,6 +153,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ## Out of scope
 
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
+- KB document/structure commands and KB agentic query mode.
 - Cloud PageIndex API/MCP compatibility.
 - Transcript PageIndex MCP tool exposure before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.

@@ -9,9 +9,9 @@ mod kb_page_index_cli;
 mod transcript_page_index_cli;
 use indexing_cmds::{
     run_index_cmd, run_index_file_cmd, run_kb_page_index_build, run_kb_page_index_content,
-    run_kb_page_index_document, run_kb_page_index_query, run_kb_page_index_structure,
-    run_page_index, run_transcript_page_index_content, run_transcript_page_index_document,
-    run_transcript_page_index_query, run_transcript_page_index_structure,
+    run_kb_page_index_query, run_page_index, run_transcript_page_index_content,
+    run_transcript_page_index_document, run_transcript_page_index_query,
+    run_transcript_page_index_structure,
 };
 use kb_page_index_cli::KbPageIndexCommand;
 use transcript_page_index_cli::TranscriptPageIndexCommand;
@@ -201,15 +201,13 @@ async fn run_kb_page_index_command(command: KbPageIndexCommand) -> Result<()> {
             limit,
             kb,
             index,
-            mode,
-        } => run_kb_page_index_query(&query, limit, kb, index, mode).await,
-        KbPageIndexCommand::Document { doc, index } => run_kb_page_index_document(&doc, index),
-        KbPageIndexCommand::Structure { doc, index } => run_kb_page_index_structure(&doc, index),
+        } => run_kb_page_index_query(&query, limit, kb, index),
         KbPageIndexCommand::Content {
             doc,
             locator,
+            kb,
             index,
-        } => run_kb_page_index_content(&doc, &locator, index),
+        } => run_kb_page_index_content(&doc, &locator, kb, index),
     }
 }
 

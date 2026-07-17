@@ -55,7 +55,7 @@ Ten prompts were used for the query benchmark:
 | --- | --- | ---: | ---: | --- |
 | `rg -i` OR-term scan | KB Markdown | 0.07s | 0.007s | Fastest, but output was 129 KiB and noisy because every term match is returned without document structure. |
 | `claude-memory search --type prompts --limit 3` | legacy prompt/vector search | 1.24s | 0.124s | Fast, but results are transcript chunks and often not KB-specific. |
-| `kb-page-index query --mode lexical --limit 3` | KB PageIndex | 5.43s | 0.543s | Returns document id, node id, score/reason, and exact `content` command. Cost is dominated by loading/parsing the JSON index per CLI process. |
+| `kb-page-index query --mode lexical --limit 3` (historical pre-retirement syntax) | KB PageIndex | 5.43s | 0.543s | Historical result: document id, node id, score/reason, and exact `content` command. The KB JSON/agentic surface was later replaced by the TSV text index. |
 | `transcript-page-index query --mode lexical --limit 3` | 424-session bounded transcript index | 1.46s | 0.146s | Faster than KB PageIndex on this smaller index, but lexical transcript quality is noisy on broad prompts. |
 | `claude-memory enrich` (pre-retirement) | memory units + KB PageIndex | 9.17s | 0.917s | Historical measurement only; not the current enrich source composition. |
 
@@ -89,7 +89,7 @@ Transcript PageIndex should stay separate and should not be injected by default.
 The bounded query path is fast enough for CLI exploration, but full-corpus build
 size and runtime are the next bottleneck.
 
-Hook-time KB enrichment is viable at current caps (`MAX_KB_RESULTS = 3`,
-500-character previews), but the JSON index load cost makes repeated CLI
-invocations slower than necessary. A future optimization should cache the parsed
-index for daemon/MCP use or move the index to a more compact read format.
+At benchmark time, hook-time KB enrichment was viable at current caps
+(`MAX_KB_RESULTS = 3`, 500-character previews), but repeated CLI invocations paid
+the legacy JSON index load cost. KB retrieval now uses the generated TSV text
+index; these historical JSON measurements no longer describe current runtime.

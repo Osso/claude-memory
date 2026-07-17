@@ -24,7 +24,7 @@ pub async fn run_index_file_cmd(path: &Path, batch_size: usize) -> Result<()> {
 pub fn run_kb_page_index_build(kb: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
     let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
     let output_dir = output.unwrap_or_else(kb_search::default_index_dir);
-    let summary = kb_search::build_index(&kb_dir, &output_dir)?;
+    let summary = kb_search::build_text_index(&kb_dir, &output_dir)?;
     println!(
         "KB PageIndex: files={} nodes={} output={}",
         summary.files,
@@ -34,23 +34,15 @@ pub fn run_kb_page_index_build(kb: Option<PathBuf>, output: Option<PathBuf>) -> 
     Ok(())
 }
 
-pub async fn run_kb_page_index_query(
+pub fn run_kb_page_index_query(
     query: &str,
     limit: usize,
     kb: Option<PathBuf>,
     index: Option<PathBuf>,
-    mode: page_index_agentic::RetrievalMode,
 ) -> Result<()> {
     let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
     let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
-    if mode == page_index_agentic::RetrievalMode::Agentic {
-        let corpus = page_index_agentic::KbTreeWalkCorpus::new(&kb_dir, &index_dir);
-        let response = page_index_agentic::retrieve_with_llm(query, &corpus, limit).await?;
-        print_tree_walk_response(&response);
-        return Ok(());
-    }
-
-    let results = kb_search::search_or_build(&kb_dir, &index_dir, query, limit)?;
+    let results = kb_search::search_kb(&kb_dir, &index_dir, query, limit)?;
     print_kb_query_results(&results);
     Ok(())
 }
@@ -74,23 +66,15 @@ fn print_kb_query_results(results: &[kb_search::KbSearchResult]) {
     }
 }
 
-pub fn run_kb_page_index_document(doc: &str, index: Option<PathBuf>) -> Result<()> {
+pub fn run_kb_page_index_content(
+    doc: &str,
+    locator: &str,
+    kb: Option<PathBuf>,
+    index: Option<PathBuf>,
+) -> Result<()> {
+    let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
     let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
-    let metadata = kb_search::document_metadata(&index_dir, Path::new(doc))?;
-    println!("{}", serde_json::to_string_pretty(&metadata)?);
-    Ok(())
-}
-
-pub fn run_kb_page_index_structure(doc: &str, index: Option<PathBuf>) -> Result<()> {
-    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
-    let structure = kb_search::document_structure(&index_dir, Path::new(doc))?;
-    println!("{}", serde_json::to_string_pretty(&structure)?);
-    Ok(())
-}
-
-pub fn run_kb_page_index_content(doc: &str, locator: &str, index: Option<PathBuf>) -> Result<()> {
-    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
-    let content = kb_search::document_content(&index_dir, Path::new(doc), locator)?;
+    let content = kb_search::text_document_content(&kb_dir, &index_dir, Path::new(doc), locator)?;
     print!("{}", content.text);
     Ok(())
 }
