@@ -311,6 +311,12 @@ fn frontend_quality_gate_excludes_archive_noise_from_top_three() {
         "# Guide\nThe frontend design skill should activate for interface tasks.\n",
     )
     .unwrap();
+    std::fs::create_dir_all(kb_dir.join("personal/bookmarks/tech")).unwrap();
+    std::fs::write(
+        kb_dir.join("personal/bookmarks/tech/programming.md"),
+        "# Programming\nDesign philosophy and skill references.\n",
+    )
+    .unwrap();
     std::fs::write(
         kb_dir.join("state/firefox-tab-archive-2024-12.md"),
         "# Firefox Tab Archive\n\n## Firefox Tabs\nFrontend design skill load immediately bookmark.\n",
@@ -330,10 +336,13 @@ fn frontend_quality_gate_excludes_archive_noise_from_top_three() {
         .map(|result| result.path.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(paths[0], "memory/corrections.md");
-    assert!(paths.contains(&"memory/manual-memories/__global__.md"));
-    assert!(paths.contains(&"dev/claude-skills-guide.md"));
-    assert!(!paths.iter().any(|path| path.contains("archive")));
+    assert_eq!(
+        paths,
+        [
+            "memory/corrections.md",
+            "memory/manual-memories/__global__.md",
+        ]
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 

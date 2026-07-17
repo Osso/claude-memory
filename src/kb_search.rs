@@ -228,6 +228,15 @@ pub fn search_text_index(
         result.content_command = command.clone();
         result.next_content_command = command;
     }
+    let maximum_coverage = results
+        .iter()
+        .map(|result| result.score / coverage_stride)
+        .max()
+        .unwrap_or(0);
+    results.retain(|result| result.score / coverage_stride == maximum_coverage);
+    if results.iter().any(|result| !is_archive_path(&result.path)) {
+        results.retain(|result| !is_archive_path(&result.path));
+    }
     results.sort_by(|left, right| {
         let left_coverage = left.score / coverage_stride;
         let right_coverage = right.score / coverage_stride;
