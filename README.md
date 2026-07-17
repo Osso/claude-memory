@@ -6,7 +6,7 @@ Semantic memory search for Claude Code sessions and the local knowledge base.
 
 - **Unified session-history store**: Qdrant collection `claude-session-history` (localhost:6334)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
-- **Integration**: MCP server for Claude Code
+- **Interface**: the `claude-memory` CLI binary
 - **KB retrieval**: persistent KB PageIndex over Markdown
 - **Qdrant state**: only `claude-session-history` remains
 
@@ -65,11 +65,10 @@ command remains. Qdrant now contains only `claude-session-history`.
 ./deploy.sh
 ```
 
-`deploy.sh` installs the remaining binaries to `~/.cargo/bin/` with
+`deploy.sh` installs the `claude-memory` CLI binary to `~/.cargo/bin/` with
 `cargo install --force --path .`.
 
-No systemd service — the MCP server runs as a stdio child process of Claude
-Code. After rebuilding, restart Claude Code to reload it.
+The installed interface is the `claude-memory` CLI binary.
 
 ## Dependencies
 

@@ -1,11 +1,11 @@
 # Prompt and Answer History
 
-Session-history search stores raw transcript text for two questions:
+CLI session-history search exposes two typed views:
 
-- `prompt_search`: what the user asked or discussed
-- `answer_search`: how the assistant responded or solved a problem
+- `claude-memory search --type prompts`: what the user asked or discussed
+- `claude-memory search --type answers`: how the assistant responded or solved a problem
 
-Both tools read one Qdrant collection. The search surface selects the history
+Both views read one Qdrant collection. The search surface selects the history
 kind with payload filters.
 
 ## Collection and payload
@@ -64,14 +64,8 @@ claude-memory search --type answers <query>
 ```
 
 The prompt and answer targets query `claude-session-history` with a required
-`type` filter. An optional source filter matches `session` or `archive`.
-
-The MCP tools use the same collection and filters:
-
-- `prompt_search` requires `type=prompt`
-- `answer_search` requires `type=answer`
-
-Both paths use hybrid dense/BM25 retrieval when `[search].enabled = true`.
+`type` filter. An optional source filter matches `session` or `archive`. Both
+CLI targets use hybrid dense/BM25 retrieval when `[search].enabled = true`.
 When semantic search is disabled, these history paths return no results.
 Search result formatting reads `text`, `source`, `path`, `session_id`, and
 score; absent string payloads become empty fields.

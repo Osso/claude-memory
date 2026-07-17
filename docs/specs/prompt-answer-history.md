@@ -1,4 +1,4 @@
-Prompt and answer history indexing stores raw user prompts and assistant responses from active and archived Claude transcript files in one searchable session-history index. `prompt_search` and `answer_search` are filtered views over that index; implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
+Prompt and answer history indexing stores raw user prompts and assistant responses from active and archived Claude transcript files in one searchable session-history index. Typed prompt and answer searches are CLI-only; implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
 
 ## What it must do
 
@@ -22,14 +22,12 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Index a single supported conversation file into the same prompt and answer views.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
-### CLI and MCP search
+### CLI search
 
 - [x] Require `--type prompts|answers` for `claude-memory search <query>`.
 - [x] Accept `claude-memory search --type prompts <query>`.
 - [x] Accept `claude-memory search --type answers <query>`.
-- [x] Expose `prompt_search` for user prompts and questions from session history.
-- [x] Expose `answer_search` for assistant responses and solutions from session history.
-- [x] Expose no other MCP tools.
+- [x] Keep typed prompt and answer search CLI-only.
 - [x] Return no session-history results when semantic search is disabled.
 - [x] Keep KB PageIndex and Transcript PageIndex as separate surfaces; legacy memory-unit data is compatibility-only and KB-to-memory-unit ingestion is retired.
 
@@ -43,7 +41,6 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - `src/extract.rs` — extracts user and assistant transcript text and attaches history/source metadata.
 - `src/index_writer.rs` — computes persisted identity, deduplicates chunks, builds payloads, and writes points.
 - `src/index_search.rs` — applies history-type and source filters for CLI search.
-- `src/bin/mcp.rs` — exposes filtered `prompt_search` and `answer_search` tools.
 - `src/main.rs` — declares and dispatches session-history CLI search targets.
 - `src/indexing_cmds.rs` — dispatches index and single-file commands.
 - `src/qdrant_hybrid.rs` — creates the shared dense+sparse collection and query vectors.

@@ -6,8 +6,8 @@ as historical context only.
 
 ## Keep Runtime Flows Separate
 
-`enrich`, CLI search, MCP search, KB PageIndex, and Transcript PageIndex are
-separate products. A fix in one path does not prove the others are covered.
+`enrich`, CLI search, KB PageIndex, and Transcript PageIndex are separate
+products. A fix in one path does not prove the others are covered.
 When changing retrieval behavior, check each caller explicitly.
 
 ## Retired Optional Context Paths

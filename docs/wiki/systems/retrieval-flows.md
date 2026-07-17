@@ -8,9 +8,8 @@ answer different questions and remain separately traceable.
 ### Session-history search
 
 `claude-memory index` reads active Claude `.jsonl` sessions and archived
-`.jsonl.zst` sessions. Prompt and answer searches are filtered views over the
-shared `claude-session-history` collection. MCP exposes the same two views as
-`prompt_search` and `answer_search`.
+`.jsonl.zst` sessions. Typed prompt and answer searches are CLI views over the
+shared `claude-session-history` collection.
 
 ### `claude-memory enrich`
 
@@ -59,7 +58,7 @@ Qdrant now contains only `claude-session-history`.
 | Need | Surface |
 | --- | --- |
 | Automatic prompt context | `claude-memory enrich` hook |
-| Find past user prompts/discussions | `prompt_search` or `search --type prompts` |
-| Find prior assistant solutions | `answer_search` or `search --type answers` |
+| Find past user prompts/discussions | `search --type prompts` |
+| Find prior assistant solutions | `search --type answers` |
 | Exact KB note context | `kb-page-index` |
 | Inspect raw session history | `transcript-page-index` |

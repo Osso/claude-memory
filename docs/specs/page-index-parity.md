@@ -54,7 +54,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Preserve assistant tool-call counts in transcript node summaries.
 - [x] Fetch exact turn text for a node id or turn range.
 - [x] Transcript PageIndex must not write memory units; legacy memory-unit creation and retrieval are retired.
-- [x] Keep Transcript PageIndex CLI-only until query quality and full-corpus build cost justify an MCP tool.
+- [x] Keep Transcript PageIndex CLI-only; broader integrations remain out of scope.
 
 ### CLI and retrieval surfaces
 
@@ -89,7 +89,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - PDF parsing parity is deferred until there is a concrete need for document formats beyond Markdown and transcripts.
 - OCR and PageIndex cloud/API parity are out of scope for this local Rust implementation.
 - FinanceBench and other reference benchmark parity are not claimed.
-- Transcript PageIndex MCP exposure is deferred until query-quality and corpus-scale build benchmarks improve.
+- Transcript PageIndex integrations beyond the CLI are deferred until query-quality and corpus-scale build benchmarks improve.
 - Transcript PageIndex does not replace friction-driven memory creation.
 
 ## How it works
@@ -161,8 +161,8 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
 - KB document/structure commands and KB agentic query mode.
-- Cloud PageIndex API/MCP compatibility.
-- Transcript PageIndex MCP tool exposure before query quality is proven.
+- Cloud PageIndex API compatibility.
+- Transcript PageIndex integrations beyond the CLI before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.
 - Replacing prompt/answer vector history.
 - Reintroducing friction-driven memory creation or memory-unit runtime retrieval.
