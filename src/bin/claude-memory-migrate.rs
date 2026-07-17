@@ -109,23 +109,82 @@ fn http_client() -> Result<Client> {
 }
 
 async fn apply_migration(client: &Client, backup_root: &Path) -> Result<()> {
-    let before_backup = source_watermark(client).await?;
-    let backup_dir = create_backup_dir(backup_root)?;
-    let artifacts = backup_legacy_collections(client, &backup_dir).await?;
-    verify_backup_set(&artifacts)?;
-    print_backup_artifacts(&backup_dir, &artifacts);
+    apply_migration_steps(&mut LiveMigrationOperations {
+        client,
+        backup_root,
+    })
+    .await
+}
 
-    let classification = classify_sources(client, true).await?;
-    verify_stable_source(&before_backup, &source_watermark(client).await?)?;
-    verify_stable_source(&before_backup, &source_watermark(client).await?)?;
+trait MigrationOperations {
+    async fn source_watermark(&mut self) -> Result<SourceWatermark>;
+    async fn backup(&mut self) -> Result<Vec<BackupArtifact>>;
+    async fn classify(&mut self) -> Result<HistoryClassification>;
+    async fn create_destination(&mut self) -> Result<()>;
+    async fn migrate(&mut self, classification: &HistoryClassification) -> Result<()>;
+    async fn rollback(&mut self) -> Result<()>;
+}
 
-    create_destination_collection().await?;
-    let created = true;
-    let migration = migrate_destination(client, &classification).await;
-    if migration.is_err() && created {
-        rollback_destination().await?;
+struct LiveMigrationOperations<'a> {
+    client: &'a Client,
+    backup_root: &'a Path,
+}
+
+impl MigrationOperations for LiveMigrationOperations<'_> {
+    async fn source_watermark(&mut self) -> Result<SourceWatermark> {
+        source_watermark(self.client).await
     }
-    migration?;
+
+    async fn backup(&mut self) -> Result<Vec<BackupArtifact>> {
+        let backup_dir = create_backup_dir(self.backup_root)?;
+        backup_legacy_collections(self.client, &backup_dir).await
+    }
+
+    async fn classify(&mut self) -> Result<HistoryClassification> {
+        classify_sources(self.client, true).await
+    }
+
+    async fn create_destination(&mut self) -> Result<()> {
+        create_destination_collection().await
+    }
+
+    async fn migrate(&mut self, classification: &HistoryClassification) -> Result<()> {
+        migrate_destination(self.client, classification).await
+    }
+
+    async fn rollback(&mut self) -> Result<()> {
+        rollback_destination().await
+    }
+}
+
+async fn apply_migration_steps(operations: &mut impl MigrationOperations) -> Result<()> {
+    let before_backup = operations.source_watermark().await?;
+    let artifacts = operations.backup().await?;
+    verify_backup_set(&artifacts)?;
+    let backup_dir = artifacts[0]
+        .path
+        .parent()
+        .context("backup artifact has no parent directory")?;
+    print_backup_artifacts(backup_dir, &artifacts);
+
+    let classification = operations.classify().await?;
+    verify_stable_source(&before_backup, &operations.source_watermark().await?)?;
+    verify_stable_source(&before_backup, &operations.source_watermark().await?)?;
+
+    operations.create_destination().await?;
+    let migration = match operations.migrate(&classification).await {
+        Ok(()) => match operations.source_watermark().await {
+            Ok(after_migration) => verify_stable_source(&before_backup, &after_migration),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    if let Err(error) = migration {
+        if let Err(rollback_error) = operations.rollback().await {
+            return Err(error).context(format!("rollback failed: {rollback_error:#}"));
+        }
+        return Err(error);
+    }
     print_plan(&classification);
     Ok(())
 }
@@ -254,7 +313,12 @@ fn verify_written_snapshot(path: &Path, expected_bytes: &[u8], expected_hash: &s
 }
 
 fn verify_backup_set(artifacts: &[BackupArtifact]) -> Result<()> {
-    if artifacts.len() != LEGACY_COLLECTIONS.len() {
+    let actual_collections: BTreeSet<&str> = artifacts
+        .iter()
+        .map(|artifact| artifact.collection.as_str())
+        .collect();
+    let expected_collections: BTreeSet<&str> = LEGACY_COLLECTIONS.into_iter().collect();
+    if artifacts.len() != LEGACY_COLLECTIONS.len() || actual_collections != expected_collections {
         bail!("incomplete backup set: {} artifacts", artifacts.len());
     }
     for artifact in artifacts {
@@ -605,6 +669,20 @@ mod tests {
     }
 
     #[test]
+    fn backup_set_requires_each_named_legacy_collection() {
+        let root = unique_temp_dir("backup-names");
+        fs::create_dir_all(&root).unwrap();
+        let artifacts: Vec<_> = (0..LEGACY_COLLECTIONS.len())
+            .map(|index| {
+                test_backup_artifact(&root, &format!("duplicate-{index}"), "claude-memory")
+            })
+            .collect();
+
+        assert!(verify_backup_set(&artifacts).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn snapshot_metadata_rejects_size_and_checksum_mismatch() {
         let snapshot = SnapshotDescription {
             name: "fixture.snapshot".to_string(),
@@ -672,6 +750,247 @@ mod tests {
         assert!(verify_stable_source(&watermark, &changed).is_err());
     }
 
+    #[tokio::test]
+    async fn apply_stops_before_destination_when_backup_set_is_incomplete() {
+        let mut operations = FakeMigrationOperations::with_backup_count(3);
+
+        assert!(apply_migration_steps(&mut operations).await.is_err());
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_stops_before_destination_when_source_changes() {
+        let mut operations = FakeMigrationOperations::source_changes();
+
+        assert!(apply_migration_steps(&mut operations).await.is_err());
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_refuses_existing_destination_without_copy_or_rollback() {
+        let mut operations = FakeMigrationOperations::destination_exists();
+
+        assert!(apply_migration_steps(&mut operations).await.is_err());
+        assert!(operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_rolls_back_destination_created_before_copy_failure() {
+        let mut operations = FakeMigrationOperations::copy_fails();
+
+        assert!(apply_migration_steps(&mut operations).await.is_err());
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_rolls_back_when_source_changes_during_copy() {
+        let mut operations = FakeMigrationOperations::source_changes_after_copy();
+
+        assert!(apply_migration_steps(&mut operations).await.is_err());
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_rolls_back_when_parity_verification_fails() {
+        let mut operations = FakeMigrationOperations::parity_fails();
+
+        let error = apply_migration_steps(&mut operations).await.unwrap_err();
+        assert_eq!(error.to_string(), "parity failed");
+        assert!(operations.rollback_saw_copied_destination);
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_rolls_back_when_post_copy_watermark_read_fails() {
+        let mut operations = FakeMigrationOperations::post_copy_watermark_fails();
+
+        let error = apply_migration_steps(&mut operations).await.unwrap_err();
+        assert_eq!(error.to_string(), "watermark read failed");
+        assert!(!operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    #[tokio::test]
+    async fn apply_reports_copy_and_rollback_failures() {
+        let mut operations = FakeMigrationOperations::copy_and_rollback_fail();
+
+        let error = apply_migration_steps(&mut operations).await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("copy failed"));
+        assert!(message.contains("rollback failed"));
+        assert!(
+            error
+                .chain()
+                .any(|cause| cause.to_string() == "copy failed")
+        );
+        assert!(operations.destination_exists);
+        assert!(!operations.destination_copied);
+    }
+
+    struct FakeMigrationOperations {
+        backup_count: usize,
+        watermark_calls: usize,
+        change_source_after: Option<usize>,
+        watermark_error_on_call: Option<usize>,
+        create_fails: bool,
+        migration_error: Option<&'static str>,
+        migration_error_after_copy: bool,
+        rollback_fails: bool,
+        root: PathBuf,
+        destination_exists: bool,
+        destination_copied: bool,
+        rollback_saw_copied_destination: bool,
+    }
+
+    impl FakeMigrationOperations {
+        fn with_backup_count(backup_count: usize) -> Self {
+            Self {
+                backup_count,
+                watermark_calls: 0,
+                change_source_after: None,
+                watermark_error_on_call: None,
+                create_fails: false,
+                migration_error: None,
+                migration_error_after_copy: false,
+                rollback_fails: false,
+                root: unique_temp_dir("apply-order"),
+                destination_exists: false,
+                destination_copied: false,
+                rollback_saw_copied_destination: false,
+            }
+        }
+
+        fn source_changes() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.change_source_after = Some(1);
+            operations
+        }
+
+        fn source_changes_after_copy() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.change_source_after = Some(3);
+            operations
+        }
+
+        fn destination_exists() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.create_fails = true;
+            operations.destination_exists = true;
+            operations
+        }
+
+        fn copy_fails() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.migration_error = Some("copy failed");
+            operations
+        }
+
+        fn parity_fails() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.migration_error = Some("parity failed");
+            operations.migration_error_after_copy = true;
+            operations
+        }
+
+        fn post_copy_watermark_fails() -> Self {
+            let mut operations = Self::with_backup_count(LEGACY_COLLECTIONS.len());
+            operations.watermark_error_on_call = Some(4);
+            operations
+        }
+
+        fn copy_and_rollback_fail() -> Self {
+            let mut operations = Self::copy_fails();
+            operations.rollback_fails = true;
+            operations
+        }
+    }
+
+    impl Drop for FakeMigrationOperations {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    impl MigrationOperations for FakeMigrationOperations {
+        async fn source_watermark(&mut self) -> Result<SourceWatermark> {
+            self.watermark_calls += 1;
+            if self.watermark_error_on_call == Some(self.watermark_calls) {
+                bail!("watermark read failed");
+            }
+            let changed = self
+                .change_source_after
+                .is_some_and(|stable_calls| self.watermark_calls > stable_calls);
+            let digest = if changed { "changed" } else { "stable" };
+            Ok(SourceWatermark {
+                memory_points: 1,
+                answer_points: 1,
+                digest: digest.to_string(),
+            })
+        }
+
+        async fn backup(&mut self) -> Result<Vec<BackupArtifact>> {
+            fs::create_dir_all(&self.root)?;
+            (0..self.backup_count)
+                .map(|index| {
+                    let path = self.root.join(format!("snapshot-{index}"));
+                    fs::write(&path, [])?;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+                    Ok(BackupArtifact {
+                        collection: LEGACY_COLLECTIONS[index].to_string(),
+                        path,
+                        size: 0,
+                        checksum: sha256_hex(&[]),
+                    })
+                })
+                .collect()
+        }
+
+        async fn classify(&mut self) -> Result<HistoryClassification> {
+            Ok(HistoryClassification {
+                raw_points: 0,
+                eligible_points: 0,
+                unique_points: 0,
+                duplicate_points: 0,
+                skipped_points: 0,
+                grouped_unique: BTreeMap::new(),
+                destination_points: Vec::new(),
+            })
+        }
+
+        async fn create_destination(&mut self) -> Result<()> {
+            if self.create_fails {
+                bail!("destination exists");
+            }
+            self.destination_exists = true;
+            Ok(())
+        }
+
+        async fn migrate(&mut self, _classification: &HistoryClassification) -> Result<()> {
+            if let Some(error) = self.migration_error {
+                self.destination_copied = self.migration_error_after_copy;
+                bail!(error);
+            }
+            self.destination_copied = true;
+            Ok(())
+        }
+
+        async fn rollback(&mut self) -> Result<()> {
+            if self.rollback_fails {
+                bail!("rollback failed");
+            }
+            self.rollback_saw_copied_destination = self.destination_copied;
+            self.destination_exists = false;
+            self.destination_copied = false;
+            Ok(())
+        }
+    }
+
     #[test]
     fn full_parity_rejects_vector_payload_id_and_count_changes() {
         let expected = vec![destination_fixture()];
@@ -691,6 +1010,18 @@ mod tests {
         assert!(verify_destination_points(&expected, &[wrong_id]).is_err());
 
         assert!(verify_destination_points(&expected, &[rest_fixture(), rest_fixture()]).is_err());
+    }
+
+    fn test_backup_artifact(root: &Path, file_name: &str, collection: &str) -> BackupArtifact {
+        let path = root.join(file_name);
+        fs::write(&path, []).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        BackupArtifact {
+            collection: collection.to_string(),
+            path,
+            size: 0,
+            checksum: sha256_hex(&[]),
+        }
     }
 
     fn destination_fixture() -> DestinationPoint {

@@ -38,11 +38,13 @@ Vectors are copied exactly. Payload fields are retained, with canonical destinat
 - `claude-memory-units`
 - `claude-notable-facts`
 
-Qdrant-provided snapshot names must be safe single filenames. Each downloaded file is collection-prefixed, written with mode `0600`, and requires an advertised checksum. The command verifies reported size, checksum, exact bytes reread from disk, SHA-256, and the final four-file backup set before any destination write occurs.
+Qdrant-provided snapshot names must be safe single filenames. Each downloaded file is collection-prefixed, written with mode `0600`, and requires an advertised checksum. The command verifies reported size, checksum, exact bytes reread from disk, SHA-256, and the final four-file backup set before any destination write occurs. The backup-set validator requires each named legacy collection to be present.
 
-After backup, the command rereads sources and requires raw counts, identity keys, and transformed payloads to match the pre-backup watermark, then performs one final stability read immediately before destination creation or resume. Any source change aborts before destination writes.
+After backup, the command rereads sources and requires raw counts, identity keys, and transformed payloads to match the pre-backup watermark, then performs one final stability read immediately before destination creation or resume. A source change before destination creation aborts before destination writes; a source change detected after copying rolls back the destination.
 
-`apply` atomically creates the hybrid `claude-session-history` collection and deterministically upserts classified unique points. A destination created by the current run is removed after a handled copy or parity failure. If a process crash leaves a destination behind, retry is blocked until that collection is explicitly inspected; the tool never guesses ownership or silently replaces it. Parity requires exact point IDs, raw point count, vectors, full payloads, `(type, source, hash)` keys, and grouped counts.
+Behavioral tests now prove this complete apply-ordering gate: incomplete backups and source changes stop before destination creation, existing destinations are refused before copying, and handled copy, post-copy watermark-read, or parity failures enter rollback handling. The parity rollback case exercises a populated destination. If rollback also fails, the returned error preserves both the original migration failure and the rollback failure. This is test evidence only; it does not claim that a live backup was created, a live migration or parity verification occurred, or any deletion occurred.
+
+`apply` atomically creates the hybrid `claude-session-history` collection and deterministically upserts classified unique points. A destination created by the current run is removed after a handled copy failure, post-copy watermark-read failure, or parity failure after the destination has been populated. If a process crash leaves a destination behind, retry is blocked until that collection is explicitly inspected; the tool never guesses ownership or silently replaces it. Parity requires exact point IDs, raw point count, vectors, full payloads, `(type, source, hash)` keys, and grouped counts.
 
 ## Normal operation versus migration
 

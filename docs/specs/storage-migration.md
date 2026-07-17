@@ -22,13 +22,15 @@ The `claude-memory-migrate` binary defines a one-time, guarded migration from th
 
 ### Apply safety and migration
 
+- [x] The complete apply ordering gate is enforced: an initial source watermark and complete backup-set verification precede classification, source-stability checks, and destination creation; backup-set validation requires each named legacy collection, source changes before destination creation abort before writes, source changes after copying trigger rollback, including post-copy watermark-read failures, existing destinations are refused before copying, and handled copy or parity failures enter rollback handling; if rollback fails, the returned error preserves both migration and rollback failures.
 - [ ] `apply --backup-dir <dir>` atomically creates a new destination and fails when `claude-session-history` already exists; deterministic IDs prevent duplicates within one run.
 - [ ] Before writing the destination, `apply` creates/downloads snapshots for all four legacy collections: `claude-memory`, `claude-answers`, `claude-memory-units`, and `claude-notable-facts`.
 - [x] Each backup run uses a unique directory with mode `0700`.
 - [x] Snapshot names are validated as safe single filenames; downloaded files are collection-prefixed, mode `0600`, and require advertised checksum, expected size, exact written bytes, and final four-file backup-set revalidation before destination writes.
-- [x] Source raw point IDs, vectors, and payloads remain stable across pre-backup, post-backup, and immediately pre-write reads; any change aborts before destination writes.
+- [x] Source raw point IDs, vectors, and payloads remain stable across pre-backup, post-backup, and immediately pre-write reads; changes detected before destination creation abort before destination writes, and changes detected after copying trigger rollback.
 - [x] `apply` creates a new `claude-session-history`, copies eligible unique points, and performs exact ID, point-count, vector, full-payload, key, and grouped-count parity verification.
-- [ ] A destination created by the current run is removed after a handled copy/parity failure; crash recovery requires explicit inspection before retrying and is never automatic.
+- [x] A destination created by the current run is removed after a handled copy failure, post-copy watermark-read failure, or parity failure after the destination has been populated.
+- [ ] Crash recovery requires explicit inspection before retrying and is never automatic.
 
 ### Verification and command surface
 
@@ -66,12 +68,20 @@ The `claude-memory-migrate` binary defines a one-time, guarded migration from th
   - `unsafe_snapshot_names_are_rejected`
   - `missing_requested_vectors_fail_closed`
   - `written_snapshot_is_byte_and_hash_verified`
+  - `backup_set_requires_each_named_legacy_collection`
+  - `apply_stops_before_destination_when_backup_set_is_incomplete`
+  - `apply_stops_before_destination_when_source_changes`
+  - `apply_refuses_existing_destination_without_copy_or_rollback`
+  - `apply_rolls_back_destination_created_before_copy_failure`
+  - `apply_rolls_back_when_source_changes_during_copy`
+  - `apply_rolls_back_when_post_copy_watermark_read_fails`
+  - `apply_rolls_back_when_parity_verification_fails`
+  - `apply_reports_copy_and_rollback_failures`
   - `full_parity_rejects_vector_payload_id_and_count_changes`
   - `parity_rejects_equal_counts_with_different_keys`
 
 ## Known gaps (current cycle)
 
-- [ ] Add an integration test covering the complete `apply` ordering, including destination refusal, all four snapshots, and no destination write before backup verification.
 - [ ] Add an integration test proving live destination point/vector/payload parity after a migration.
 - [ ] Execute and record an authorized live migration; this documentation does not claim that one has occurred.
 
