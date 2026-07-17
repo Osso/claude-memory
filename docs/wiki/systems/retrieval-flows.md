@@ -37,10 +37,10 @@ are retired. The graph runtime and its `build-graph`, `graph-clean`, and
 `src/dedup.rs`, `src/graph.rs`, `src/graph/`, and `src/graph_cmds.rs` modules
 were deleted.
 
-Migration and export compatibility readers may still inspect legacy collection
-records and recognize legacy `source=summary` and `source=kb` values. They remain
-separate from runtime retrieval and do not claim deletion of legacy Qdrant
-points or collections.
+Legacy memory-unit, migration, and export compatibility paths are retired.
+The canonical KB Markdown export completed before their removal; its Markdown
+and manifest remain available through KB PageIndex, and migration backups exist.
+Qdrant now contains only `claude-session-history`.
 
 ## Which surface to use
 

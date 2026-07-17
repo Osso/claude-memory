@@ -38,14 +38,11 @@ joined and split into overlapping embedding chunks. `claude-memory index-file`
 accepts one `.jsonl` or `.jsonl.zst` transcript and writes both history types
 to the same collection.
 
-Session-history indexing does not read project summaries or KB Markdown. Manual
-memories and the `claude-memory`, `claude-session-prompts`, and
-`claude-answers` stores are not normal indexing targets or alternate search paths
-for this surface. The separate [`claude-memory-migrate` storage migration](storage-migration.md)
-reads `claude-memory` and `claude-answers` only as one-time migration inputs.
-KB PageIndex and transcript PageIndex remain separate features. Legacy
-memory-unit data is compatibility-only, and the former KB-to-memory-unit
-ingestion path is retired.
+Session-history indexing does not read project summaries or KB Markdown.
+Manual memories and the former `claude-memory`, `claude-session-prompts`, and
+`claude-answers` stores are not normal indexing targets or alternate search
+paths for this surface. The legacy memory-unit, migration, and export paths are
+retired. KB PageIndex and transcript PageIndex remain separate features.
 
 ## Deduplication and writes
 
@@ -83,4 +80,5 @@ score; absent string payloads become empty fields.
 
 - KB PageIndex provides exact Markdown retrieval and prompt-enrichment context.
 - Transcript PageIndex provides local transcript navigation.
-- Legacy memory-unit records are not a runtime enrichment surface; export and migration readers may inspect them for compatibility.
+- Legacy memory-unit records are not a runtime enrichment surface; their former
+  compatibility readers are retired.

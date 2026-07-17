@@ -76,7 +76,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 
 ## Out of scope
 
-- Legacy memory-unit runtime storage and retrieval; compatibility readers are documented in [memory-units.md](memory-units.md).
+- Legacy memory-unit runtime storage and retrieval; those paths are retired in [memory-units.md](memory-units.md).
 - Friction-driven memory creation and notable-fact handling; see [friction-memory-creation.md](friction-memory-creation.md).
 - KB Markdown retrieval through PageIndex; see [kb-page-index.md](kb-page-index.md). The former KB-to-memory-unit ingestion path is retired.
 - Transcript outline PageIndex retrieval; it is a separate local navigation surface.

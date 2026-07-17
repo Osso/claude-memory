@@ -12,11 +12,11 @@ This specification records the removal boundary; implementation notes live in
 - [x] Do not classify completed transcripts or write new memory-unit records automatically.
 - [x] Remove the analyzer, backfill, and memory-unit runtime retrieval/deduplication paths.
 
-### Preserved compatibility
+### Historical export and current storage
 
-- [x] Keep legacy memory-unit and notable-fact records readable where KB export or migration/parity requires them.
-- [x] Preserve legacy source recognition and provenance needed by compatibility readers.
-- [x] Make no Qdrant collection- or point-deletion claim as part of this retirement.
+- [x] Complete the canonical durable-memory KB Markdown export before removing compatibility code.
+- [x] Preserve the exported Markdown, manifest, and migration backups.
+- [x] Keep Qdrant limited to `claude-session-history` after legacy collection retirement.
 
 ### Current retrieval
 
@@ -26,20 +26,18 @@ This specification records the removal boundary; implementation notes live in
 ## How it works
 
 - [docs/wiki/systems/friction-memory-creation.md](../wiki/systems/friction-memory-creation.md) describes the retired boundary.
-- [memory-units.md](memory-units.md) describes legacy memory-unit compatibility.
+- [memory-units.md](memory-units.md) describes the retired memory-unit boundary.
 - [prompt-answer-history.md](prompt-answer-history.md) describes active history retrieval.
 - [kb-page-index.md](kb-page-index.md) describes active KB retrieval.
 
 ## Implementation inventory
 
-No analyzer, backfill, memory-unit runtime, or deduplication module remains.
-Compatibility readers are listed in [memory-units.md](memory-units.md) and
-[notable-fact-ingestion.md](notable-fact-ingestion.md).
+No analyzer, backfill, memory-unit runtime, deduplication, migration, or export
+compatibility module remains.
 
 ## Tests asserting this spec
 
 - `src/main_tests.rs` — retired command surface.
-- `tests/kb_export.rs` and migration tests — compatibility reader behavior.
 
 ## Known gaps (current cycle)
 
@@ -49,4 +47,4 @@ None for the retirement boundary.
 
 - Reintroducing automatic friction analysis or memory-unit writes.
 - Reintroducing memory-unit or graph runtime retrieval.
-- Deleting legacy Qdrant collections or points.
+- Reintroducing the deleted migration/export compatibility surface.

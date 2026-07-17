@@ -26,7 +26,6 @@ pub use index_search::{
 pub(crate) use index_writer::filter_new;
 #[cfg(test)]
 pub(crate) use index_writer::history_hash;
-pub(crate) use index_writer::point_id_for_history_hash;
 use index_writer::{get_existing_hashes, index_chunks};
 #[cfg(test)]
 pub(crate) use search_results::{build_search_results, get_string};

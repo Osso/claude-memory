@@ -8,7 +8,7 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
 - **KB retrieval**: persistent KB PageIndex over Markdown
-- **Migration/export**: guarded legacy migration and durable-memory KB export
+- **Qdrant state**: only `claude-session-history` remains
 
 ## Usage
 
@@ -32,9 +32,10 @@ The memory-unit and graph runtime paths are retired. `deduplicate`,
 `src/memory_unit.rs`, `src/dedup.rs`, `src/graph.rs`, `src/graph/`, and
 `src/graph_cmds.rs` runtime modules were deleted.
 
-Migration/export compatibility readers still recognize legacy collection data
-and legacy `source=summary` / `source=kb` values where required for parity.
-This retirement does not claim deletion of any Qdrant collection or point.
+The canonical durable-memory KB Markdown export completed before the
+compatibility code was removed. Its Markdown and manifest remain the editable
+KB representation, and migration backups exist. No runtime migration or export
+command remains. Qdrant now contains only `claude-session-history`.
 
 ## Build & Install
 
@@ -47,12 +48,6 @@ This retirement does not claim deletion of any Qdrant collection or point.
 
 No systemd service — the MCP server runs as a stdio child process of Claude
 Code. After rebuilding, restart Claude Code to reload it.
-
-`claude-memory-migrate` provides read-only `plan`/`verify` and guarded
-`apply --backup-dir <directory>` for legacy history migration. The completed
-`claude-memory-export-kb` flow writes canonical durable-memory Markdown and a
-manifest under `/syncthing/Sync/KB/memory`, then rebuilds KB PageIndex.
-Neither tool deletes source points or collections.
 
 ## Dependencies
 

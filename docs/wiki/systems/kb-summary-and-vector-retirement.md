@@ -15,25 +15,18 @@ This slice retires the obsolete KB-to-memory-unit ingestion path and the stale
 - The transcript analyzer and notable-fact analyzer/writer are also retired;
   `analyze` and `backfill` are not available.
 
-## Compatibility and preservation
+## Historical export and current storage
 
-Legacy readers retain source recognition for parity:
+The canonical durable-memory KB Markdown export completed before the
+compatibility code was removed. Existing Markdown and its manifest remain
+available through KB PageIndex, and migration backups exist.
 
-- migration recognizes `source=summary` and `source=kb` as unsupported history
-  sources and skips them rather than migrating them;
-- export recognizes legacy `source=summary` as non-durable and `source=kb` as an
-  excluded KB vector, with manifest accounting.
-
-The durable-memory KB export is completed. Existing exported Markdown remains
-available through KB PageIndex. Compatibility readers still recognize legacy
-memory-unit and notable-fact records where needed for export or migration. This
-slice does not write live notable facts, delete points, or delete collections.
-Legacy Qdrant contents remain outside the retirement boundary.
+The legacy collection migration/export binaries, modules, and tests were deleted
+after the legacy collections were retired. Qdrant now contains only
+`claude-session-history`.
 
 ## Related contracts
 
 - [KB PageIndex](../../specs/kb-page-index.md)
 - [Memory units](../../specs/memory-units.md)
 - [Prompt and answer history](../../specs/prompt-answer-history.md)
-- [Storage migration](../../specs/storage-migration.md)
-- [KB Markdown export](../../specs/kb-markdown-export.md)

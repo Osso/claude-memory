@@ -6,7 +6,7 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 
 - [x] Reject `claude-memory ingest-kb`; the CLI command is no longer part of the public surface.
 - [x] Expose no replacement KB-to-memory-unit writer through the public CLI.
-- [x] Leave no memory-unit or graph runtime reader/dedup/enrich path available; export/migration compatibility readers remain.
+- [x] Leave no memory-unit, graph, migration, or export runtime reader/dedup/enrich path available.
 
 ### Preserved retrieval and history
 
@@ -16,11 +16,13 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 - [x] Preserve prompt/answer history indexing and search as a separate surface.
 - [x] Preserve all legacy Qdrant data; live before/after counts remain unchanged.
 
-### Compatibility recognition
+### Historical export and current storage
 
-- [x] Keep legacy `source=summary` and `source=kb` recognition in export/migration classification for parity, even though neither is an active search or ingestion path.
+- [x] Complete the canonical durable-memory KB Markdown export before removing compatibility code.
+- [x] Preserve the exported Markdown, manifest, and migration backups.
+- [x] Keep Qdrant limited to `claude-session-history` after legacy collection retirement.
 
-No active summary producer or summary search path existed before this retirement. PageIndex node summaries are unrelated and remain active. Memory-unit and graph runtime modules are deleted.
+No active summary producer or summary search path existed before this retirement. PageIndex node summaries are unrelated and remain active. Memory-unit, migration, and export compatibility code is deleted.
 
 ## How it works
 
@@ -28,7 +30,6 @@ No active summary producer or summary search path existed before this retirement
 - [kb-page-index.md](kb-page-index.md) defines the KB retrieval contract.
 - [memory-units.md](memory-units.md) defines the legacy memory-unit compatibility boundary.
 - [prompt-answer-history.md](prompt-answer-history.md) defines transcript history search.
-- [storage-migration.md](storage-migration.md) defines legacy source recognition during migration.
 
 ## Implementation inventory
 
@@ -52,7 +53,7 @@ None for this slice.
 ## Out of scope
 
 - Reintroducing KB Markdown facts as memory units.
-- Removing or migrating legacy Qdrant collections or points.
+- Reintroducing the deleted migration/export compatibility surface.
 - Reintroducing manual-memory, memory-unit, graph, prompt/answer history, or PageIndex runtime paths.
 - Treating `PageIndexNode.summary` as the retired summary-vector feature.
-- Claiming that legacy points or collections were deleted.
+- Treating the completed export as an active runtime command.

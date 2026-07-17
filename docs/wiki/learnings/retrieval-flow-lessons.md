@@ -33,8 +33,8 @@ Current runtime lookup has two source families:
 - prompt/answer history: raw conversation chunks in Qdrant
 - PageIndex: traceable document/structure/content retrieval
 
-Legacy memory-unit and graph collections may still be named by compatibility
-readers, but they are not runtime search surfaces.
+Legacy memory-unit, migration, and export collections are no longer runtime
+search surfaces; Qdrant now contains only `claude-session-history`.
 
 ## Traceability Beats Magic Injection
 

@@ -149,7 +149,7 @@ fn point_id_for_chunk(chunk: &IndexedChunk) -> String {
     point_id_for_history_hash(&history_hash(chunk))
 }
 
-pub(crate) fn point_id_for_history_hash(history_hash: &str) -> String {
+fn point_id_for_history_hash(history_hash: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(history_hash.as_bytes());
     let digest = hasher.finalize();
