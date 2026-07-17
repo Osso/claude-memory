@@ -43,8 +43,8 @@ memories and the `claude-memory`, `claude-session-prompts`, and
 `claude-answers` stores are not normal indexing targets or alternate search paths
 for this surface. The separate [`claude-memory-migrate` storage migration](storage-migration.md)
 reads `claude-memory` and `claude-answers` only as one-time migration inputs.
-KB ingestion, KB PageIndex, memory-unit search, and transcript PageIndex remain
-separate features.
+KB PageIndex, memory-unit search, and transcript PageIndex remain separate
+features. The former KB-to-memory-unit ingestion path is retired.
 
 ## Deduplication and writes
 

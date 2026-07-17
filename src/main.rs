@@ -12,11 +12,10 @@ mod transcript_page_index_cli;
 use dedup::{cluster_similar, load_all_memories, merge_clusters, print_clusters};
 use graph_cmds::{run_build_graph, run_graph_clean_cmd, run_graph_dump};
 use indexing_cmds::{
-    run_index_cmd, run_index_file_cmd, run_ingest_kb, run_kb_page_index_build,
-    run_kb_page_index_content, run_kb_page_index_document, run_kb_page_index_query,
-    run_kb_page_index_structure, run_page_index, run_transcript_page_index_content,
-    run_transcript_page_index_document, run_transcript_page_index_query,
-    run_transcript_page_index_structure,
+    run_index_cmd, run_index_file_cmd, run_kb_page_index_build, run_kb_page_index_content,
+    run_kb_page_index_document, run_kb_page_index_query, run_kb_page_index_structure,
+    run_page_index, run_transcript_page_index_content, run_transcript_page_index_document,
+    run_transcript_page_index_query, run_transcript_page_index_structure,
 };
 use kb_page_index_cli::KbPageIndexCommand;
 use transcript_page_index_cli::TranscriptPageIndexCommand;
@@ -65,21 +64,6 @@ enum Command {
         /// Batch size for embedding
         #[arg(long, default_value = "10")]
         batch_size: usize,
-    },
-
-    /// Extract KB Markdown facts into memory units
-    IngestKb {
-        /// Knowledge base directory (default: /syncthing/Sync/KB)
-        #[arg(long)]
-        kb: Option<PathBuf>,
-
-        /// Stop after this many Markdown files
-        #[arg(long)]
-        max_files: Option<usize>,
-
-        /// Extract facts without writing memory units
-        #[arg(long)]
-        dry_run: bool,
     },
 
     /// Build local transcript outline PageIndex trees for Claude/Codex sessions
@@ -239,9 +223,7 @@ fn init_tracing() {
 
 async fn run_command(command: Command) -> Result<()> {
     match command {
-        Command::Index { .. } | Command::IndexFile { .. } | Command::IngestKb { .. } => {
-            run_indexing_command(command).await
-        }
+        Command::Index { .. } | Command::IndexFile { .. } => run_indexing_command(command).await,
         Command::TranscriptPageIndex { command } => {
             run_transcript_page_index_command(command).await
         }
@@ -371,11 +353,6 @@ async fn run_indexing_command(command: Command) -> Result<()> {
             delay_ms,
         } => run_index_cmd(archive, projects, batch_size, fresh, delay_ms).await,
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
-        Command::IngestKb {
-            kb,
-            max_files,
-            dry_run,
-        } => run_ingest_kb(kb, max_files, dry_run).await,
         _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }
 }

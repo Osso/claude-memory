@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use claude_memory::{index, kb_ingest, kb_search, page_index, page_index_agentic};
+use claude_memory::{index, kb_search, page_index, page_index_agentic};
 use std::path::{Path, PathBuf};
 
 pub async fn run_index_cmd(
@@ -18,20 +18,6 @@ pub async fn run_index_cmd(
 pub async fn run_index_file_cmd(path: &Path, batch_size: usize) -> Result<()> {
     let count = index::index_file(path, batch_size).await?;
     eprintln!("Indexed {} chunks from {}", count, path.display());
-    Ok(())
-}
-
-pub async fn run_ingest_kb(
-    kb: Option<PathBuf>,
-    max_files: Option<usize>,
-    dry_run: bool,
-) -> Result<()> {
-    let kb_dir = kb.unwrap_or_else(|| PathBuf::from("/syncthing/Sync/KB"));
-    let summary = kb_ingest::ingest_kb_dir(&kb_dir, max_files, dry_run).await?;
-    println!(
-        "KB ingest: files={} sections={} facts={} inserted={} merged={}",
-        summary.files, summary.sections, summary.facts, summary.inserted, summary.merged
-    );
     Ok(())
 }
 

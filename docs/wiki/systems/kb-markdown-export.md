@@ -56,6 +56,10 @@ claude-memory-export-kb verify --kb-root /syncthing/Sync/KB
 
 `plan` is read-only. `apply` writes only KB output, verifies a fresh source plan, then rebuilds the existing KB PageIndex. `verify` is read-only. The binary has no source-deletion or collection-deletion command.
 
-## Separate later work
+## Separate work
 
-Prompt/answer history remains in `claude-session-history`. Summary retirement, duplicate KB-vector ingestion removal, legacy reader/writer removal, and collection deletion are separate commits with separate verification gates.
+Prompt/answer history remains in `claude-session-history`. The summary and duplicate
+KB-vector ingestion retirement is documented in
+[kb-summary-and-vector-retirement.md](kb-summary-and-vector-retirement.md).
+Legacy reader/writer removal and collection deletion remain separate work with
+separate verification gates.

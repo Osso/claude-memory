@@ -45,7 +45,7 @@ Memory units are compact, durable preloads stored separately from raw prompt and
 - `src/main.rs` — exposes CLI memory search, memory write, and memory delete commands.
 - `src/bin/mcp.rs` — exposes MCP `memory_write` guidance and `memory_list`.
 - `src/analyze.rs` — writes validated friction-derived memory units.
-- `src/kb_ingest.rs` — writes KB-derived facts as memory units when the experimental ingester is used.
+- `src/kb_search.rs` — remains the KB PageIndex retrieval path; it does not write memory units.
 - `src/enrich_cmd.rs` — retrieves memory units for prompt enrichment.
 - `src/qdrant_hybrid.rs` — creates the hybrid collection layout.
 
@@ -69,10 +69,10 @@ Memory units are compact, durable preloads stored separately from raw prompt and
 
 - [ ] Add tests for dedup-at-write merge behavior and `seen_in_sessions` updates.
 - [ ] Add tests for memory deletion by numeric point ID.
-- [ ] Decide whether KB-derived facts should remain in memory units now that KB PageIndex exists.
+- [ ] Add a dedicated regression test for the retired KB-to-memory-unit path; CLI retirement coverage is listed in [kb-summary-and-vector-retirement.md](kb-summary-and-vector-retirement.md).
 
 ## Out of scope
 
 - Raw prompt and answer history search; see [prompt-answer-history.md](prompt-answer-history.md).
 - The friction pipeline that creates automatic memory units; see [friction-memory-creation.md](friction-memory-creation.md).
-- KB PageIndex retrieval; see [kb-page-index.md](kb-page-index.md).
+- KB PageIndex retrieval; see [kb-page-index.md](kb-page-index.md). KB Markdown-to-memory-unit ingestion is retired and documented in [kb-summary-and-vector-retirement.md](kb-summary-and-vector-retirement.md).

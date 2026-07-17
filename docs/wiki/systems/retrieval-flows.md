@@ -124,12 +124,14 @@ CLI surface: `claude-memory transcript-page-index ...`.
 
 ## Memory Creation and Ingestion
 
-Durable memory units come from analysis/ingestion paths, not from search:
+Durable memory units come from analysis paths, not from search:
 
 - `analyze <session.jsonl>` parses one session, runs friction/notability LLM
   stages, and writes accepted memory units/notable facts with deduplication.
 - `backfill` runs analysis over many sessions using a processed-state file.
-- `ingest-kb` extracts facts from KB Markdown sections into memory units.
+- The former `ingest-kb` KB-to-memory-unit path is retired. KB Markdown remains
+  available through KB PageIndex; no active summary producer or summary search
+  path is part of retrieval.
 - Manual `memory_write` storage is disabled; project-local durable context should
   be written as editable Markdown under `docs/local/memory.md`.
 

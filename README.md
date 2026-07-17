@@ -38,8 +38,8 @@ Project summaries, KB Markdown, manual memories, and the
 `claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
 normal session-history indexing targets or alternate search paths. The separate
 `claude-memory-migrate` tool reads `claude-memory` and `claude-answers` only as
-one-time migration inputs. KB PageIndex, `ingest-kb`, memory-unit search, and
-transcript PageIndex use separate surfaces.
+one-time migration inputs. KB PageIndex, memory-unit search, and transcript
+PageIndex use separate surfaces; the former `ingest-kb` surface is retired.
 Local project memories remain editable Markdown under `docs/local/`.
 
 ## Setup
@@ -85,7 +85,6 @@ Produces four binaries:
 claude-memory index              # Index active and archived transcript chunks
 claude-memory index --fresh      # Re-index transcript chunks from scratch
 claude-memory index-file <path>  # Index one conversation file (prompts + answers)
-claude-memory ingest-kb          # Extract KB Markdown facts into memory units
 claude-memory search <q>                 # Search memories by default
 claude-memory search --type prompts <q>  # Search the prompt history view
 claude-memory search --type answers <q>  # Search the answer history view
@@ -118,7 +117,8 @@ units and vector prompt/answer history.
 
 ### KB PageIndex
 
-Use KB PageIndex for exact context from `/syncthing/Sync/KB` Markdown notes:
+Use KB PageIndex for exact context from `/syncthing/Sync/KB` Markdown notes.
+KB Markdown is not ingested into memory units by an active CLI path.
 
 ```bash
 claude-memory kb-page-index build \

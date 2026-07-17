@@ -9,6 +9,7 @@ System notes describe how implemented features work. Feature contracts remain in
 - [Storage migration](systems/storage-migration.md)
 - [PageIndex parity](systems/page-index-parity.md)
 - [KB Markdown export](systems/kb-markdown-export.md)
+- [KB summary and duplicate-vector retirement](systems/kb-summary-and-vector-retirement.md)
 - [Retrieval flows](systems/retrieval-flows.md)
 
 ## Learnings

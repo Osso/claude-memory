@@ -29,11 +29,15 @@ claude-memory stats
 `index` reads active `.jsonl` sessions and archived `.jsonl.zst` sessions only.
 Prompt and answer searches are filtered views over the shared
 `claude-session-history` collection. There is no `index --kb` command; KB
-Markdown uses the separate `kb-page-index` and `ingest-kb` surfaces.
+Markdown uses the separate `kb-page-index` surface. The former `ingest-kb`
+command is retired, so KB facts
+are not actively duplicated into memory units.
 
 Project summaries, KB Markdown, manual memories, and the
 `claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
-session-history indexing targets or alternate search paths.
+session-history indexing targets or alternate search paths. Legacy
+`source=summary` and `source=kb` recognition remains for export/migration parity;
+legacy Qdrant data and collections are not changed by this retirement.
 
 ## Build & Install
 

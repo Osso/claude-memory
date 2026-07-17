@@ -59,27 +59,13 @@ fn manual_memory_write_guidance_points_to_docs_local() {
 }
 
 #[test]
-fn ingest_kb_accepts_dry_run_and_limit() {
-    let cli = Cli::parse_from([
-        "claude-memory",
-        "ingest-kb",
-        "--kb",
-        "/tmp/kb",
-        "--max-files",
-        "3",
-        "--dry-run",
-    ]);
-    let Command::IngestKb {
-        kb,
-        max_files,
-        dry_run,
-    } = cli.command
-    else {
-        panic!("expected ingest-kb command");
+fn ingest_kb_command_is_retired() {
+    let error = match Cli::try_parse_from(["claude-memory", "ingest-kb"]) {
+        Ok(_) => panic!("ingest-kb should be rejected"),
+        Err(error) => error,
     };
-    assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
-    assert_eq!(max_files, Some(3));
-    assert!(dry_run);
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
 }
 
 #[test]

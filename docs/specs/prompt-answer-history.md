@@ -30,7 +30,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Expose `prompt_search` for user prompts and questions from session history.
 - [x] Expose `answer_search` for assistant responses and solutions from session history.
 - [x] Return no session-history results when semantic search is disabled.
-- [x] Keep KB PageIndex, transcript PageIndex, memory-unit search, and memory ingestion as separate surfaces.
+- [x] Keep KB PageIndex, transcript PageIndex, and memory-unit search as separate surfaces; KB-to-memory-unit ingestion is retired.
 
 ## How it works
 
@@ -77,5 +77,5 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 
 - Memory-unit storage and retrieval; see [memory-units.md](memory-units.md).
 - Friction-driven memory creation and notable-fact handling; see [friction-memory-creation.md](friction-memory-creation.md).
-- KB Markdown retrieval and ingestion; see [kb-page-index.md](kb-page-index.md).
+- KB Markdown retrieval through PageIndex; see [kb-page-index.md](kb-page-index.md). The former KB-to-memory-unit ingestion path is retired.
 - Transcript outline PageIndex retrieval; it is a separate local navigation surface.
