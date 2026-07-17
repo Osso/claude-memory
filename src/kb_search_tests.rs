@@ -255,8 +255,8 @@ fn multi_term_body_match_outranks_single_structural_term() {
     )
     .unwrap();
 
+    assert_eq!(results.len(), 1);
     assert_eq!(results[0].path, "memory/corrections.md");
-    assert_eq!(results[1].path, "dev/ecdysis/SKILL.md");
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -283,8 +283,8 @@ fn adjacent_coverage_levels_outrank_maximum_structural_frequency() {
     let results =
         search_text_index(&kb_dir, &index_dir, "alpha beta gamma delta epsilon", 2).unwrap();
 
+    assert_eq!(results.len(), 1);
     assert_eq!(results[0].path, "complete.md");
-    assert!(results[0].score > results[1].score);
     std::fs::remove_dir_all(root).unwrap();
 }
 
