@@ -7,6 +7,7 @@ Semantic memory search for Claude Code sessions and knowledge base.
 - **Session-history vector store**: Qdrant collection `claude-session-history` (localhost:6334)
 - **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
 - **Integration**: MCP server for Claude Code
+- **Migration CLI**: `claude-memory-migrate` for guarded legacy Qdrant storage migration
 
 ## Usage
 
@@ -40,9 +41,11 @@ session-history indexing targets or alternate search paths.
 ./deploy.sh
 ```
 
-`deploy.sh` installs the CLI and MCP binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
+`deploy.sh` installs all three binaries to `~/.cargo/bin/` with `cargo install --force --path .`.
 
 No systemd service — the MCP server runs as a stdio child process of Claude Code. After rebuilding, restart Claude Code to reload it.
+
+The separate `claude-memory-migrate` binary exposes read-only `plan` and `verify` commands plus guarded `apply --backup-dir <directory>`. It backs up all four legacy collections before creating `claude-session-history`, preserves eligible history points, and verifies exact parity. No deletion or fallback command exists; this documents the contract and does not claim a live migration has been run.
 
 ## Dependencies
 

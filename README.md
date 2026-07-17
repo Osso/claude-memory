@@ -36,8 +36,10 @@ Session-history indexing reads only:
 
 Project summaries, KB Markdown, manual memories, and the
 `claude-memory`, `claude-session-prompts`, and `claude-answers` stores are not
-session-history indexing targets or alternate search paths. KB PageIndex,
-`ingest-kb`, memory-unit search, and transcript PageIndex use separate surfaces.
+normal session-history indexing targets or alternate search paths. The separate
+`claude-memory-migrate` tool reads `claude-memory` and `claude-answers` only as
+one-time migration inputs. KB PageIndex, `ingest-kb`, memory-unit search, and
+transcript PageIndex use separate surfaces.
 Local project memories remain editable Markdown under `docs/local/`.
 
 ## Setup
@@ -71,9 +73,10 @@ Local project memories remain editable Markdown under `docs/local/`.
 cargo build --release
 ```
 
-Produces two binaries:
+Produces three binaries:
 - `claude-memory` — CLI for indexing and searching
 - `claude-memory-mcp` — MCP server for Claude Code integration
+- `claude-memory-migrate` — guarded legacy Qdrant storage migration CLI
 
 ## CLI commands
 
@@ -95,6 +98,11 @@ claude-memory graph-dump         # Show graph contents
 claude-memory deduplicate        # Merge similar memories via LLM
 claude-memory enrich             # Enrich prompt with context (hook use)
 claude-memory stats              # Show collection statistics
+
+# One-time legacy storage migration (read-only plan/verify; apply requires a backup root)
+claude-memory-migrate plan
+claude-memory-migrate apply --backup-dir <directory>
+claude-memory-migrate verify
 ```
 
 ## PageIndex commands

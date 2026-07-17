@@ -21,8 +21,10 @@ BM25 vector layout. Each point stores:
 - `hash` — persisted history identity
 
 The persisted hash is `type:source:chunk_hash`. Identical text therefore remains
-distinct across prompt/answer and session/archive views. Point identity is
-derived from the same history hash.
+distinct across prompt/answer and session/archive views, while repeated identical
+chunks within the same type/source intentionally collapse. Point identity is
+derived from the same history hash; message, turn, and chunk ordinals are not
+added merely to preserve duplicate occurrences.
 
 ## Index inputs
 
@@ -38,9 +40,11 @@ to the same collection.
 
 Session-history indexing does not read project summaries or KB Markdown. Manual
 memories and the `claude-memory`, `claude-session-prompts`, and
-`claude-answers` stores are not targets or alternate search paths for this
-surface. KB ingestion, KB PageIndex, memory-unit search, and transcript
-PageIndex remain separate features.
+`claude-answers` stores are not normal indexing targets or alternate search paths
+for this surface. The separate [`claude-memory-migrate` storage migration](storage-migration.md)
+reads `claude-memory` and `claude-answers` only as one-time migration inputs.
+KB ingestion, KB PageIndex, memory-unit search, and transcript PageIndex remain
+separate features.
 
 ## Deduplication and writes
 

@@ -6,6 +6,7 @@ System notes describe how implemented features work. Feature contracts remain in
 ## Systems
 
 - [Prompt and answer history](systems/prompt-answer-history.md)
+- [Storage migration](systems/storage-migration.md)
 - [PageIndex parity](systems/page-index-parity.md)
 - [Retrieval flows](systems/retrieval-flows.md)
 

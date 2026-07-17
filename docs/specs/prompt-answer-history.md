@@ -8,7 +8,8 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Persist each chunk with its text, `type` (`prompt` or `answer`), `source` (`session` or `archive`), path, session id, and persisted hash.
 - [x] Make prompt search a `type=prompt` view and answer search a `type=answer` view.
 - [x] Allow prompt and answer searches to restrict results by `source`.
-- [x] Include history type and source in persisted chunk identity so identical text remains distinct across prompt/answer and session/archive views.
+- [x] Derive persisted identity from history type, source, and content hash: identical text remains distinct across prompt/answer and session/archive views, while identical chunks within the same type/source collapse to one point.
+- [x] Do not add message, turn, or chunk ordinals solely to preserve repeated identical chunks; duplicate collapse is intentional.
 - [x] Return text, source, path, session id, and score without panicking on missing payload fields.
 
 ### Indexing lifecycle
@@ -17,7 +18,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Index assistant messages from active Claude session JSONL files.
 - [x] Index user messages from archived Claude `.jsonl.zst` files.
 - [x] Index assistant messages from archived Claude `.jsonl.zst` files.
-- [x] Deduplicate existing chunks and repeated chunks within one indexing input.
+- [x] Deduplicate existing chunks and repeated identical chunks within the same type/source.
 - [x] Index a single supported conversation file into the same prompt and answer views.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
@@ -55,6 +56,8 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - `filter_new_all_duplicates_returns_empty`
   - `filter_new_deduplicates_within_input`
   - `identical_prompt_and_answer_text_have_distinct_history_hashes`
+  - `identical_prompt_text_from_session_and_archive_has_distinct_history_hashes`
+  - `filter_new_deduplicates_within_input`
   - `qdrant_history_filters_isolate_type_and_source`
   - `build_search_results_extracts_fields`
   - `build_search_results_empty_payload_graceful`

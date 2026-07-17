@@ -146,8 +146,12 @@ fn build_single_point(chunk: &IndexedChunk, embedding: Vec<f32>) -> PointStruct 
 }
 
 fn point_id_for_chunk(chunk: &IndexedChunk) -> String {
+    point_id_for_history_hash(&history_hash(chunk))
+}
+
+pub(crate) fn point_id_for_history_hash(history_hash: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(history_hash(chunk).as_bytes());
+    hasher.update(history_hash.as_bytes());
     let digest = hasher.finalize();
     let mut bytes = [0_u8; 16];
     bytes.copy_from_slice(&digest[..16]);

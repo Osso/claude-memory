@@ -12,6 +12,7 @@ pub mod kb_ingest;
 pub mod kb_search;
 pub mod llm;
 pub mod memory_unit;
+pub mod migration;
 pub mod notable_fact;
 pub mod page_index;
 pub mod page_index_agentic;
