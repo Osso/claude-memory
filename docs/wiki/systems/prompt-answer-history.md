@@ -58,10 +58,9 @@ change the collection or payload model.
 
 ## Search paths
 
-CLI search defaults to memory units:
+CLI search requires an explicit target:
 
 ```text
-claude-memory search <query>
 claude-memory search --type prompts <query>
 claude-memory search --type answers <query>
 ```
@@ -81,8 +80,6 @@ score; absent string payloads become empty fields.
 
 ## Separate surfaces
 
-- Memory-unit search is the default CLI search target.
 - KB PageIndex provides exact Markdown retrieval and prompt-enrichment context.
 - Transcript PageIndex provides local transcript navigation.
-- `memory_write` does not store manual memories; project-local durable context
-  belongs in `docs/local/memory.md`.
+- Analyzer-created memory units remain a separate enrichment surface.

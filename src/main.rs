@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use claude_memory::{analyze, backfill, config, index, memory_unit};
+use claude_memory::{analyze, backfill, index};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 
@@ -79,7 +79,7 @@ enum Command {
         command: KbPageIndexCommand,
     },
 
-    /// Search memories by default, or prompts/answers with --type
+    /// Search prompts or answers
     Search {
         /// Query text
         query: String,
@@ -89,7 +89,7 @@ enum Command {
         limit: usize,
 
         /// Search target
-        #[arg(long = "type", value_enum, default_value_t = SearchTarget::Memories)]
+        #[arg(long = "type", value_enum, required = true)]
         target: SearchTarget,
     },
 
@@ -145,22 +145,6 @@ enum Command {
         session_jsonl: PathBuf,
     },
 
-    /// Delete a memory unit by its numeric Qdrant point ID
-    MemoryDelete {
-        /// Point ID returned by `search`
-        id: u64,
-    },
-
-    /// Explain where manual memories should be written
-    MemoryWrite {
-        /// Project slug, or __global__ for memories that should apply everywhere
-        #[arg(long)]
-        project: Option<String>,
-
-        /// Memory text (1-3 sentences, encyclopedia-style)
-        text: String,
-    },
-
     /// Backfill: walk the live projects directory and analyze each session.
     /// Resumable via a sidecar state file.
     Backfill {
@@ -190,23 +174,8 @@ enum Command {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum SearchTarget {
-    Memories,
     Prompts,
     Answers,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum MemorySearchMode {
-    Semantic,
-    Substring,
-}
-
-fn memory_search_mode(semantic_enabled: bool) -> MemorySearchMode {
-    if semantic_enabled {
-        MemorySearchMode::Semantic
-    } else {
-        MemorySearchMode::Substring
-    }
 }
 
 #[tokio::main]
@@ -242,18 +211,13 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
         Command::GraphDump { limit } => run_graph_dump(limit),
         Command::Stats => index::show_stats().await,
-        Command::Analyze { .. }
-        | Command::MemoryDelete { .. }
-        | Command::MemoryWrite { .. }
-        | Command::Backfill { .. } => run_memory_command(command).await,
+        Command::Analyze { .. } | Command::Backfill { .. } => run_memory_command(command).await,
     }
 }
 
 async fn run_memory_command(command: Command) -> Result<()> {
     match command {
         Command::Analyze { session_jsonl } => run_analyze(&session_jsonl).await,
-        Command::MemoryDelete { id } => run_memory_delete(id).await,
-        Command::MemoryWrite { text, project } => run_memory_write(text, project).await,
         Command::Backfill {
             projects,
             archive,
@@ -359,28 +323,9 @@ async fn run_indexing_command(command: Command) -> Result<()> {
 
 async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result<()> {
     match target {
-        SearchTarget::Memories => run_search_memories(&query, limit).await,
         SearchTarget::Prompts => run_search_prompts(query, limit, None).await,
         SearchTarget::Answers => run_search_answers(query, limit, None).await,
     }
-}
-
-async fn run_search_memories(query: &str, limit: usize) -> Result<()> {
-    let mode = memory_search_mode(config::search_enabled());
-    let units = match mode {
-        MemorySearchMode::Semantic => memory_unit::list(limit, None, None, Some(query)).await?,
-        MemorySearchMode::Substring => memory_unit::list(limit, None, Some(query), None).await?,
-    };
-
-    if units.is_empty() {
-        println!("(no memories found)");
-        return Ok(());
-    }
-
-    for unit in units {
-        print_memory_unit(&unit);
-    }
-    Ok(())
 }
 
 async fn run_backfill_cmd(
@@ -405,22 +350,6 @@ async fn run_backfill_cmd(
         max_sessions,
     )
     .await
-}
-
-async fn run_memory_delete(id: u64) -> Result<()> {
-    memory_unit::delete(id).await?;
-    println!("deleted memory unit {id}");
-    Ok(())
-}
-
-async fn run_memory_write(text: String, _project: Option<String>) -> Result<()> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("memory text is empty");
-    }
-
-    println!("{}", memory_unit::manual_memory_write_guidance());
-    Ok(())
 }
 
 async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
@@ -451,24 +380,6 @@ fn print_results(results: &[index::SearchResult]) -> Result<()> {
         println!();
     }
     Ok(())
-}
-
-fn print_memory_unit(memory: &memory_unit::StoredMemory) {
-    let preview = if memory.text.len() > 200 {
-        format!("{}...", &memory.text[..200])
-    } else {
-        memory.text.clone()
-    };
-    println!(
-        "memory-unit {}  seen={}  [{}] {}#{}  {}\n   {}\n",
-        memory.id,
-        memory.seen_count,
-        memory.source,
-        memory.source_session,
-        memory.source_turn,
-        memory.created_at,
-        preview
-    );
 }
 
 async fn run_deduplicate(threshold: f32, dry_run: bool) -> Result<()> {

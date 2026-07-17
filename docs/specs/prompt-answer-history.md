@@ -24,11 +24,12 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 
 ### CLI and MCP search
 
-- [x] Default `claude-memory search <query>` targets memories, not session history.
+- [x] Require `--type prompts|answers` for `claude-memory search <query>`.
 - [x] Accept `claude-memory search --type prompts <query>`.
 - [x] Accept `claude-memory search --type answers <query>`.
 - [x] Expose `prompt_search` for user prompts and questions from session history.
 - [x] Expose `answer_search` for assistant responses and solutions from session history.
+- [x] Expose no other MCP tools.
 - [x] Return no session-history results when semantic search is disabled.
 - [x] Keep KB PageIndex, transcript PageIndex, and memory-unit search as separate surfaces; KB-to-memory-unit ingestion is retired.
 
@@ -63,7 +64,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - `build_search_results_empty_payload_graceful`
   - `build_search_results_empty_input`
 - `src/main_tests.rs`
-  - `search_defaults_to_memories`
+  - `search_requires_prompt_or_answer_type`
   - `search_accepts_prompt_type`
   - `search_accepts_answer_type`
 - `src/extract.rs`

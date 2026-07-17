@@ -2,22 +2,16 @@ use super::*;
 use claude_memory::page_index_agentic;
 
 #[test]
-fn search_defaults_to_memories() {
-    let cli = Cli::parse_from(["claude-memory", "search", "ollama"]);
-    let Command::Search { target, .. } = cli.command else {
-        panic!("expected search command");
+fn search_requires_prompt_or_answer_type() {
+    let error = match Cli::try_parse_from(["claude-memory", "search", "ollama"]) {
+        Ok(_) => panic!("search without --type should be rejected"),
+        Err(error) => error,
     };
-    assert_eq!(target, SearchTarget::Memories);
-}
 
-#[test]
-fn memory_search_uses_semantic_query_when_enabled() {
-    assert_eq!(memory_search_mode(true), MemorySearchMode::Semantic);
-}
-
-#[test]
-fn memory_search_falls_back_to_substring_when_disabled() {
-    assert_eq!(memory_search_mode(false), MemorySearchMode::Substring);
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
 }
 
 #[test]
@@ -39,23 +33,14 @@ fn search_accepts_answer_type() {
 }
 
 #[test]
-fn memory_write_accepts_no_project_scope_when_guidance_only() {
-    let cli = Cli::parse_from(["claude-memory", "memory-write", "remember this"]);
-    let Command::MemoryWrite { text, project } = cli.command else {
-        panic!("expected memory-write command");
-    };
-
-    assert_eq!(text, "remember this");
-    assert_eq!(project, None);
-}
-
-#[test]
-fn manual_memory_write_guidance_points_to_docs_local() {
-    let guidance = claude_memory::memory_unit::manual_memory_write_guidance();
-
-    assert!(guidance.contains("disabled"));
-    assert!(guidance.contains("docs/local/memory.md"));
-    assert!(guidance.contains("/home/osso/AgentConfig/rules"));
+fn manual_memory_commands_are_retired() {
+    for command in ["memory-write", "memory-delete"] {
+        let error = match Cli::try_parse_from(["claude-memory", command]) {
+            Ok(_) => panic!("{command} should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
 }
 
 #[test]

@@ -7,7 +7,6 @@ use claude_memory::extract::HistoryType;
 use claude_memory::graph;
 use claude_memory::index::{COLLECTION_SESSION_HISTORY, history_filter};
 use claude_memory::llm::{self, RawResult};
-use claude_memory::memory_unit::manual_memory_write_guidance;
 use claude_memory::qdrant_hybrid::{BM25_MODEL, ensure_hybrid_collection};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{Document, Fusion, PrefetchQueryBuilder, Query, QueryPointsBuilder};
@@ -52,8 +51,6 @@ async fn get_qdrant() -> Result<&'static Qdrant> {
             log("get_qdrant: client built, ensuring collections");
             ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
             log("get_qdrant: session-history collection ok");
-            claude_memory::memory_unit::ensure_memory_units_collection(&client).await?;
-            log("get_qdrant: memory-units collection ok");
             Ok(client)
         })
         .await;
@@ -129,17 +126,6 @@ impl MemoryService {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct MemoryWriteParams {
-    content: String,
-    #[schemars(description = "Category: correction, preference, context, learning, decision")]
-    category: Option<String>,
-    #[schemars(
-        description = "Project slug, or __global__ for memories that apply everywhere. Manual writes are disabled and this is kept for compatibility."
-    )]
-    project: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchParams {
     query: String,
     #[schemars(description = "Maximum results (default: 5)")]
@@ -148,26 +134,8 @@ pub struct SearchParams {
     source: Option<String>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct MemoryListParams {
-    #[schemars(description = "Filter by category (exact match)")]
-    category: Option<String>,
-    #[schemars(description = "Filter by project (exact match)")]
-    project: Option<String>,
-}
-
 #[tool_router]
 impl MemoryService {
-    #[tool(
-        description = "Return guidance for manual memories. Storage is disabled; project-local durable context should be written to docs/local/memory.md."
-    )]
-    async fn memory_write(&self, Parameters(params): Parameters<MemoryWriteParams>) -> String {
-        match self.do_memory_write(params).await {
-            Ok(msg) => msg,
-            Err(e) => format!("Error: {}", e),
-        }
-    }
-
     #[tool(
         description = "Search user prompts and questions from session history. Use to find what was asked or discussed."
     )]
@@ -201,53 +169,9 @@ impl MemoryService {
             }
         }
     }
-
-    #[tool(
-        description = "List all memory entries matching exact filters. Returns full content, no truncation. Use for loading all memories of a specific category/project."
-    )]
-    async fn memory_list(&self, Parameters(params): Parameters<MemoryListParams>) -> String {
-        log("tool: memory_list called");
-        match self.do_memory_list(params).await {
-            Ok(r) => {
-                log("tool: memory_list ok");
-                r
-            }
-            Err(e) => {
-                log(&format!("tool: memory_list error: {e}"));
-                format!("Error: {e}")
-            }
-        }
-    }
 }
 
 impl MemoryService {
-    async fn do_memory_write(&self, params: MemoryWriteParams) -> Result<String> {
-        let MemoryWriteParams {
-            content,
-            category,
-            project,
-        } = params;
-        log(&format!(
-            "memory_write disabled; content_bytes={}, category={:?}, project={:?}",
-            content.len(),
-            category,
-            project
-        ));
-        Ok(manual_memory_write_guidance().to_string())
-    }
-
-    async fn do_memory_list(&self, params: MemoryListParams) -> Result<String> {
-        let entries = claude_memory::memory_unit::list_manual_entries(
-            params.category.as_deref(),
-            params.project.as_deref(),
-        )
-        .await?;
-        if entries.is_empty() {
-            return Ok("No entries found.".to_string());
-        }
-        Ok(format_entries(&entries))
-    }
-
     async fn do_search(&self, params: SearchParams, history_type: HistoryType) -> Result<String> {
         log_search_request(history_type, &params.query);
         let client = get_qdrant().await?;
@@ -423,43 +347,13 @@ async fn enrich_with_graph_when_enabled(query: &str, graph_enabled: bool) -> Vec
     graph::query_related(&entities).unwrap_or_default()
 }
 
-fn format_entries(entries: &[(String, String, String)]) -> String {
-    const MAX_BYTES: usize = 50_000;
-    let total = entries.len();
-    let mut output = format!("{total} entries found.\n\n");
-    for (index, (category, project, text)) in entries.iter().enumerate() {
-        let entry = format_entry(index, category, project, text);
-        if output.len() + entry.len() > MAX_BYTES {
-            output.push_str(&format!(
-                "[truncated at 50KB — showing {index}/{total} entries]\n"
-            ));
-            return output;
-        }
-        output.push_str(&entry);
-    }
-    output
-}
-
-fn format_entry(i: usize, category: &str, project: &str, text: &str) -> String {
-    let mut entry = format!("{}.", i + 1);
-    if !category.is_empty() {
-        entry.push_str(&format!(" [{}]", category));
-    }
-    if !project.is_empty() {
-        entry.push_str(&format!(" ({})", project));
-    }
-    entry.push('\n');
-    entry.push_str(text);
-    entry.push_str("\n\n");
-    entry
-}
-
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MemoryService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Claude memory MCP server - search semantic memories across sessions; manual memory_write storage is disabled and returns docs/local guidance".into(),
+                "Claude memory MCP server - search prompts and answers across session history"
+                    .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
@@ -486,20 +380,27 @@ mod tests {
         assert!(related.is_empty());
     }
 
-    #[tokio::test]
-    async fn mcp_memory_write_returns_guidance_without_storage() {
-        let service = MemoryService::new();
-        let response = service
-            .do_memory_write(MemoryWriteParams {
-                content: "Remember this project-local detail.".to_string(),
-                category: Some("context".to_string()),
-                project: Some("claude-memory".to_string()),
-            })
-            .await
-            .unwrap();
+    #[test]
+    fn mcp_server_instructions_describe_history_search_only() {
+        let instructions = MemoryService::new().get_info().instructions.unwrap();
 
-        assert!(response.contains("Manual memory writes are disabled"));
-        assert!(response.contains("Do not store this in Qdrant"));
-        assert!(response.contains("docs/local/memory.md"));
+        assert_eq!(
+            instructions,
+            "Claude memory MCP server - search prompts and answers across session history"
+        );
+    }
+
+    #[test]
+    fn mcp_exposes_only_history_search_tools() {
+        let names: std::collections::BTreeSet<String> = MemoryService::tool_router()
+            .map
+            .keys()
+            .map(ToString::to_string)
+            .collect();
+
+        assert_eq!(
+            names,
+            ["answer_search".to_string(), "prompt_search".to_string()].into()
+        );
     }
 }

@@ -17,8 +17,7 @@ Manual CLI invocation + Claude Code hooks:
 # Index active and archived Claude transcript chunks
 claude-memory index
 
-# Search
-claude-memory search "query"
+# Search prompt/answer history (--type is required)
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
 

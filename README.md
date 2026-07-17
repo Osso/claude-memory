@@ -85,9 +85,9 @@ Produces four binaries:
 claude-memory index              # Index active and archived transcript chunks
 claude-memory index --fresh      # Re-index transcript chunks from scratch
 claude-memory index-file <path>  # Index one conversation file (prompts + answers)
-claude-memory search <q>                 # Search memories by default
 claude-memory search --type prompts <q>  # Search the prompt history view
 claude-memory search --type answers <q>  # Search the answer history view
+# --type is required; valid values are prompts and answers
 claude-memory kb-page-index build        # Build the persistent KB PageIndex
 claude-memory kb-page-index query <q>    # Query KB notes through PageIndex
 claude-memory transcript-page-index build     # Build transcript PageIndex trees
@@ -166,14 +166,12 @@ Benchmarks for the current implementation are recorded in
 
 ## MCP tools
 
-The MCP server exposes four tools:
+The MCP server exposes two tools:
 
 | Tool | Description |
 |------|-------------|
-| `memory_write` | Disabled for storage; returns guidance to write project memories under `docs/local/` |
 | `prompt_search` | Search user prompts and questions from session history |
 | `answer_search` | Search assistant responses and solutions from session history |
-| `memory_list` | List all memories matching category/project filters |
 
 ### Claude Code integration
 
@@ -238,10 +236,11 @@ Short version:
 
 - `claude-memory enrich` combines memory-unit hints, deterministic KB PageIndex
   context, and optional graph reads.
-- CLI `search <query>` targets memory units by default.
-- CLI `search --type prompts|answers` and MCP `prompt_search` / `answer_search`
-  query filtered views of the single `claude-session-history` collection when
-  semantic search is enabled.
+- CLI `search` requires `--type prompts|answers` and queries the corresponding
+  filtered view of the single `claude-session-history` collection when semantic
+  search is enabled.
+- MCP exposes only `prompt_search` and `answer_search`, which query the same
+  filtered views.
 - KB PageIndex is the exact Markdown retrieval surface.
 - Transcript PageIndex is CLI-only source inspection and is not injected into
   prompts by default.

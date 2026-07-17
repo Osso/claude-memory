@@ -11,39 +11,32 @@ Memory units are compact, durable preloads stored separately from raw prompt and
 - [ ] Deduplicate similar memory units at write time.
 - [ ] Merge duplicate sightings by appending to `seen_in_sessions` instead of inserting another point.
 
-### Manual memory write guidance
+### Manual memory location
 
-- [x] MCP `memory_write` returns guidance and does not write Qdrant memory units.
-- [x] CLI `memory-write` returns guidance and does not write Qdrant memory units.
 - [x] Manual project memories are written to `docs/local/memory.md`.
 - [x] Cross-project agent behavior is written to `/home/osso/AgentConfig/rules`.
-- [x] Empty manual memory text is rejected.
 
-### Listing, filtering, and deletion
+### Stored memory metadata
 
 - [x] Stored memory listing reads the source from payload.
-- [x] Manual memory filters match exact category and project values.
-- [ ] Memory listing supports category and project filters.
-- [ ] Memory deletion removes a memory unit by numeric point ID.
 - [ ] Listed memory units include seen count and source metadata.
 
 ### Retrieval and enrich
 
 - [x] Search-result conversion uses payload source and source session.
 - [ ] Semantic memory-unit search is gated by search configuration.
-- [x] When semantic search is disabled, CLI memory search falls back to substring listing.
 - [ ] Enrich includes memory-unit results above the configured relevance floor.
 - [ ] Enrich labels memory-unit results as possibly useful hints, not authoritative facts.
 
 ## How it works
 
-- [docs/wiki/systems/memory-units.md](../wiki/systems/memory-units.md) describes schema, collection lifecycle, dedup-at-write, manual writes, listing, and enrich retrieval.
+- [docs/wiki/systems/memory-units.md](../wiki/systems/memory-units.md) describes schema, collection lifecycle, dedup-at-write, manual memory locations, listing, and enrich retrieval.
 
 ## Implementation inventory
 
 - `src/memory_unit.rs` — defines the memory-unit schema, collection, write deduplication, search, listing, filtering, and deletion.
-- `src/main.rs` — exposes CLI memory search, memory write, and memory delete commands.
-- `src/bin/mcp.rs` — exposes MCP `memory_write` guidance and `memory_list`.
+- `src/main.rs` — dispatches analysis, backfill, and session-history CLI search commands.
+- `src/bin/mcp.rs` — exposes MCP `prompt_search` and `answer_search` tools.
 - `src/analyze.rs` — writes validated friction-derived memory units.
 - `src/kb_search.rs` — remains the KB PageIndex retrieval path; it does not write memory units.
 - `src/enrich_cmd.rs` — retrieves memory units for prompt enrichment.
@@ -55,15 +48,9 @@ Memory units are compact, durable preloads stored separately from raw prompt and
   - `memory_unit_has_existing_source_vocabulary_field`
   - `stored_memory_reads_source_from_payload`
   - `search_result_uses_payload_source`
-  - `manual_memory_write_guidance_disables_qdrant_path`
   - `manual_memory_filter_matches_category_and_project`
 - `src/bin/mcp.rs`
-  - `mcp_memory_write_returns_guidance_without_storage`
 - `src/main_tests.rs`
-  - `memory_write_accepts_no_project_scope_when_guidance_only`
-  - `manual_memory_write_guidance_points_to_docs_local`
-  - `memory_search_uses_semantic_query_when_enabled`
-  - `memory_search_falls_back_to_substring_when_disabled`
 
 ## Known gaps (current cycle)
 

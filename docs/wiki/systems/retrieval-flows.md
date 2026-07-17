@@ -60,17 +60,14 @@ Enrich never injects Transcript PageIndex results by default.
 
 Purpose: manual lookup from the terminal.
 
-`claude-memory search <query>` defaults to memory units:
+CLI search requires an explicit history target:
 
-- With `[search].enabled = true`, it calls `memory_unit::list(..., query=...)`
-  for semantic vector lookup.
-- With search disabled, it falls back to substring filtering over stored memory
-  units.
+- `claude-memory search --type prompts <query>` searches the prompt view.
+- `claude-memory search --type answers <query>` searches the answer view.
 
-`claude-memory search --type prompts <query>` searches the prompt view of
-session history. `--type answers` searches the answer view. Both paths use the
-shared `claude-session-history` collection with required history-type filters
-and require `[search].enabled = true`; if disabled they return no results.
+Both paths use the shared `claude-session-history` collection with required
+history-type filters and require `[search].enabled = true`; if disabled they
+return no results.
 
 ## MCP Search Tools
 
@@ -80,8 +77,8 @@ Tools in `src/bin/mcp.rs`:
 
 - `prompt_search`: user prompts and questions from session history.
 - `answer_search`: assistant responses and solutions from session history.
-- `memory_list`: exact category/project listing of memory entries.
-- `memory_write`: storage disabled; returns guidance to write Markdown memory.
+
+These are the only MCP tools exposed by the server.
 
 `prompt_search` and `answer_search` flow:
 
@@ -132,8 +129,8 @@ Durable memory units come from analysis paths, not from search:
 - The former `ingest-kb` KB-to-memory-unit path is retired. KB Markdown remains
   available through KB PageIndex; no active summary producer or summary search
   path is part of retrieval.
-- Manual `memory_write` storage is disabled; project-local durable context should
-  be written as editable Markdown under `docs/local/memory.md`.
+- Project-local durable context should be written as editable Markdown under
+  `docs/local/memory.md`.
 
 ## Graph Path
 
@@ -151,7 +148,6 @@ The graph is optional and disabled by default.
 | Need | Surface |
 | --- | --- |
 | Automatic prompt hints | `claude-memory enrich` hook |
-| Find durable memory units | `claude-memory search <query>` |
 | Find past user prompts/discussions | `prompt_search` or `search --type prompts` |
 | Find prior assistant solutions | `answer_search` or `search --type answers` |
 | Exact KB note context | `kb-page-index` |
