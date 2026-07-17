@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
@@ -25,6 +26,12 @@ pub const DEFAULT_KB_DIR: &str = "/syncthing/Sync/KB";
 const INDEX_FILE_NAME: &str = "index.json";
 const NODES_FILE_NAME: &str = "nodes.tsv";
 const MANIFEST_FILE_NAME: &str = "manifest.tsv";
+const HEADING_WEIGHT: usize = 600;
+const PATH_WEIGHT: usize = 400;
+const BODY_WEIGHT: usize = 100;
+const TERM_FREQUENCY_CAP: usize = 3;
+const PHRASE_BONUS: usize = 1_000;
+const SCORE_SCALE: usize = 100;
 const MIN_SCORE: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +194,158 @@ fn read_stable_markdown(kb_dir: &Path, path: &Path) -> Result<(String, TextManif
         );
     }
     Ok((markdown, after))
+}
+
+pub fn search_text_index(
+    kb_dir: &Path,
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<KbSearchResult>> {
+    validate_text_manifest(kb_dir, index_dir)?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let phrase_tokens = text_index_tokens(query);
+    if phrase_tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scoring_terms = unique_tokens(phrase_tokens.clone());
+    let mut results: Vec<KbSearchResult> = load_text_nodes(index_dir)?
+        .into_iter()
+        .filter_map(|node| score_text_node(node, &scoring_terms, &phrase_tokens))
+        .collect();
+    results.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.heading.cmp(&right.heading))
+            .then_with(|| left.node_id.cmp(&right.node_id))
+    });
+    results.truncate(limit);
+    Ok(results)
+}
+
+fn score_text_node(
+    node: TextIndexNode,
+    scoring_terms: &[String],
+    phrase_tokens: &[String],
+) -> Option<KbSearchResult> {
+    let heading_tokens = text_index_tokens(&node.heading_path);
+    let path_tokens = text_index_tokens(&node.path);
+    let body_tokens = text_index_tokens(&node.normalized_body);
+    let structural_frequency =
+        structural_term_frequency(scoring_terms, &heading_tokens, &path_tokens);
+    let body_frequency = body_term_frequency(scoring_terms, &body_tokens);
+    if structural_frequency == 0 && body_frequency == 0 {
+        return None;
+    }
+    let length_divisor = integer_sqrt(body_tokens.len().max(1)).max(1);
+    let phrase_bonus =
+        usize::from(contains_token_sequence(&body_tokens, phrase_tokens)) * PHRASE_BONUS;
+    let score = structural_frequency * SCORE_SCALE
+        + body_frequency * SCORE_SCALE / length_divisor
+        + phrase_bonus;
+    let locator = format!("{}-{}", node.line_start, node.line_end);
+    let title = node
+        .heading_path
+        .rsplit(" > ")
+        .next()
+        .unwrap_or(&node.heading_path)
+        .to_string();
+    let command = format!(
+        "claude-memory kb-page-index content {} {}",
+        node.path, locator
+    );
+    Some(KbSearchResult {
+        doc_id: node.path.clone(),
+        path: node.path,
+        heading: node.heading_path,
+        text: node.normalized_body,
+        score,
+        node_id: locator,
+        title,
+        reason: format!("matched deterministic text index; score {score}"),
+        content_command: command.clone(),
+        next_content_command: command,
+    })
+}
+
+fn text_index_tokens(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for character in text.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            current.push(character);
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn unique_tokens(tokens: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    tokens
+        .into_iter()
+        .filter(|token| seen.insert(token.clone()))
+        .collect()
+}
+
+fn structural_term_frequency(
+    query_tokens: &[String],
+    heading_tokens: &[String],
+    path_tokens: &[String],
+) -> usize {
+    query_tokens
+        .iter()
+        .map(|term| {
+            capped_frequency(heading_tokens, term) * HEADING_WEIGHT
+                + capped_frequency(path_tokens, term) * PATH_WEIGHT
+        })
+        .sum()
+}
+
+fn body_term_frequency(query_tokens: &[String], body_tokens: &[String]) -> usize {
+    query_tokens
+        .iter()
+        .map(|term| capped_frequency(body_tokens, term) * BODY_WEIGHT)
+        .sum()
+}
+
+fn contains_token_sequence(tokens: &[String], sequence: &[String]) -> bool {
+    !sequence.is_empty()
+        && tokens
+            .windows(sequence.len())
+            .any(|window| window == sequence)
+}
+
+fn capped_frequency(tokens: &[String], term: &str) -> usize {
+    tokens
+        .iter()
+        .filter(|token| token.as_str() == term)
+        .count()
+        .min(TERM_FREQUENCY_CAP)
+}
+
+fn integer_sqrt(value: usize) -> usize {
+    let mut low = 0;
+    let mut high = value;
+    let mut root = 0;
+    while low <= high {
+        let middle = low + (high - low) / 2;
+        if middle == 0 || middle <= value / middle {
+            root = middle;
+            low = middle.saturating_add(1);
+        } else {
+            high = middle - 1;
+        }
+    }
+    root
 }
 
 fn manifest_entry(kb_dir: &Path, path: &Path) -> Result<TextManifestEntry> {
