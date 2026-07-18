@@ -182,6 +182,49 @@ fn index_file_extracts_claude_codex_and_pi_prompt_answer_records() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn index_file_marks_codex_archived_sessions_as_archive_source() {
+    let root =
+        std::env::temp_dir().join(format!("index-file-codex-archive-{}", uuid::Uuid::new_v4()));
+    let archive = root.join(".codex/archived_sessions");
+    std::fs::create_dir_all(&archive).unwrap();
+    let path = archive.join("codex-archive.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Archived Codex prompt"}]}}
+"#,
+    )
+    .unwrap();
+
+    let prompts = extract_single_file_history(&path, HistoryType::Prompt).unwrap();
+
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].source, "archive");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn index_file_rejects_headerless_pi_runtime_message_jsonl() {
+    let root = std::env::temp_dir().join(format!("index-file-pi-runtime-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("runtime-message.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"type":"message","id":"runtime","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"not a session"}]}}
+"#,
+    )
+    .unwrap();
+
+    let error = extract_single_file_history(&path, HistoryType::Prompt).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Unsupported JSONL session format")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 // --- filter_new ---
 
 #[test]

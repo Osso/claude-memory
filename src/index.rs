@@ -509,9 +509,7 @@ fn read_index_file_format(path: &Path) -> Result<IndexFileFormat> {
         };
         match value.get("type").and_then(serde_json::Value::as_str) {
             Some("response_item") => return Ok(IndexFileFormat::Codex),
-            Some("session" | "message" | "user" | "assistant") => {
-                return Ok(IndexFileFormat::ClaudePi);
-            }
+            Some("session" | "user" | "assistant") => return Ok(IndexFileFormat::ClaudePi),
             _ => {}
         }
     }
@@ -523,11 +521,20 @@ pub(crate) fn extract_single_file_history(
     history_type: HistoryType,
 ) -> Result<Vec<IndexedChunk>> {
     let base_path = path.parent().unwrap_or(path);
-    match read_index_file_format(path)? {
-        IndexFileFormat::ClaudePi => extract_claude_jsonl(path, base_path, history_type),
-        IndexFileFormat::ClaudeZst => extract_claude_zst(path, history_type),
-        IndexFileFormat::Codex => extract_codex_jsonl_history(path, base_path, history_type),
+    let mut chunks = match read_index_file_format(path)? {
+        IndexFileFormat::ClaudePi => extract_claude_jsonl(path, base_path, history_type)?,
+        IndexFileFormat::ClaudeZst => extract_claude_zst(path, history_type)?,
+        IndexFileFormat::Codex => extract_codex_jsonl_history(path, base_path, history_type)?,
+    };
+    if path
+        .components()
+        .any(|component| component.as_os_str() == "archived_sessions")
+    {
+        for chunk in &mut chunks {
+            chunk.source = "archive".to_string();
+        }
     }
+    Ok(chunks)
 }
 
 /// Index a single conversation file (both prompts and answers).
