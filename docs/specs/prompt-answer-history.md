@@ -70,10 +70,6 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - `src/extract.rs`
   - user-message and assistant-message extraction tests in the module test suite.
 
-## Known gaps (current cycle)
-
-- [ ] Add an integration test proving one fixture session writes extracted prompt and answer chunks to the shared collection with distinct `type` values.
-
 ## Out of scope
 
 - Legacy memory-unit runtime storage and retrieval; those paths are retired in [memory-units.md](memory-units.md).
