@@ -21,16 +21,28 @@ pub(crate) fn default_index_source_paths(home: &Path, config: &Path) -> IndexSou
     }
 }
 
-pub async fn run_index_cmd(
-    archive: Option<PathBuf>,
-    projects: Option<PathBuf>,
-    codex_sessions: Option<PathBuf>,
-    codex_archive: Option<PathBuf>,
-    pi_sessions: Option<PathBuf>,
-    batch_size: usize,
-    fresh: bool,
-    delay_ms: u64,
-) -> Result<()> {
+pub struct IndexCommandOptions {
+    pub archive: Option<PathBuf>,
+    pub projects: Option<PathBuf>,
+    pub codex_sessions: Option<PathBuf>,
+    pub codex_archive: Option<PathBuf>,
+    pub pi_sessions: Option<PathBuf>,
+    pub batch_size: usize,
+    pub fresh: bool,
+    pub delay_ms: u64,
+}
+
+pub async fn run_index_cmd(options: IndexCommandOptions) -> Result<()> {
+    let IndexCommandOptions {
+        archive,
+        projects,
+        codex_sessions,
+        codex_archive,
+        pi_sessions,
+        batch_size,
+        fresh,
+        delay_ms,
+    } = options;
     let home = dirs::home_dir().context("no home directory")?;
     let config = dirs::config_dir().context("no config directory")?;
     let defaults = default_index_source_paths(&home, &config);

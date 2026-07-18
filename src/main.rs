@@ -9,10 +9,10 @@ mod indexing_cmds;
 mod kb_page_index_cli;
 mod transcript_page_index_cli;
 use indexing_cmds::{
-    run_index_cmd, run_index_file_cmd, run_kb_page_index_build, run_kb_page_index_content,
-    run_kb_page_index_query, run_page_index, run_transcript_page_index_content,
-    run_transcript_page_index_document, run_transcript_page_index_query,
-    run_transcript_page_index_structure,
+    IndexCommandOptions, run_index_cmd, run_index_file_cmd, run_kb_page_index_build,
+    run_kb_page_index_content, run_kb_page_index_query, run_page_index,
+    run_transcript_page_index_content, run_transcript_page_index_document,
+    run_transcript_page_index_query, run_transcript_page_index_structure,
 };
 use kb_page_index_cli::KbPageIndexCommand;
 use transcript_page_index_cli::TranscriptPageIndexCommand;
@@ -240,7 +240,7 @@ async fn run_indexing_command(command: Command) -> Result<()> {
             fresh,
             delay_ms,
         } => {
-            run_index_cmd(
+            run_index_cmd(IndexCommandOptions {
                 archive,
                 projects,
                 codex_sessions,
@@ -249,7 +249,7 @@ async fn run_indexing_command(command: Command) -> Result<()> {
                 batch_size,
                 fresh,
                 delay_ms,
-            )
+            })
             .await
         }
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
