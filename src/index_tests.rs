@@ -9,7 +9,8 @@ use crate::chunk::Chunk;
 use crate::extract::{HistoryType, IndexedChunk};
 use crate::index::{
     IndexFileFormat, IndexFileSource, IndexSources, QDRANT_URL, build_search_results,
-    collect_index_files, filter_new, get_string, history_filter, history_hash,
+    collect_index_files, extract_single_file_history, filter_new, get_string, history_filter,
+    history_hash,
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
@@ -121,6 +122,53 @@ fn index_sources_discover_claude_codex_and_pi_sessions() {
             (IndexFileFormat::Codex, IndexFileSource::Archive),
         ])
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn index_file_extracts_claude_codex_and_pi_prompt_answer_records() {
+    let root = std::env::temp_dir().join(format!("index-file-formats-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let claude = root.join("claude.jsonl");
+    let codex = root.join("codex.jsonl");
+    let pi = root.join("pi.jsonl");
+    std::fs::write(
+        &claude,
+        r#"{"type":"user","message":{"content":"Claude prompt"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Claude answer"}]}}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &codex,
+        r#"{"timestamp":"2026-07-18T00:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex prompt"}]}}
+{"timestamp":"2026-07-18T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex answer"}]}}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &pi,
+        r#"{"type":"session","version":3,"id":"pi-fixture","timestamp":"2026-07-18T00:00:00Z","cwd":"/tmp"}
+{"type":"message","id":"user0001","parentId":null,"timestamp":"2026-07-18T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Pi prompt"}]}}
+{"type":"message","id":"asst0001","parentId":"user0001","timestamp":"2026-07-18T00:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"skip"},{"type":"text","text":"Pi answer"},{"type":"toolCall","id":"call-1","name":"read","arguments":{}}]}}
+"#,
+    )
+    .unwrap();
+
+    for (path, prompt, answer) in [
+        (&claude, "User: Claude prompt", "Assistant: Claude answer"),
+        (&codex, "User: Codex prompt", "Assistant: Codex answer"),
+        (&pi, "User: Pi prompt", "Assistant: Pi answer"),
+    ] {
+        let prompts = extract_single_file_history(path, HistoryType::Prompt).unwrap();
+        let answers = extract_single_file_history(path, HistoryType::Answer).unwrap();
+        assert_eq!(prompts.len(), 1, "prompt count for {}", path.display());
+        assert_eq!(answers.len(), 1, "answer count for {}", path.display());
+        assert_eq!(prompts[0].history_type, HistoryType::Prompt);
+        assert_eq!(answers[0].history_type, HistoryType::Answer);
+        assert_eq!(prompts[0].chunk.text, prompt);
+        assert_eq!(answers[0].chunk.text, answer);
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
@@ -474,6 +475,44 @@ async fn index_new_chunks(state: &IndexState, chunks: &[IndexedChunk]) -> Result
     Ok(indexed)
 }
 
+fn read_index_file_format(path: &Path) -> Result<IndexFileFormat> {
+    if is_jsonl_zst(path) {
+        return Ok(IndexFileFormat::ClaudeZst);
+    }
+    if !is_jsonl(path) {
+        anyhow::bail!("Unsupported file type: {}", path.display());
+    }
+
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    for line in BufReader::new(file).lines() {
+        let line = line.with_context(|| format!("failed to read {}", path.display()))?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match value.get("type").and_then(serde_json::Value::as_str) {
+            Some("response_item") => return Ok(IndexFileFormat::Codex),
+            Some("session" | "message" | "user" | "assistant") => {
+                return Ok(IndexFileFormat::ClaudePi);
+            }
+            _ => {}
+        }
+    }
+    anyhow::bail!("Unsupported JSONL session format: {}", path.display())
+}
+
+pub(crate) fn extract_single_file_history(
+    path: &Path,
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    let base_path = path.parent().unwrap_or(path);
+    match read_index_file_format(path)? {
+        IndexFileFormat::ClaudePi => extract_claude_jsonl(path, base_path, history_type),
+        IndexFileFormat::ClaudeZst => extract_claude_zst(path, history_type),
+        IndexFileFormat::Codex => extract_codex_jsonl_history(path, base_path, history_type),
+    }
+}
+
 /// Index a single conversation file (both prompts and answers).
 pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
     let client = Qdrant::from_url(QDRANT_URL)
@@ -500,14 +539,7 @@ async fn index_file_prompts(
     batch_size: usize,
     hashes: &HashSet<String>,
 ) -> Result<usize> {
-    let chunks = if path.to_string_lossy().ends_with(".jsonl.zst") {
-        extract_zst(path)?
-    } else if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-        let base = path.parent().unwrap_or(path);
-        extract_jsonl(path, base)?
-    } else {
-        anyhow::bail!("Unsupported file type: {}", path.display());
-    };
+    let chunks = extract_single_file_history(path, HistoryType::Prompt)?;
 
     let new_chunks = filter_new(&chunks, hashes);
     if new_chunks.is_empty() {
@@ -531,14 +563,7 @@ async fn index_file_answers(
     batch_size: usize,
     hashes: &HashSet<String>,
 ) -> Result<usize> {
-    let chunks = if path.to_string_lossy().ends_with(".jsonl.zst") {
-        extract_zst_answers(path)?
-    } else if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-        let base = path.parent().unwrap_or(path);
-        extract_jsonl_answers(path, base)?
-    } else {
-        return Ok(0);
-    };
+    let chunks = extract_single_file_history(path, HistoryType::Answer)?;
 
     let new_chunks = filter_new(&chunks, hashes);
     if new_chunks.is_empty() {
