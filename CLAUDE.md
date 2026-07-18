@@ -22,10 +22,13 @@ claude-memory enrich
 claude-memory stats
 ```
 
-`index` reads active `.jsonl` sessions and archived `.jsonl.zst` sessions only.
-Prompt and answer searches are filtered views over `claude-session-history`.
-`enrich` reads unified prompt/answer history and KB PageIndex results only.
-Transcript PageIndex remains CLI-only navigation and is not injected by default.
+SessionEnd automatically runs `claude-memory index-file <transcript_path>`.
+Manual `claude-memory index` is for backfill and recovery across active `.jsonl`
+sessions and archived `.jsonl.zst` sessions. Prompt and answer searches are
+filtered views over `claude-session-history`. UserPromptSubmit runs `enrich`
+only to retrieve existing prompt/answer and KB PageIndex context; it does not
+index. Transcript PageIndex remains CLI-only navigation and is not injected by
+default.
 Its query command is deterministic lexical-only; document, structure, and content
 remain explicit source-inspection commands.
 

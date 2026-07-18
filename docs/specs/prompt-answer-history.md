@@ -20,6 +20,9 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Index assistant messages from archived Claude `.jsonl.zst` files.
 - [x] Deduplicate existing chunks and repeated identical chunks within the same type/source.
 - [x] Index a single supported conversation file into the same prompt and answer views.
+- [x] Run `claude-memory index-file <transcript_path>` automatically from SessionEnd.
+- [x] Reserve manual `claude-memory index` for backfill and recovery.
+- [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
 ### CLI search
