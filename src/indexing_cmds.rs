@@ -2,17 +2,51 @@ use anyhow::{Context, Result};
 use claude_memory::{index, kb_search, page_index};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct IndexSourcePaths {
+    pub claude_projects: PathBuf,
+    pub claude_archive: PathBuf,
+    pub codex_sessions: PathBuf,
+    pub codex_archive: PathBuf,
+    pub pi_sessions: PathBuf,
+}
+
+pub(crate) fn default_index_source_paths(home: &Path, config: &Path) -> IndexSourcePaths {
+    IndexSourcePaths {
+        claude_projects: home.join(".claude/projects"),
+        claude_archive: home.join(".claude/archive"),
+        codex_sessions: home.join(".codex/sessions"),
+        codex_archive: home.join(".codex/archived_sessions"),
+        pi_sessions: config.join("pi/agent/sessions"),
+    }
+}
+
 pub async fn run_index_cmd(
     archive: Option<PathBuf>,
     projects: Option<PathBuf>,
+    codex_sessions: Option<PathBuf>,
+    codex_archive: Option<PathBuf>,
+    pi_sessions: Option<PathBuf>,
     batch_size: usize,
     fresh: bool,
     delay_ms: u64,
 ) -> Result<()> {
-    let home = dirs::home_dir().expect("no home directory");
-    let archive_dir = archive.unwrap_or_else(|| home.join(".claude/archive"));
-    let projects_dir = projects.unwrap_or_else(|| home.join(".claude/projects"));
-    index::run_index(&archive_dir, &projects_dir, batch_size, fresh, delay_ms).await
+    let home = dirs::home_dir().context("no home directory")?;
+    let config = dirs::config_dir().context("no config directory")?;
+    let defaults = default_index_source_paths(&home, &config);
+    let claude_projects = projects.unwrap_or(defaults.claude_projects);
+    let claude_archive = archive.unwrap_or(defaults.claude_archive);
+    let codex_sessions = codex_sessions.unwrap_or(defaults.codex_sessions);
+    let codex_archive = codex_archive.unwrap_or(defaults.codex_archive);
+    let pi_sessions = pi_sessions.unwrap_or(defaults.pi_sessions);
+    let sources = index::IndexSources {
+        claude_projects_dir: &claude_projects,
+        claude_archive_dir: &claude_archive,
+        codex_sessions_dir: &codex_sessions,
+        codex_archive_dir: &codex_archive,
+        pi_sessions_dir: &pi_sessions,
+    };
+    index::run_index_sources(&sources, batch_size, fresh, delay_ms).await
 }
 
 pub async fn run_index_file_cmd(path: &Path, batch_size: usize) -> Result<()> {

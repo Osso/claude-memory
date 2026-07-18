@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn index_defaults_cover_claude_codex_and_pi_sources() {
+    let paths = indexing_cmds::default_index_source_paths(
+        std::path::Path::new("/home/test"),
+        std::path::Path::new("/home/test/.config"),
+    );
+
+    assert_eq!(
+        paths.claude_projects,
+        PathBuf::from("/home/test/.claude/projects")
+    );
+    assert_eq!(
+        paths.claude_archive,
+        PathBuf::from("/home/test/.claude/archive")
+    );
+    assert_eq!(
+        paths.codex_sessions,
+        PathBuf::from("/home/test/.codex/sessions")
+    );
+    assert_eq!(
+        paths.codex_archive,
+        PathBuf::from("/home/test/.codex/archived_sessions")
+    );
+    assert_eq!(
+        paths.pi_sessions,
+        PathBuf::from("/home/test/.config/pi/agent/sessions")
+    );
+}
+
+#[test]
+fn index_accepts_claude_codex_and_pi_paths() {
+    let cli = Cli::parse_from([
+        "claude-memory",
+        "index",
+        "--projects",
+        "/tmp/claude/projects",
+        "--archive",
+        "/tmp/claude/archive",
+        "--codex-sessions",
+        "/tmp/codex/sessions",
+        "--codex-archive",
+        "/tmp/codex/archive",
+        "--pi-sessions",
+        "/tmp/pi/sessions",
+    ]);
+    let Command::Index {
+        projects,
+        archive,
+        codex_sessions,
+        codex_archive,
+        pi_sessions,
+        ..
+    } = cli.command
+    else {
+        panic!("expected index command");
+    };
+
+    assert_eq!(projects, Some(PathBuf::from("/tmp/claude/projects")));
+    assert_eq!(archive, Some(PathBuf::from("/tmp/claude/archive")));
+    assert_eq!(codex_sessions, Some(PathBuf::from("/tmp/codex/sessions")));
+    assert_eq!(codex_archive, Some(PathBuf::from("/tmp/codex/archive")));
+    assert_eq!(pi_sessions, Some(PathBuf::from("/tmp/pi/sessions")));
+}
+
+#[test]
 fn search_requires_prompt_or_answer_type() {
     let error = match Cli::try_parse_from(["claude-memory", "search", "ollama"]) {
         Ok(_) => panic!("search without --type should be rejected"),

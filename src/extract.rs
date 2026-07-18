@@ -225,6 +225,14 @@ pub fn extract_jsonl(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>>
     )
 }
 
+/// Extract Codex user messages from an uncompressed JSONL file.
+pub fn extract_codex_jsonl(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
+    let file = File::open(path).context("failed to open Codex JSONL")?;
+    let reader = BufReader::new(file);
+    let metadata = session_metadata(path, base_path);
+    extract_codex_chunks_from_reader(reader, Role::User, metadata, HistoryType::Prompt)
+}
+
 /// Extract user messages from a zstd-compressed JSONL file.
 pub fn extract_zst(path: &Path) -> Result<Vec<IndexedChunk>> {
     let file = File::open(path).context("failed to open ZST")?;
@@ -254,6 +262,14 @@ pub fn extract_jsonl_answers(path: &Path, base_path: &Path) -> Result<Vec<Indexe
     )
 }
 
+/// Extract Codex assistant responses from an uncompressed JSONL file.
+pub fn extract_codex_jsonl_answers(path: &Path, base_path: &Path) -> Result<Vec<IndexedChunk>> {
+    let file = File::open(path).context("failed to open Codex JSONL")?;
+    let reader = BufReader::new(file);
+    let metadata = session_metadata(path, base_path);
+    extract_codex_chunks_from_reader(reader, Role::Assistant, metadata, HistoryType::Answer)
+}
+
 /// Extract assistant responses from a zstd-compressed JSONL file.
 pub fn extract_zst_answers(path: &Path) -> Result<Vec<IndexedChunk>> {
     let file = File::open(path).context("failed to open ZST")?;
@@ -277,6 +293,91 @@ fn extract_user_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
 #[cfg(test)]
 fn extract_assistant_messages<R: Read>(reader: BufReader<R>) -> Result<Vec<String>> {
     collect_messages(reader, extract_assistant_message)
+}
+
+fn extract_codex_chunks_from_reader<R: Read>(
+    reader: BufReader<R>,
+    role: Role,
+    metadata: ChunkMetadata,
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    let texts = extract_codex_messages(reader, role)?;
+    Ok(build_indexed_chunks(
+        texts,
+        metadata,
+        history_type,
+        "session",
+    ))
+}
+
+fn extract_codex_messages<R: Read>(reader: BufReader<R>, role: Role) -> Result<Vec<String>> {
+    Ok(reader
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| parse_codex_message(&line, &role))
+        .collect())
+}
+
+fn parse_codex_message(line: &str, expected_role: &Role) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let payload = codex_message_payload(&value)?;
+    let role = role_from_str(payload.get("role")?.as_str())?;
+    if &role != expected_role {
+        return None;
+    }
+
+    let text = codex_message_text(payload, &role)?;
+    if role == Role::User && is_codex_context_prelude(&text) {
+        return None;
+    }
+
+    let label = match role {
+        Role::User => "User",
+        Role::Assistant => "Assistant",
+    };
+    Some(format!("{label}: {text}"))
+}
+
+fn codex_message_payload(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    if value.get("type")?.as_str()? != "response_item" {
+        return None;
+    }
+
+    let payload = value.get("payload")?;
+    (payload.get("type")?.as_str()? == "message").then_some(payload)
+}
+
+fn codex_message_text(payload: &serde_json::Value, role: &Role) -> Option<String> {
+    let text = payload
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter_map(|block| extract_codex_text_block(block, role))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn extract_codex_text_block(block: &serde_json::Value, role: &Role) -> Option<String> {
+    let expected_type = match role {
+        Role::User => "input_text",
+        Role::Assistant => "output_text",
+    };
+    if block.get("type")?.as_str()? != expected_type {
+        return None;
+    }
+
+    let text = block.get("text")?.as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+fn is_codex_context_prelude(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("# AGENTS.md instructions")
+        || trimmed.starts_with("<environment_context>")
+        || trimmed.starts_with("<collaboration_mode>")
+        || trimmed.starts_with("<skills_instructions>")
+        || trimmed.starts_with("<permissions instructions>")
 }
 
 fn extract_chunks_from_reader<R, F>(
@@ -565,5 +666,23 @@ not json at all
 "#;
         let result = extract_assistant_messages(make_reader(data)).unwrap();
         assert_eq!(result, vec!["Assistant: Pi answer"]);
+    }
+
+    #[test]
+    fn codex_messages_extract_prompt_and_skip_context_prelude() {
+        let data = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>ignored</environment_context>"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex prompt"}]}}
+"#;
+        let result = extract_codex_messages(make_reader(data), Role::User).unwrap();
+        assert_eq!(result, vec!["User: Codex prompt"]);
+    }
+
+    #[test]
+    fn codex_messages_extract_answer_and_skip_function_calls() {
+        let data = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex answer"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"read","arguments":"{}"}}
+"#;
+        let result = extract_codex_messages(make_reader(data), Role::Assistant).unwrap();
+        assert_eq!(result, vec!["Assistant: Codex answer"]);
     }
 }

@@ -8,7 +8,8 @@ use qdrant_client::qdrant::{
 use crate::chunk::Chunk;
 use crate::extract::{HistoryType, IndexedChunk};
 use crate::index::{
-    QDRANT_URL, build_search_results, filter_new, get_string, history_filter, history_hash,
+    IndexFileFormat, IndexFileSource, IndexSources, QDRANT_URL, build_search_results,
+    collect_index_files, filter_new, get_string, history_filter, history_hash,
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
@@ -56,6 +57,71 @@ fn make_scored_point(
         shard_key: None,
         order_value: None,
     }
+}
+
+#[test]
+fn index_sources_discover_claude_codex_and_pi_sessions() {
+    let root = std::env::temp_dir().join(format!("index-sources-{}", uuid::Uuid::new_v4()));
+    let claude_projects = root.join("claude/projects/project");
+    let claude_archive = root.join("claude/archive");
+    let codex_sessions = root.join("codex/sessions/2026/07/18");
+    let codex_archive = root.join("codex/archived_sessions");
+    let pi_sessions = root.join("pi/sessions/project");
+    for directory in [
+        &claude_projects,
+        &claude_archive,
+        &codex_sessions,
+        &codex_archive,
+        &pi_sessions,
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(claude_projects.join("claude.jsonl"), "").unwrap();
+    std::fs::write(claude_archive.join("claude.jsonl.zst"), "").unwrap();
+    std::fs::write(codex_sessions.join("codex.jsonl"), "").unwrap();
+    std::fs::write(codex_archive.join("codex-archive.jsonl"), "").unwrap();
+    std::fs::write(pi_sessions.join("pi-active.jsonl"), "").unwrap();
+    let archived_pi_dir = pi_sessions.join("archived-project");
+    std::fs::create_dir_all(&archived_pi_dir).unwrap();
+    std::fs::write(archived_pi_dir.join("pi-archived.jsonl"), "").unwrap();
+
+    let sources = IndexSources {
+        claude_projects_dir: &root.join("claude/projects"),
+        claude_archive_dir: &claude_archive,
+        codex_sessions_dir: &root.join("codex/sessions"),
+        codex_archive_dir: &codex_archive,
+        pi_sessions_dir: &root.join("pi/sessions"),
+    };
+    let files = collect_index_files(&sources);
+    let observed: HashSet<_> = files
+        .iter()
+        .map(|file| (file.format, file.source))
+        .collect();
+
+    let pi_paths: HashSet<_> = files
+        .iter()
+        .filter(|file| file.path.starts_with(root.join("pi/sessions")))
+        .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+
+    assert_eq!(files.len(), 6);
+    assert_eq!(
+        pi_paths,
+        HashSet::from([
+            "pi-active.jsonl".to_string(),
+            "pi-archived.jsonl".to_string(),
+        ])
+    );
+    assert_eq!(
+        observed,
+        HashSet::from([
+            (IndexFileFormat::ClaudePi, IndexFileSource::Session),
+            (IndexFileFormat::ClaudeZst, IndexFileSource::Archive),
+            (IndexFileFormat::Codex, IndexFileSource::Session),
+            (IndexFileFormat::Codex, IndexFileSource::Archive),
+        ])
+    );
+    let _ = std::fs::remove_dir_all(root);
 }
 
 // --- filter_new ---

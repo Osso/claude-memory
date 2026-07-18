@@ -39,6 +39,18 @@ enum Command {
         #[arg(long)]
         projects: Option<PathBuf>,
 
+        /// Codex sessions directory (default: ~/.codex/sessions)
+        #[arg(long)]
+        codex_sessions: Option<PathBuf>,
+
+        /// Codex archived sessions directory (default: ~/.codex/archived_sessions)
+        #[arg(long)]
+        codex_archive: Option<PathBuf>,
+
+        /// Pi sessions directory (default: ~/.config/pi/agent/sessions)
+        #[arg(long)]
+        pi_sessions: Option<PathBuf>,
+
         /// Batch size for embedding
         #[arg(long, default_value = "10")]
         batch_size: usize,
@@ -215,10 +227,25 @@ async fn run_indexing_command(command: Command) -> Result<()> {
         Command::Index {
             archive,
             projects,
+            codex_sessions,
+            codex_archive,
+            pi_sessions,
             batch_size,
             fresh,
             delay_ms,
-        } => run_index_cmd(archive, projects, batch_size, fresh, delay_ms).await,
+        } => {
+            run_index_cmd(
+                archive,
+                projects,
+                codex_sessions,
+                codex_archive,
+                pi_sessions,
+                batch_size,
+                fresh,
+                delay_ms,
+            )
+            .await
+        }
         Command::IndexFile { path, batch_size } => run_index_file_cmd(&path, batch_size).await,
         _ => unreachable!("non-indexing command passed to run_indexing_command"),
     }

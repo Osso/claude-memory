@@ -3,14 +3,14 @@
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
 use crate::embed::Embedder;
 use crate::extract::{
-    HistoryType, IndexedChunk, extract_jsonl, extract_jsonl_answers, extract_zst,
-    extract_zst_answers,
+    HistoryType, IndexedChunk, extract_codex_jsonl, extract_codex_jsonl_answers, extract_jsonl,
+    extract_jsonl_answers, extract_zst, extract_zst_answers,
 };
 use crate::qdrant_hybrid::ensure_hybrid_collection;
 
@@ -39,6 +39,34 @@ pub struct SearchResult {
     pub path: String,
     pub session_id: String,
     pub score: f32,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum IndexFileFormat {
+    ClaudePi,
+    ClaudeZst,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum IndexFileSource {
+    Session,
+    Archive,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct IndexFile {
+    pub path: PathBuf,
+    pub format: IndexFileFormat,
+    pub source: IndexFileSource,
+}
+
+pub struct IndexSources<'a> {
+    pub claude_projects_dir: &'a Path,
+    pub claude_archive_dir: &'a Path,
+    pub codex_sessions_dir: &'a Path,
+    pub codex_archive_dir: &'a Path,
+    pub pi_sessions_dir: &'a Path,
 }
 
 /// Shared state for indexing operations.
@@ -74,6 +102,98 @@ pub async fn run_index(
         prompts_indexed, answers_indexed
     );
     Ok(())
+}
+
+/// Index all configured Claude, Codex, and Pi session sources.
+pub async fn run_index_sources(
+    sources: &IndexSources<'_>,
+    batch_size: usize,
+    fresh: bool,
+    delay_ms: u64,
+) -> Result<()> {
+    let state = init_index_state(batch_size, fresh, delay_ms).await?;
+    let files = collect_index_files(sources);
+
+    eprintln!("\n=== Indexing session prompts (user messages) ===");
+    let prompts_indexed =
+        index_discovered_files(&state, sources, &files, HistoryType::Prompt).await?;
+
+    eprintln!("\n=== Indexing answers (assistant responses) ===");
+    let answers_indexed =
+        index_discovered_files(&state, sources, &files, HistoryType::Answer).await?;
+
+    eprintln!(
+        "\nDone! Prompts indexed: {}, Answers indexed: {}",
+        prompts_indexed, answers_indexed
+    );
+    Ok(())
+}
+
+/// Recursively discover supported files from every configured source root.
+pub fn collect_index_files(sources: &IndexSources<'_>) -> Vec<IndexFile> {
+    let mut files = collect_index_files_from(
+        sources.claude_projects_dir,
+        IndexFileFormat::ClaudePi,
+        IndexFileSource::Session,
+        is_jsonl,
+    );
+    files.extend(collect_index_files_from(
+        sources.claude_archive_dir,
+        IndexFileFormat::ClaudeZst,
+        IndexFileSource::Archive,
+        is_jsonl_zst,
+    ));
+    files.extend(collect_index_files_from(
+        sources.codex_sessions_dir,
+        IndexFileFormat::Codex,
+        IndexFileSource::Session,
+        is_jsonl,
+    ));
+    files.extend(collect_index_files_from(
+        sources.codex_archive_dir,
+        IndexFileFormat::Codex,
+        IndexFileSource::Archive,
+        is_jsonl,
+    ));
+    files.extend(collect_index_files_from(
+        sources.pi_sessions_dir,
+        IndexFileFormat::ClaudePi,
+        IndexFileSource::Session,
+        is_jsonl,
+    ));
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files
+}
+
+fn collect_index_files_from(
+    root: &Path,
+    format: IndexFileFormat,
+    source: IndexFileSource,
+    matches: fn(&Path) -> bool,
+) -> Vec<IndexFile> {
+    if !root.exists() {
+        return vec![];
+    }
+
+    WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file() && matches(entry.path()))
+        .map(|entry| IndexFile {
+            path: entry.path().to_path_buf(),
+            format,
+            source,
+        })
+        .collect()
+}
+
+fn is_jsonl(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == "jsonl")
+}
+
+fn is_jsonl_zst(path: &Path) -> bool {
+    path.to_string_lossy().ends_with(".jsonl.zst")
 }
 
 async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Result<IndexState> {
@@ -146,6 +266,88 @@ fn collect_archive_files(archive_dir: &Path) -> Vec<std::fs::DirEntry> {
                 .unwrap_or(false)
         })
         .collect()
+}
+
+async fn index_discovered_files(
+    state: &IndexState,
+    sources: &IndexSources<'_>,
+    files: &[IndexFile],
+    history_type: HistoryType,
+) -> Result<usize> {
+    let kind = history_type.as_str();
+    let mut indexed = 0;
+    eprintln!("Processing {} discovered files ({kind})...", files.len());
+
+    for (position, file) in files.iter().enumerate() {
+        match extract_index_file(file, sources, history_type) {
+            Ok(chunks) => indexed += index_new_chunks(state, &chunks).await?,
+            Err(error) => tracing::warn!("Failed to extract {}: {}", file.path.display(), error),
+        }
+        report_index_progress("Sources", position, files.len(), indexed);
+    }
+    eprintln!();
+    Ok(indexed)
+}
+
+fn extract_index_file(
+    file: &IndexFile,
+    sources: &IndexSources<'_>,
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    let mut chunks = match file.format {
+        IndexFileFormat::ClaudePi => {
+            let base_path = if file.path.starts_with(sources.pi_sessions_dir) {
+                sources.pi_sessions_dir
+            } else {
+                sources.claude_projects_dir
+            };
+            extract_claude_jsonl(&file.path, base_path, history_type)?
+        }
+        IndexFileFormat::ClaudeZst => extract_claude_zst(&file.path, history_type)?,
+        IndexFileFormat::Codex => {
+            let base_path = match file.source {
+                IndexFileSource::Session => sources.codex_sessions_dir,
+                IndexFileSource::Archive => sources.codex_archive_dir,
+            };
+            extract_codex_jsonl_history(&file.path, base_path, history_type)?
+        }
+    };
+
+    if file.source == IndexFileSource::Archive {
+        for chunk in &mut chunks {
+            chunk.source = "archive".to_string();
+        }
+    }
+    Ok(chunks)
+}
+
+fn extract_claude_jsonl(
+    path: &Path,
+    base_path: &Path,
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    match history_type {
+        HistoryType::Prompt => extract_jsonl(path, base_path),
+        HistoryType::Answer => extract_jsonl_answers(path, base_path),
+    }
+}
+
+fn extract_claude_zst(path: &Path, history_type: HistoryType) -> Result<Vec<IndexedChunk>> {
+    match history_type {
+        HistoryType::Prompt => extract_zst(path),
+        HistoryType::Answer => extract_zst_answers(path),
+    }
+}
+
+fn extract_codex_jsonl_history(
+    path: &Path,
+    base_path: &Path,
+    history_type: HistoryType,
+) -> Result<Vec<IndexedChunk>> {
+    match history_type {
+        HistoryType::Prompt => extract_codex_jsonl(path, base_path),
+        HistoryType::Answer => extract_codex_jsonl_answers(path, base_path),
+    }
 }
 
 async fn index_all_prompts(
