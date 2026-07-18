@@ -65,16 +65,22 @@ fn index_accepts_claude_codex_and_pi_paths() {
 }
 
 #[test]
-fn search_requires_prompt_or_answer_type() {
-    let error = match Cli::try_parse_from(["claude-memory", "search", "ollama"]) {
-        Ok(_) => panic!("search without --type should be rejected"),
-        Err(error) => error,
+fn search_defaults_to_combined_prompt_and_answer_history() {
+    let cli = Cli::parse_from(["claude-memory", "search", "ollama"]);
+    let Command::Search {
+        query,
+        limit,
+        target,
+        json,
+    } = cli.command
+    else {
+        panic!("expected search command");
     };
 
-    assert_eq!(
-        error.kind(),
-        clap::error::ErrorKind::MissingRequiredArgument
-    );
+    assert_eq!(query, "ollama");
+    assert_eq!(limit, 5);
+    assert_eq!(target, None);
+    assert!(!json);
 }
 
 #[test]
@@ -83,7 +89,7 @@ fn search_accepts_prompt_type() {
     let Command::Search { target, .. } = cli.command else {
         panic!("expected search command");
     };
-    assert_eq!(target, SearchTarget::Prompts);
+    assert_eq!(target, Some(SearchTarget::Prompts));
 }
 
 #[test]
@@ -92,7 +98,49 @@ fn search_accepts_answer_type() {
     let Command::Search { target, .. } = cli.command else {
         panic!("expected search command");
     };
-    assert_eq!(target, SearchTarget::Answers);
+    assert_eq!(target, Some(SearchTarget::Answers));
+}
+
+#[test]
+fn search_accepts_json_output() {
+    let cli = Cli::parse_from(["claude-memory", "search", "--json", "ollama"]);
+    let Command::Search { json, .. } = cli.command else {
+        panic!("expected search command");
+    };
+    assert!(json);
+}
+
+#[test]
+fn search_json_output_is_stable_ndjson_in_rank_order() {
+    let results = vec![
+        index::SearchResult {
+            record_type: "answer".to_string(),
+            text: "first".to_string(),
+            source: "session".to_string(),
+            path: "/history/first".to_string(),
+            session_id: "session-first".to_string(),
+            score: 0.91,
+        },
+        index::SearchResult {
+            record_type: "prompt".to_string(),
+            text: "second".to_string(),
+            source: "archive".to_string(),
+            path: "/history/second".to_string(),
+            session_id: "session-second".to_string(),
+            score: 0.42,
+        },
+    ];
+    let mut output = Vec::new();
+
+    write_results_json(&results, &mut output).expect("write NDJSON");
+
+    assert_eq!(
+        String::from_utf8(output).expect("UTF-8 output"),
+        concat!(
+            "{\"type\":\"answer\",\"text\":\"first\",\"source\":\"session\",\"path\":\"/history/first\",\"session_id\":\"session-first\",\"score\":0.91}\n",
+            "{\"type\":\"prompt\",\"text\":\"second\",\"source\":\"archive\",\"path\":\"/history/second\",\"session_id\":\"session-second\",\"score\":0.42}\n",
+        )
+    );
 }
 
 #[test]

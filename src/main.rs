@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use claude_memory::index;
+use std::io::Write;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -87,7 +88,7 @@ enum Command {
         command: KbPageIndexCommand,
     },
 
-    /// Search prompts or answers
+    /// Search globally ranked prompts and answers
     Search {
         /// Query text
         query: String,
@@ -96,9 +97,13 @@ enum Command {
         #[arg(short, long, default_value = "5")]
         limit: usize,
 
-        /// Search target
-        #[arg(long = "type", value_enum, required = true)]
-        target: SearchTarget,
+        /// Restrict search to prompts or answers
+        #[arg(long = "type", value_enum)]
+        target: Option<SearchTarget>,
+
+        /// Output one JSON result object per line
+        #[arg(long)]
+        json: bool,
     },
 
     /// Enrich a prompt with memory context (for UserPromptSubmit hook)
@@ -141,7 +146,8 @@ async fn run_command(command: Command) -> Result<()> {
             query,
             limit,
             target,
-        } => run_search(query, limit, target).await,
+            json,
+        } => run_search(query, limit, target, json).await,
         Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
         Command::Stats => index::show_stats().await,
     }
@@ -251,21 +257,31 @@ async fn run_indexing_command(command: Command) -> Result<()> {
     }
 }
 
-async fn run_search(query: String, limit: usize, target: SearchTarget) -> Result<()> {
-    match target {
-        SearchTarget::Prompts => run_search_prompts(query, limit, None).await,
-        SearchTarget::Answers => run_search_answers(query, limit, None).await,
+async fn run_search(
+    query: String,
+    limit: usize,
+    target: Option<SearchTarget>,
+    json: bool,
+) -> Result<()> {
+    let results = match target {
+        Some(SearchTarget::Prompts) => index::search_prompts(&query, limit, None).await?,
+        Some(SearchTarget::Answers) => index::search_answers(&query, limit, None).await?,
+        None => index::search_all(&query, limit, None).await?,
+    };
+
+    if json {
+        let stdout = std::io::stdout();
+        return write_results_json(&results, &mut stdout.lock());
     }
-}
-
-async fn run_search_prompts(query: String, limit: usize, source: Option<String>) -> Result<()> {
-    let results = index::search_prompts(&query, limit, source.as_deref()).await?;
     print_results(&results)
 }
 
-async fn run_search_answers(query: String, limit: usize, source: Option<String>) -> Result<()> {
-    let results = index::search_answers(&query, limit, source.as_deref()).await?;
-    print_results(&results)
+fn write_results_json(results: &[index::SearchResult], output: &mut impl Write) -> Result<()> {
+    for result in results {
+        serde_json::to_writer(&mut *output, result)?;
+        writeln!(output)?;
+    }
+    Ok(())
 }
 
 fn print_results(results: &[index::SearchResult]) -> Result<()> {

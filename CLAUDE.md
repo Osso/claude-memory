@@ -14,8 +14,10 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 
 ```bash
 claude-memory index
+claude-memory search "query"
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
+claude-memory search --limit 10 --json "query"
 claude-memory kb-page-index query "query"
 claude-memory transcript-page-index build
 claude-memory enrich
@@ -26,10 +28,13 @@ Claude Code, Codex, and Pi session shutdown integrations automatically run
 `claude-memory index-file <transcript_path>`. Manual `claude-memory index` is
 incremental backfill and recovery across Claude active/archive, Codex
 active/archive, and Pi session JSONL files. Existing hashes are skipped unless
-`--fresh` is supplied. Prompt and answer searches are filtered views over
-`claude-session-history`. UserPromptSubmit runs `enrich` only to retrieve
-existing prompt/answer and KB PageIndex context; it does not index. Transcript
-PageIndex remains CLI-only navigation and is not injected by default.
+`--fresh` is supplied. The default search runs one globally ranked prompt+answer
+query over `claude-session-history`; `--type prompts|answers` provides optional
+filtering and `--limit` applies globally. `--json` emits stable NDJSON fields
+`type`, `text`, `source`, `path`, `session_id`, and `score`. UserPromptSubmit
+runs `enrich` only to retrieve existing prompt/answer and KB PageIndex context;
+it does not index. Transcript PageIndex remains CLI-only navigation and is not
+injected by default.
 Its query command is deterministic lexical-only; document, structure, and content
 remain explicit source-inspection commands.
 

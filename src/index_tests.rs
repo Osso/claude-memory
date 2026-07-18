@@ -9,8 +9,8 @@ use crate::chunk::Chunk;
 use crate::extract::{HistoryType, IndexedChunk};
 use crate::index::{
     IndexFileFormat, IndexFileSource, IndexSources, QDRANT_URL, build_search_results,
-    collect_index_files, extract_single_file_history, filter_new, get_string, history_filter,
-    history_hash,
+    collect_index_files, extract_single_file_history, filter_new, get_string,
+    global_history_filter, history_filter, history_hash,
 };
 use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
 
@@ -36,6 +36,7 @@ fn str_value(s: &str) -> Value {
 }
 
 fn make_scored_point(
+    history_type: HistoryType,
     text: &str,
     source: &str,
     path: &str,
@@ -43,6 +44,7 @@ fn make_scored_point(
     score: f32,
 ) -> ScoredPoint {
     let payload = [
+        ("type".to_string(), str_value(history_type.as_str())),
         ("text".to_string(), str_value(text)),
         ("source".to_string(), str_value(source)),
         ("path".to_string(), str_value(path)),
@@ -308,10 +310,20 @@ async fn qdrant_history_filters_isolate_type_and_source() {
         query_history_sources(&client, &collection, HistoryType::Prompt, &[]).await;
     let archived_answers =
         query_history_sources(&client, &collection, HistoryType::Answer, &["archive"]).await;
+    let all_history = query_all_history(&client, &collection).await;
     client.delete_collection(&collection).await.unwrap();
 
     assert_eq!(prompt_sources, vec!["archive", "session"]);
     assert_eq!(archived_answers, vec!["archive"]);
+    assert_eq!(
+        all_history,
+        vec![
+            "answer:archive",
+            "answer:session",
+            "prompt:archive",
+            "prompt:session",
+        ]
+    );
 }
 
 fn history_point(id: u64, history_type: HistoryType, source: &str) -> PointStruct {
@@ -329,6 +341,29 @@ fn history_point(id: u64, history_type: HistoryType, source: &str) -> PointStruc
     ]
     .into();
     PointStruct::new(id, build_named_vectors(vec![1.0; 1024], &text), payload)
+}
+
+async fn query_all_history(client: &Qdrant, collection: &str) -> Vec<String> {
+    let search = SearchPointsBuilder::new(collection, vec![1.0; 1024], 10)
+        .vector_name("dense")
+        .with_payload(true)
+        .filter(global_history_filter(&[]));
+    let mut matches: Vec<String> = client
+        .search_points(search)
+        .await
+        .unwrap()
+        .result
+        .iter()
+        .map(|point| {
+            format!(
+                "{}:{}",
+                get_string(&point.payload, "type"),
+                get_string(&point.payload, "source")
+            )
+        })
+        .collect();
+    matches.sort();
+    matches
 }
 
 async fn query_history_sources(
@@ -388,9 +423,17 @@ fn get_string_returns_empty_for_null_kind() {
 
 #[test]
 fn build_search_results_extracts_fields() {
-    let point = make_scored_point("some text", "session", "/some/path", "session-1", 0.95);
+    let point = make_scored_point(
+        HistoryType::Answer,
+        "some text",
+        "session",
+        "/some/path",
+        "session-1",
+        0.95,
+    );
     let results = build_search_results(vec![point]);
     assert_eq!(results.len(), 1);
+    assert_eq!(results[0].record_type, "answer");
     assert_eq!(results[0].text, "some text");
     assert_eq!(results[0].source, "session");
     assert_eq!(results[0].path, "/some/path");
@@ -411,6 +454,7 @@ fn build_search_results_empty_payload_graceful() {
     };
     let results = build_search_results(vec![point]);
     assert_eq!(results.len(), 1);
+    assert_eq!(results[0].record_type, "");
     assert_eq!(results[0].text, "");
     assert_eq!(results[0].source, "");
     assert_eq!(results[0].path, "");

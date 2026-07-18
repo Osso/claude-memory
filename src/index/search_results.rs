@@ -10,6 +10,7 @@ pub(crate) fn build_search_results(points: Vec<ScoredPoint>) -> Vec<SearchResult
         .map(|point| {
             let payload = point.payload;
             SearchResult {
+                record_type: get_string(&payload, "type"),
                 text: get_string(&payload, "text"),
                 source: get_string(&payload, "source"),
                 path: get_string(&payload, "path"),

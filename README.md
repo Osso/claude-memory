@@ -18,9 +18,11 @@ Manual CLI invocation plus Claude Code, Codex, and Pi lifecycle integration:
 # Incrementally index missing Claude, Codex, and Pi transcript chunks
 claude-memory index
 
-# Search unified prompt/answer history (--type is required)
+# Search globally ranked prompt+answer history
+claude-memory search "query"
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
+claude-memory search --limit 10 --json "query"
 
 # Build/query KB text index (build writes only nodes.tsv and manifest.tsv)
 claude-memory kb-page-index build --kb /syncthing/Sync/KB
@@ -41,11 +43,14 @@ Claude Code, Codex, and Pi session shutdown integrations automatically run
 `claude-memory index-file <transcript_path>`. Manual `claude-memory index` is
 incremental backfill and recovery across Claude active/archive, Codex
 active/archive, and Pi session JSONL files. Existing hashes are skipped unless
-`--fresh` is supplied. Prompt and answer searches are filtered views over the
-shared `claude-session-history` collection. UserPromptSubmit runs `enrich` only
-to retrieve existing prompt/answer and KB PageIndex context; it does not index.
-Transcript PageIndex remains a separate CLI navigation surface and is not
-injected by default.
+`--fresh` is supplied. The default search runs one globally ranked prompt+answer
+query over the shared `claude-session-history` collection; `--type
+prompts|answers` provides optional filtering and `--limit` applies globally.
+`--json` emits stable NDJSON fields `type`, `text`, `source`, `path`,
+`session_id`, and `score`. UserPromptSubmit runs `enrich` only to retrieve
+existing prompt/answer and KB PageIndex context; it does not index. Transcript
+PageIndex remains a separate CLI navigation surface and is not injected by
+default.
 
 KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` reads those
 files and rejects a stale index without rebuilding; run `build` explicitly after

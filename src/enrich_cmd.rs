@@ -259,6 +259,7 @@ mod tests {
     #[test]
     fn session_chunk_results_include_session_id() {
         let prompt_results = vec![index::SearchResult {
+            record_type: "prompt".to_string(),
             text: "User asked about transcript page indexes.".to_string(),
             source: "session".to_string(),
             path: "project/session-1.jsonl".to_string(),
@@ -266,6 +267,7 @@ mod tests {
             score: 0.82,
         }];
         let answer_results = vec![index::SearchResult {
+            record_type: "answer".to_string(),
             text: "Assistant explained how chunks are indexed.".to_string(),
             source: "session".to_string(),
             path: "project/session-2.jsonl".to_string(),
@@ -285,6 +287,7 @@ mod tests {
     #[test]
     fn transcript_history_source_uses_codex_path_when_available() {
         let result = index::SearchResult {
+            record_type: "answer".to_string(),
             text: "Codex answer".to_string(),
             source: "session".to_string(),
             path: ".codex/sessions/2026/06/session.jsonl".to_string(),

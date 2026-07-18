@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -20,9 +21,9 @@ mod index_search;
 #[path = "index_writer.rs"]
 mod index_writer;
 mod search_results;
-pub use index_search::history_filter;
+pub use index_search::{global_history_filter, history_filter};
 pub use index_search::{
-    search_answer_sources, search_answers, search_prompt_sources, search_prompts,
+    search_all, search_answer_sources, search_answers, search_prompt_sources, search_prompts,
 };
 pub(crate) use index_writer::filter_new;
 #[cfg(test)]
@@ -34,7 +35,10 @@ pub(crate) use search_results::{build_search_results, get_string};
 pub const QDRANT_URL: &str = "http://localhost:6334";
 pub const COLLECTION_SESSION_HISTORY: &str = "claude-session-history";
 
+#[derive(Serialize)]
 pub struct SearchResult {
+    #[serde(rename = "type")]
+    pub record_type: String,
     pub text: String,
     pub source: String,
     pub path: String,
