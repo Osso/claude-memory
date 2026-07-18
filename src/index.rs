@@ -160,7 +160,7 @@ pub fn collect_index_files(sources: &IndexSources<'_>) -> Vec<IndexFile> {
         sources.pi_sessions_dir,
         IndexFileFormat::ClaudePi,
         IndexFileSource::Session,
-        is_jsonl,
+        is_pi_session_jsonl,
     ));
     files.sort_by(|left, right| left.path.cmp(&right.path));
     files
@@ -195,6 +195,23 @@ fn is_jsonl(path: &Path) -> bool {
 
 fn is_jsonl_zst(path: &Path) -> bool {
     path.to_string_lossy().ends_with(".jsonl.zst")
+}
+
+fn is_pi_session_jsonl(path: &Path) -> bool {
+    if !is_jsonl(path) {
+        return false;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(&line).ok())
+        .next()
+        .is_some_and(|value| {
+            value.get("type").and_then(serde_json::Value::as_str) == Some("session")
+        })
 }
 
 async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Result<IndexState> {

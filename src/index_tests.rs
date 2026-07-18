@@ -81,10 +81,20 @@ fn index_sources_discover_claude_codex_and_pi_sessions() {
     std::fs::write(claude_archive.join("claude.jsonl.zst"), "").unwrap();
     std::fs::write(codex_sessions.join("codex.jsonl"), "").unwrap();
     std::fs::write(codex_archive.join("codex-archive.jsonl"), "").unwrap();
-    std::fs::write(pi_sessions.join("pi-active.jsonl"), "").unwrap();
+    let pi_header = r#"{"type":"session","version":3,"id":"fixture","timestamp":"2026-07-18T00:00:00Z","cwd":"/tmp"}
+"#;
+    std::fs::write(pi_sessions.join("pi-active.jsonl"), pi_header).unwrap();
     let archived_pi_dir = pi_sessions.join("archived-project");
     std::fs::create_dir_all(&archived_pi_dir).unwrap();
-    std::fs::write(archived_pi_dir.join("pi-archived.jsonl"), "").unwrap();
+    std::fs::write(archived_pi_dir.join("pi-archived.jsonl"), pi_header).unwrap();
+    let detached_jobs = pi_sessions.join("detached-jobs/job");
+    std::fs::create_dir_all(&detached_jobs).unwrap();
+    std::fs::write(
+        detached_jobs.join("runtime-events.jsonl"),
+        r#"{"kind":"progress","update":{"type":"console"}}
+"#,
+    )
+    .unwrap();
 
     let sources = IndexSources {
         claude_projects_dir: &root.join("claude/projects"),
