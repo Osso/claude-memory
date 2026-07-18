@@ -28,15 +28,21 @@ added merely to preserve duplicate occurrences.
 
 ## Index inputs
 
-`claude-memory index` reads only Claude transcript files:
+`claude-memory index` reads these transcript sources:
 
-- active sessions: `~/.claude/projects/**/*.jsonl`, with `source=session`
-- archives: `~/.claude/archive/*.jsonl.zst`, with `source=archive`
+- Claude active: `~/.claude/projects/**/*.jsonl`, with `source=session`
+- Claude archive: `~/.claude/archive/**/*.jsonl.zst`, with `source=archive`
+- Codex active: `~/.codex/sessions/**/*.jsonl`, with `source=session`
+- Codex archive: `~/.codex/archived_sessions/**/*.jsonl`, with `source=archive`
+- Pi: `~/.config/pi/agent/sessions/**/*.jsonl`, with `source=session`
 
-User text becomes `type=prompt`; assistant text becomes `type=answer`. Text is
-joined and split into overlapping embedding chunks. `claude-memory index-file`
-accepts one `.jsonl` or `.jsonl.zst` transcript and writes both history types
-to the same collection.
+Pi archive status is metadata; archived sessions remain in the same session
+tree. Discovery requires the Pi session header and therefore excludes detached
+job/runtime JSONL artifacts. User text becomes `type=prompt`; assistant text
+becomes `type=answer`. Text is joined and split into overlapping embedding
+chunks. `claude-memory index-file` auto-detects Claude, Codex, and Pi JSONL and
+also accepts Claude `.jsonl.zst` archives, writing both history types to the
+same collection.
 
 Session-history indexing does not read project summaries or KB Markdown.
 Manual memories and the former `claude-memory`, `claude-session-prompts`, and

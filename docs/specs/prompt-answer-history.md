@@ -1,4 +1,4 @@
-Prompt and answer history indexing stores raw user prompts and assistant responses from active and archived Claude transcript files in one searchable session-history index. Typed prompt and answer searches are CLI-only; implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
+Prompt and answer history indexing stores raw user prompts and assistant responses from Claude, Codex, and Pi transcript files in one searchable session-history index. Typed prompt and answer searches are CLI-only; implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
 
 ## What it must do
 
@@ -18,10 +18,14 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Index assistant messages from active Claude session JSONL files.
 - [x] Index user messages from archived Claude `.jsonl.zst` files.
 - [x] Index assistant messages from archived Claude `.jsonl.zst` files.
+- [x] Index user and assistant messages from active and archived Codex JSONL files.
+- [x] Index user and assistant messages from Pi session JSONL files, including archived sessions that remain in the session tree.
+- [x] Exclude Pi detached-job and runtime JSONL artifacts that lack a Pi session header.
 - [x] Deduplicate existing chunks and repeated identical chunks within the same type/source.
 - [x] Index a single supported conversation file into the same prompt and answer views.
-- [x] Run `claude-memory index-file <transcript_path>` automatically from SessionEnd.
-- [x] Reserve manual `claude-memory index` for backfill and recovery.
+- [x] Run `claude-memory index-file <transcript_path>` automatically from Claude Code, Codex, and Pi session shutdown integration.
+- [x] Auto-detect Claude, Codex, and Pi JSONL formats for `index-file`.
+- [x] Reserve manual `claude-memory index` for incremental backfill and recovery; skip existing hashes unless `--fresh` is supplied.
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
@@ -51,6 +55,8 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 ## Tests asserting this spec
 
 - `src/index_tests.rs`
+  - `index_sources_discover_claude_codex_and_pi_sessions`
+  - `index_file_extracts_claude_codex_and_pi_prompt_answer_records`
   - `filter_new_keeps_new_items`
   - `filter_new_removes_existing_hashes`
   - `filter_new_empty_input_returns_empty`
@@ -68,7 +74,10 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - `search_accepts_prompt_type`
   - `search_accepts_answer_type`
 - `src/extract.rs`
-  - user-message and assistant-message extraction tests in the module test suite.
+  - Claude/Pi user-message and assistant-message extraction tests.
+  - Codex prompt/answer extraction and context-prelude filtering tests.
+- `/syncthing/Sync/Provisioning/tests/pi-claude-memory-extension-qdrant.py`
+  - Pi `session_shutdown` exact-path, failure-propagation, and Qdrant integration proof.
 
 ## Out of scope
 

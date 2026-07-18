@@ -12,10 +12,10 @@ Semantic memory search for Claude Code sessions and the local knowledge base.
 
 ## Usage
 
-Manual CLI invocation + Claude Code hooks:
+Manual CLI invocation plus Claude Code, Codex, and Pi lifecycle integration:
 
 ```bash
-# Index active and archived Claude transcript chunks
+# Incrementally index missing Claude, Codex, and Pi transcript chunks
 claude-memory index
 
 # Search unified prompt/answer history (--type is required)
@@ -37,13 +37,15 @@ claude-memory enrich
 claude-memory stats
 ```
 
-SessionEnd automatically runs `claude-memory index-file <transcript_path>`.
-Manual `claude-memory index` is for backfill and recovery across active `.jsonl`
-sessions and archived `.jsonl.zst` sessions. Prompt and answer searches are
-filtered views over the shared `claude-session-history` collection. UserPromptSubmit
-runs `enrich` only to retrieve existing prompt/answer and KB PageIndex context;
-it does not index. Transcript PageIndex remains a separate CLI navigation
-surface and is not injected by default.
+Claude Code, Codex, and Pi session shutdown integrations automatically run
+`claude-memory index-file <transcript_path>`. Manual `claude-memory index` is
+incremental backfill and recovery across Claude active/archive, Codex
+active/archive, and Pi session JSONL files. Existing hashes are skipped unless
+`--fresh` is supplied. Prompt and answer searches are filtered views over the
+shared `claude-session-history` collection. UserPromptSubmit runs `enrich` only
+to retrieve existing prompt/answer and KB PageIndex context; it does not index.
+Transcript PageIndex remains a separate CLI navigation surface and is not
+injected by default.
 
 KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` reads those
 files and rejects a stale index without rebuilding; run `build` explicitly after
