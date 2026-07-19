@@ -81,6 +81,12 @@ fn index_sources_discover_claude_codex_and_pi_sessions() {
     }
     std::fs::write(claude_projects.join("claude.jsonl"), "").unwrap();
     std::fs::write(claude_archive.join("claude.jsonl.zst"), "").unwrap();
+    std::fs::write(
+        claude_archive.join("claude-uncompressed.jsonl"),
+        r#"{"type":"user","message":{"content":"Archived Claude prompt"}}
+"#,
+    )
+    .unwrap();
     std::fs::write(codex_sessions.join("codex.jsonl"), "").unwrap();
     std::fs::write(codex_archive.join("codex-archive.jsonl"), "").unwrap();
     let pi_header = r#"{"type":"session","version":3,"id":"fixture","timestamp":"2026-07-18T00:00:00Z","cwd":"/tmp"}
@@ -117,7 +123,7 @@ fn index_sources_discover_claude_codex_and_pi_sessions() {
         .map(|file| file.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
 
-    assert_eq!(files.len(), 6);
+    assert_eq!(files.len(), 7);
     assert_eq!(
         pi_paths,
         HashSet::from([
@@ -129,6 +135,7 @@ fn index_sources_discover_claude_codex_and_pi_sessions() {
         observed,
         HashSet::from([
             (IndexFileFormat::ClaudePi, IndexFileSource::Session),
+            (IndexFileFormat::ClaudePi, IndexFileSource::Archive),
             (IndexFileFormat::ClaudeZst, IndexFileSource::Archive),
             (IndexFileFormat::Codex, IndexFileSource::Session),
             (IndexFileFormat::Codex, IndexFileSource::Archive),
@@ -181,6 +188,29 @@ fn index_file_extracts_claude_codex_and_pi_prompt_answer_records() {
         assert_eq!(prompts[0].chunk.text, prompt);
         assert_eq!(answers[0].chunk.text, answer);
     }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn index_file_marks_uncompressed_claude_archive_as_archive_source() {
+    let root = std::env::temp_dir().join(format!(
+        "index-file-claude-archive-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let archive = root.join(".claude/archive");
+    std::fs::create_dir_all(&archive).unwrap();
+    let path = archive.join("claude-archive.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"type":"user","message":{"content":"Archived Claude prompt"}}
+"#,
+    )
+    .unwrap();
+
+    let prompts = extract_single_file_history(&path, HistoryType::Prompt).unwrap();
+
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].source, "archive");
     let _ = std::fs::remove_dir_all(root);
 }
 

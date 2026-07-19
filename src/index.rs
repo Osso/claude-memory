@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
@@ -147,6 +148,12 @@ pub fn collect_index_files(sources: &IndexSources<'_>) -> Vec<IndexFile> {
         IndexFileFormat::ClaudeZst,
         IndexFileSource::Archive,
         is_jsonl_zst,
+    ));
+    files.extend(collect_index_files_from(
+        sources.claude_archive_dir,
+        IndexFileFormat::ClaudePi,
+        IndexFileSource::Archive,
+        is_jsonl,
     ));
     files.extend(collect_index_files_from(
         sources.codex_sessions_dir,
@@ -320,6 +327,8 @@ fn extract_index_file(
         IndexFileFormat::ClaudePi => {
             let base_path = if file.path.starts_with(sources.pi_sessions_dir) {
                 sources.pi_sessions_dir
+            } else if file.source == IndexFileSource::Archive {
+                sources.claude_archive_dir
             } else {
                 sources.claude_projects_dir
             };
@@ -530,15 +539,23 @@ pub(crate) fn extract_single_file_history(
         IndexFileFormat::ClaudeZst => extract_claude_zst(path, history_type)?,
         IndexFileFormat::Codex => extract_codex_jsonl_history(path, base_path, history_type)?,
     };
-    if path
-        .components()
-        .any(|component| component.as_os_str() == "archived_sessions")
-    {
+    if is_archive_session_path(path) {
         for chunk in &mut chunks {
             chunk.source = "archive".to_string();
         }
     }
     Ok(chunks)
+}
+
+fn is_archive_session_path(path: &Path) -> bool {
+    let is_codex_archive = path
+        .components()
+        .any(|component| component.as_os_str() == "archived_sessions");
+    let is_claude_archive = path.ancestors().any(|ancestor| {
+        ancestor.file_name() == Some(OsStr::new("archive"))
+            && ancestor.parent().and_then(Path::file_name) == Some(OsStr::new(".claude"))
+    });
+    is_codex_archive || is_claude_archive
 }
 
 /// Index a single conversation file (both prompts and answers).
