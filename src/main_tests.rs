@@ -376,32 +376,17 @@ fn kb_page_index_accepts_query_paths_and_limit() {
 }
 
 #[test]
-fn kb_page_index_accepts_content_command() {
-    let content = Cli::parse_from([
+fn kb_page_index_rejects_retired_content_command() {
+    let error = match Cli::try_parse_from([
         "claude-memory",
         "kb-page-index",
         "content",
         "guides/router.md",
         "4-8",
-        "--kb",
-        "/tmp/kb",
-        "--index",
-        "/tmp/kb-index",
-    ]);
-    let Command::KbPageIndex {
-        command:
-            KbPageIndexCommand::Content {
-                doc,
-                locator,
-                kb,
-                index,
-            },
-    } = content.command
-    else {
-        panic!("expected kb-page-index content command");
+    ]) {
+        Ok(_) => panic!("content command should be retired"),
+        Err(error) => error,
     };
-    assert_eq!(doc, "guides/router.md");
-    assert_eq!(locator, "4-8");
-    assert_eq!(kb, Some(PathBuf::from("/tmp/kb")));
-    assert_eq!(index, Some(PathBuf::from("/tmp/kb-index")));
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
 }

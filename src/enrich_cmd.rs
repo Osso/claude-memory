@@ -85,10 +85,16 @@ async fn search_session_chunks(
 
 fn add_kb_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
     let kb_limit = limit.min(MAX_KB_RESULTS);
-    match kb_search::search_default_kb_context(prompt, kb_limit) {
-        Ok(results) if !results.is_empty() => sections.push(format_kb_results(&results)),
-        Ok(_) => {}
-        Err(error) => eprintln!("enrich: KB PageIndex search failed: {error:#}"),
+    let context = kb_search::search_default_kb_context_resilient(prompt, kb_limit);
+    add_kb_context_sections(context, sections);
+}
+
+fn add_kb_context_sections(context: kb_search::KbContextSearch, sections: &mut Vec<String>) {
+    if let Some(warning) = context.warning {
+        sections.push(format!("## KB PageIndex warning\n{warning}"));
+    }
+    if !context.results.is_empty() {
+        sections.push(format_kb_results(&context.results));
     }
 }
 
@@ -151,13 +157,8 @@ fn format_kb_results(results: &[kb_search::KbSearchResult]) -> String {
     for result in results {
         let text = preview_text(&result.text, MAX_KB_RESULT_CHARS);
         out.push_str(&format!(
-            "\n- ({}) {} > {} [{}]: {}\n  next: {}",
-            result.score,
-            result.path,
-            result.heading,
-            result.node_id,
-            text,
-            result.next_content_command
+            "\n- ({}) {} > {} [{}]: {}",
+            result.score, result.path, result.heading, result.node_id, text
         ));
     }
     out
@@ -179,7 +180,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_text_index_result_formats_for_enrich_with_explicit_content_roots() {
+    fn fresh_text_index_result_formats_exact_excerpt_for_enrich() {
         let root = std::env::temp_dir().join(format!("enrich-kb-{}", uuid::Uuid::new_v4()));
         let kb_dir = root.join("knowledge base");
         let index_dir = root.join("text index");
@@ -202,8 +203,8 @@ mod tests {
 
         assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
         assert!(formatted.contains("rules.md > Rules > Frontend"));
-        assert!(formatted.contains(&format!("--kb '{}'", kb_dir.display())));
-        assert!(formatted.contains(&format!("--index '{}'", index_dir.display())));
+        assert!(formatted.contains("## Frontend Load frontend design skill immediately."));
+        assert!(!formatted.contains("next:"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -218,10 +219,6 @@ mod tests {
             node_id: "000002".to_string(),
             title: "Process".to_string(),
             reason: "matched 4 query terms".to_string(),
-            content_command: "claude-memory kb-page-index content memory/corrections.md 000002"
-                .to_string(),
-            next_content_command:
-                "claude-memory kb-page-index content memory/corrections.md 000002".to_string(),
         }];
 
         let formatted = format_kb_results(&results);
@@ -243,10 +240,6 @@ mod tests {
             node_id: "000002".to_string(),
             title: "Process".to_string(),
             reason: "matched query terms: corrections".to_string(),
-            content_command: "claude-memory kb-page-index content memory/corrections.md 000002"
-                .to_string(),
-            next_content_command:
-                "claude-memory kb-page-index content memory/corrections.md 000002".to_string(),
         }];
 
         let formatted = format_kb_results(&results);
@@ -254,6 +247,33 @@ mod tests {
         assert!(formatted.contains("Relevant KB notes (KB PageIndex)"));
         assert!(!formatted.contains("tail marker"));
         assert!(formatted.contains("..."));
+    }
+
+    #[test]
+    fn stale_kb_warning_is_added_to_agent_context() {
+        let context = kb_search::KbContextSearch {
+            results: vec![kb_search::KbSearchResult {
+                doc_id: "rules.md".to_string(),
+                path: "rules.md".to_string(),
+                heading: "Rules".to_string(),
+                text: "Use the stale indexed rule.".to_string(),
+                score: 42,
+                node_id: "1-2".to_string(),
+                title: "Rules".to_string(),
+                reason: "matched deterministic text index".to_string(),
+            }],
+            warning: Some(
+                "KB PageIndex rebuild failed; using stale index: read-only filesystem".to_string(),
+            ),
+        };
+        let mut sections = Vec::new();
+
+        add_kb_context_sections(context, &mut sections);
+        let output = sections.join("\n\n");
+
+        assert!(output.contains("KB PageIndex warning"));
+        assert!(output.contains("using stale index"));
+        assert!(output.contains("Use the stale indexed rule."));
     }
 
     #[test]

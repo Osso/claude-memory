@@ -31,21 +31,4 @@ pub enum KbPageIndexCommand {
         #[arg(long)]
         index: Option<PathBuf>,
     },
-
-    /// Print exact Markdown text for an indexed line range
-    Content {
-        /// Document source path
-        doc: String,
-
-        /// Inclusive line range like 4-8
-        locator: String,
-
-        /// Knowledge base directory
-        #[arg(long)]
-        kb: Option<PathBuf>,
-
-        /// Index directory (default: ~/.cache/claude-memory/kb-page-index)
-        #[arg(long)]
-        index: Option<PathBuf>,
-    },
 }

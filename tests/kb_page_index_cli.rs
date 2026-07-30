@@ -8,10 +8,6 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
-fn shell_quote(value: &Path) -> String {
-    format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
-}
-
 fn cli(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_claude-memory"))
         .args(args)
@@ -160,33 +156,134 @@ fn query_reads_explicit_text_index() {
         stdout.contains("guide.md#5-8 > Router Guide > Recovery"),
         "{stdout}"
     );
-    assert!(
-        stdout.contains(&format!(
-            "--kb {} --index {}",
-            shell_quote(&kb_dir),
-            shell_quote(&index_dir)
-        )),
-        "{stdout}"
-    );
+    assert!(stdout.contains("Exact recovery command."), "{stdout}");
+    assert!(!stdout.contains("next:"), "{stdout}");
 }
 
 #[test]
-fn stale_query_fails_without_rebuilding() {
+fn query_builds_a_missing_index() {
+    let root = temp_dir("kb-cli-missing-index");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    fs::create_dir_all(&kb_dir).expect("create KB directory");
+    write_fixture(&kb_dir);
+
+    let output = cli(&[
+        "kb-page-index",
+        "query",
+        "recovery command",
+        "--kb",
+        kb_dir.to_str().expect("UTF-8 KB path"),
+        "--index",
+        index_dir.to_str().expect("UTF-8 index path"),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(index_dir.join("nodes.tsv").is_file());
+    assert!(index_dir.join("manifest.tsv").is_file());
+}
+
+#[test]
+fn stale_query_rebuilds_changed_source() {
     let root = temp_dir("kb-cli-stale");
     let kb_dir = root.join("kb");
     let index_dir = root.join("index");
     fs::create_dir_all(&kb_dir).expect("create KB directory");
     let source = write_fixture(&kb_dir);
     assert!(build(&kb_dir, &index_dir).status.success());
-    let nodes_before = fs::read(index_dir.join("nodes.tsv")).expect("read nodes before query");
-    let manifest_before =
-        fs::read(index_dir.join("manifest.tsv")).expect("read manifest before query");
+    let manifest_before = fs::read(index_dir.join("manifest.tsv")).expect("read manifest");
 
     fs::write(
         &source,
-        "# Changed\n\nDifferent content with another size.\n",
+        "# Changed\n\nReplacement phrase from the changed source.\n",
     )
     .expect("change source");
+    let output = cli(&[
+        "kb-page-index",
+        "query",
+        "replacement phrase",
+        "--kb",
+        kb_dir.to_str().expect("UTF-8 KB path"),
+        "--index",
+        index_dir.to_str().expect("UTF-8 index path"),
+    ]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 stdout");
+    assert!(stdout.contains("Replacement phrase from the changed source."));
+    assert_ne!(
+        fs::read(index_dir.join("manifest.tsv")).expect("read rebuilt manifest"),
+        manifest_before
+    );
+}
+
+#[test]
+fn query_rebuilds_after_added_or_deleted_kb_files() {
+    for change in ["added", "deleted"] {
+        let root = temp_dir(&format!("kb-cli-{change}"));
+        let kb_dir = root.join("kb");
+        let index_dir = root.join("index");
+        fs::create_dir_all(&kb_dir).expect("create KB directory");
+        let source = write_fixture(&kb_dir);
+        assert!(build(&kb_dir, &index_dir).status.success());
+        let query = match change {
+            "added" => {
+                fs::write(
+                    kb_dir.join("added.md"),
+                    "# Added\nUnique addition phrase.\n",
+                )
+                .unwrap();
+                "unique addition"
+            }
+            "deleted" => {
+                fs::remove_file(source).unwrap();
+                "recovery command"
+            }
+            _ => unreachable!(),
+        };
+
+        let output = cli(&[
+            "kb-page-index",
+            "query",
+            query,
+            "--kb",
+            kb_dir.to_str().expect("UTF-8 KB path"),
+            "--index",
+            index_dir.to_str().expect("UTF-8 index path"),
+        ]);
+
+        assert!(
+            output.status.success(),
+            "{change}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 stdout");
+        if change == "added" {
+            assert!(stdout.contains("Unique addition phrase."), "{stdout}");
+        } else {
+            assert!(stdout.contains("(no KB notes found)"), "{stdout}");
+        }
+    }
+}
+
+#[test]
+fn query_fails_when_the_kb_directory_is_missing() {
+    let root = temp_dir("kb-cli-missing-kb");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    fs::create_dir_all(&kb_dir).expect("create KB directory");
+    write_fixture(&kb_dir);
+    assert!(build(&kb_dir, &index_dir).status.success());
+    fs::remove_dir_all(&kb_dir).expect("remove KB directory");
+
     let output = cli(&[
         "kb-page-index",
         "query",
@@ -198,56 +295,12 @@ fn stale_query_fails_without_rebuilding() {
     ]);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("stale"));
-    assert_eq!(fs::read(index_dir.join("nodes.tsv")).unwrap(), nodes_before);
-    assert_eq!(
-        fs::read(index_dir.join("manifest.tsv")).unwrap(),
-        manifest_before
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not exist"));
 }
 
 #[test]
-fn query_rejects_added_deleted_and_missing_kb_files() {
-    for change in ["added", "deleted", "missing"] {
-        let root = temp_dir(&format!("kb-cli-{change}"));
-        let kb_dir = root.join("kb");
-        let index_dir = root.join("index");
-        fs::create_dir_all(&kb_dir).expect("create KB directory");
-        let source = (change != "missing").then(|| write_fixture(&kb_dir));
-        assert!(build(&kb_dir, &index_dir).status.success());
-        match change {
-            "added" => fs::write(kb_dir.join("added.md"), "# Added\nNew page.\n").unwrap(),
-            "deleted" => fs::remove_file(source.expect("source exists")).unwrap(),
-            "missing" => fs::remove_dir_all(&kb_dir).unwrap(),
-            _ => unreachable!(),
-        }
-
-        let output = cli(&[
-            "kb-page-index",
-            "query",
-            "recovery command",
-            "--kb",
-            kb_dir.to_str().expect("UTF-8 KB path"),
-            "--index",
-            index_dir.to_str().expect("UTF-8 index path"),
-        ]);
-
-        assert!(!output.status.success(), "{change} should be rejected");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains(if change == "missing" {
-                "does not exist"
-            } else {
-                "stale"
-            }),
-            "{change}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[test]
-fn json_only_kb_commands_are_retired() {
-    for command in ["document", "structure"] {
+fn retired_kb_commands_are_rejected() {
+    for command in ["document", "structure", "content"] {
         let output = cli(&["kb-page-index", command, "guide.md"]);
         assert!(!output.status.success(), "{command} should be rejected");
         assert!(
@@ -259,64 +312,46 @@ fn json_only_kb_commands_are_retired() {
 }
 
 #[test]
-fn content_fetch_preserves_exact_line_endings() {
-    let root = temp_dir("kb-cli-content-crlf");
-    let kb_dir = root.join("kb");
-    let index_dir = root.join("index");
-    fs::create_dir_all(&kb_dir).expect("create KB directory");
-    fs::write(
-        kb_dir.join("windows.md"),
-        b"# Windows\r\nFirst\r\nSecond\r\n",
-    )
-    .expect("write CRLF fixture");
-    assert!(build(&kb_dir, &index_dir).status.success());
-
-    let output = cli(&[
-        "kb-page-index",
-        "content",
-        "windows.md",
-        "2-3",
-        "--kb",
-        kb_dir.to_str().expect("UTF-8 KB path"),
-        "--index",
-        index_dir.to_str().expect("UTF-8 index path"),
-    ]);
-
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(output.stdout, b"First\r\nSecond\r\n");
-}
-
-#[test]
-fn content_fetch_reads_exact_markdown_line_range() {
-    let root = temp_dir("kb-cli-content");
+fn concurrent_queries_share_one_valid_rebuild() {
+    let root = temp_dir("kb-cli-concurrent-rebuild");
     let kb_dir = root.join("kb");
     let index_dir = root.join("index");
     fs::create_dir_all(&kb_dir).expect("create KB directory");
     write_fixture(&kb_dir);
-    assert!(build(&kb_dir, &index_dir).status.success());
 
+    let mut children = (0..4)
+        .map(|_| {
+            Command::new(env!("CARGO_BIN_EXE_claude-memory"))
+                .args([
+                    "kb-page-index",
+                    "query",
+                    "recovery command",
+                    "--kb",
+                    kb_dir.to_str().expect("UTF-8 KB path"),
+                    "--index",
+                    index_dir.to_str().expect("UTF-8 index path"),
+                ])
+                .spawn()
+                .expect("spawn query")
+        })
+        .collect::<Vec<_>>();
+
+    for child in &mut children {
+        assert!(child.wait().expect("wait for query").success());
+    }
     let output = cli(&[
         "kb-page-index",
-        "content",
-        "guide.md",
-        "5-8",
+        "query",
+        "recovery command",
         "--kb",
         kb_dir.to_str().expect("UTF-8 KB path"),
         "--index",
         index_dir.to_str().expect("UTF-8 index path"),
     ]);
-
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8(output.stdout).expect("UTF-8 stdout"),
-        "## Recovery\n\nExact recovery command.\nFinal line.\n"
-    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Exact recovery command."));
 }

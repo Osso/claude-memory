@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
@@ -38,14 +39,6 @@ pub struct TextManifestEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KbDocContent {
-    pub doc_id: String,
-    pub source_path: String,
-    pub locator: String,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KbSearchResult {
     pub doc_id: String,
     pub path: String,
@@ -55,8 +48,12 @@ pub struct KbSearchResult {
     pub node_id: String,
     pub title: String,
     pub reason: String,
-    pub content_command: String,
-    pub next_content_command: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KbContextSearch {
+    pub results: Vec<KbSearchResult>,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -73,48 +70,149 @@ pub fn default_index_dir() -> PathBuf {
 }
 
 pub fn build_text_index(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
+    let _lock = lock_text_index(index_dir)?;
+    build_text_index_locked(kb_dir, index_dir)
+}
+
+fn build_text_index_locked(kb_dir: &Path, index_dir: &Path) -> Result<KbBuildSummary> {
+    if !kb_dir.is_dir() {
+        bail!("KB directory does not exist: {}", kb_dir.display());
+    }
     ensure_disjoint_directories(kb_dir, index_dir)?;
-    let files = collect_markdown_files(kb_dir);
-    let mut nodes = Vec::new();
-    let mut manifest = Vec::new();
-
-    for path in &files {
-        let relative = relative_path(kb_dir, path);
-        let (markdown, entry) = read_stable_markdown(kb_dir, path)?;
-        let sections = split_markdown_sections(&relative, &markdown);
-        let line_count = markdown.lines().count();
-        for (index, section) in sections.iter().enumerate() {
-            nodes.push(TextIndexNode {
-                path: relative.clone(),
-                line_start: section.source_line,
-                line_end: sections
-                    .get(index + 1)
-                    .map_or(line_count, |next| next.source_line.saturating_sub(1)),
-                heading_path: section.heading_path.clone(),
-                normalized_body: normalized_section_body(section),
-            });
-        }
-        manifest.push(entry);
-    }
-
-    if index_dir.exists() {
-        std::fs::remove_dir_all(index_dir)
-            .with_context(|| format!("failed to replace {}", index_dir.display()))?;
-    }
-    std::fs::create_dir_all(index_dir)
-        .with_context(|| format!("failed to create {}", index_dir.display()))?;
-    let nodes_path = index_dir.join(NODES_FILE_NAME);
-    std::fs::write(&nodes_path, render_text_nodes(&nodes))?;
-    std::fs::write(
-        index_dir.join(MANIFEST_FILE_NAME),
-        render_text_manifest(&manifest),
-    )?;
-
+    let (nodes, manifest) = read_text_index_source(kb_dir)?;
+    replace_text_index(index_dir, &nodes, &manifest)?;
     Ok(KbBuildSummary {
         files: manifest.len(),
         nodes: nodes.len(),
-        index_path: nodes_path,
+        index_path: index_dir.join(NODES_FILE_NAME),
     })
+}
+
+fn read_text_index_source(kb_dir: &Path) -> Result<(Vec<TextIndexNode>, Vec<TextManifestEntry>)> {
+    let files = collect_markdown_files(kb_dir);
+    let mut nodes = Vec::new();
+    let mut manifest = Vec::new();
+    for path in &files {
+        let relative = relative_path(kb_dir, path);
+        let (markdown, entry) = read_stable_markdown(kb_dir, path)?;
+        nodes.extend(text_index_nodes(&relative, &markdown));
+        manifest.push(entry);
+    }
+    validate_manifest_entries(kb_dir, &manifest)?;
+    Ok((nodes, manifest))
+}
+
+fn text_index_nodes(relative_path: &str, markdown: &str) -> Vec<TextIndexNode> {
+    let sections = split_markdown_sections(relative_path, markdown);
+    let line_count = markdown.lines().count();
+    sections
+        .iter()
+        .enumerate()
+        .map(|(index, section)| TextIndexNode {
+            path: relative_path.to_string(),
+            line_start: section.source_line,
+            line_end: sections
+                .get(index + 1)
+                .map_or(line_count, |next| next.source_line.saturating_sub(1)),
+            heading_path: section.heading_path.clone(),
+            normalized_body: normalized_section_body(section),
+        })
+        .collect()
+}
+
+fn lock_text_index(index_dir: &Path) -> Result<File> {
+    let parent = index_dir.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    let name = index_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("kb-page-index");
+    let lock_path = parent.join(format!(".{name}.lock"));
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    lock.lock()
+        .with_context(|| format!("failed to lock {}", lock_path.display()))?;
+    Ok(lock)
+}
+
+fn replace_text_index(
+    index_dir: &Path,
+    nodes: &[TextIndexNode],
+    manifest: &[TextManifestEntry],
+) -> Result<()> {
+    let staging_dir = write_staged_text_index(index_dir, nodes, manifest)?;
+    activate_staged_text_index(index_dir, &staging_dir)
+}
+
+fn write_staged_text_index(
+    index_dir: &Path,
+    nodes: &[TextIndexNode],
+    manifest: &[TextManifestEntry],
+) -> Result<PathBuf> {
+    let staging_dir = sibling_index_path(index_dir, "staging");
+    std::fs::create_dir(&staging_dir)
+        .with_context(|| format!("failed to create {}", staging_dir.display()))?;
+    std::fs::write(staging_dir.join(NODES_FILE_NAME), render_text_nodes(nodes))?;
+    std::fs::write(
+        staging_dir.join(MANIFEST_FILE_NAME),
+        render_text_manifest(manifest),
+    )?;
+    Ok(staging_dir)
+}
+
+fn activate_staged_text_index(index_dir: &Path, staging_dir: &Path) -> Result<()> {
+    let backup_dir = sibling_index_path(index_dir, "backup");
+    if index_dir.exists() {
+        preserve_active_text_index(index_dir, &backup_dir)?;
+    }
+    if let Err(activation_error) = std::fs::rename(staging_dir, index_dir) {
+        restore_active_text_index(index_dir, &backup_dir, activation_error)?;
+    }
+    if backup_dir.exists() {
+        std::fs::remove_dir_all(&backup_dir)
+            .with_context(|| format!("failed to remove {}", backup_dir.display()))?;
+    }
+    Ok(())
+}
+
+fn preserve_active_text_index(index_dir: &Path, backup_dir: &Path) -> Result<()> {
+    std::fs::rename(index_dir, backup_dir).with_context(|| {
+        format!(
+            "failed to preserve {} as {}",
+            index_dir.display(),
+            backup_dir.display()
+        )
+    })
+}
+
+fn restore_active_text_index(
+    index_dir: &Path,
+    backup_dir: &Path,
+    activation_error: std::io::Error,
+) -> Result<()> {
+    if backup_dir.exists() {
+        std::fs::rename(backup_dir, index_dir).with_context(|| {
+            format!(
+                "failed to restore {} after activation failed: {activation_error}",
+                index_dir.display()
+            )
+        })?;
+    }
+    Err(activation_error).with_context(|| format!("failed to activate {}", index_dir.display()))
+}
+
+fn sibling_index_path(index_dir: &Path, label: &str) -> PathBuf {
+    let parent = index_dir.parent().unwrap_or_else(|| Path::new("."));
+    let name = index_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("kb-page-index");
+    parent.join(format!(".{name}.{label}-{}", uuid::Uuid::new_v4()))
 }
 
 fn ensure_disjoint_directories(kb_dir: &Path, index_dir: &Path) -> Result<()> {
@@ -172,15 +270,19 @@ fn load_text_manifest(index_dir: &Path) -> Result<Vec<TextManifestEntry>> {
 }
 
 fn validate_text_manifest(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+    let expected = load_text_manifest(index_dir)?;
+    validate_manifest_entries(kb_dir, &expected)
+}
+
+fn validate_manifest_entries(kb_dir: &Path, expected: &[TextManifestEntry]) -> Result<()> {
     if !kb_dir.is_dir() {
         bail!("KB directory does not exist: {}", kb_dir.display());
     }
-    let expected = load_text_manifest(index_dir)?;
     let files = collect_markdown_files(kb_dir);
     if files.len() != expected.len() {
         bail!("stale KB text index: Markdown file set changed");
     }
-    for (path, expected_entry) in files.iter().zip(expected.iter()) {
+    for (path, expected_entry) in files.iter().zip(expected) {
         let actual = manifest_entry(kb_dir, path)?;
         if !manifest_entries_match(expected_entry, &actual) {
             bail!("stale KB text index: {} changed", actual.path);
@@ -209,7 +311,16 @@ pub fn search_text_index(
     query: &str,
     limit: usize,
 ) -> Result<Vec<KbSearchResult>> {
+    let _lock = lock_text_index(index_dir)?;
     validate_text_manifest(kb_dir, index_dir)?;
+    search_text_index_locked(index_dir, query, limit)
+}
+
+fn search_text_index_locked(
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<KbSearchResult>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
@@ -219,15 +330,18 @@ pub fn search_text_index(
     }
     let scoring_terms = unique_tokens(phrase_tokens.clone());
     let coverage_stride = coverage_score_stride(scoring_terms.len());
-    let mut results: Vec<KbSearchResult> = load_text_nodes(index_dir)?
+    let results = load_text_nodes(index_dir)?
         .into_iter()
         .filter_map(|node| score_text_node(node, &scoring_terms, &phrase_tokens, coverage_stride))
         .collect();
-    for result in &mut results {
-        let command = text_content_command(&result.path, &result.node_id, kb_dir, index_dir);
-        result.content_command = command.clone();
-        result.next_content_command = command;
-    }
+    Ok(rank_text_results(results, coverage_stride, limit))
+}
+
+fn rank_text_results(
+    mut results: Vec<KbSearchResult>,
+    coverage_stride: usize,
+    limit: usize,
+) -> Vec<KbSearchResult> {
     let maximum_coverage = results
         .iter()
         .map(|result| result.score / coverage_stride)
@@ -238,11 +352,8 @@ pub fn search_text_index(
         results.retain(|result| !is_archive_path(&result.path));
     }
     results.sort_by(|left, right| {
-        let left_coverage = left.score / coverage_stride;
-        let right_coverage = right.score / coverage_stride;
         is_archive_path(&left.path)
             .cmp(&is_archive_path(&right.path))
-            .then_with(|| right_coverage.cmp(&left_coverage))
             .then_with(|| right.score.cmp(&left.score))
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.heading.cmp(&right.heading))
@@ -251,7 +362,7 @@ pub fn search_text_index(
     let mut seen_paths = HashSet::new();
     results.retain(|result| seen_paths.insert(result.path.clone()));
     results.truncate(limit);
-    Ok(results)
+    results
 }
 
 fn score_text_node(
@@ -296,23 +407,7 @@ fn score_text_node(
         node_id: locator,
         title,
         reason: format!("matched deterministic text index; score {score}"),
-        content_command: String::new(),
-        next_content_command: String::new(),
     })
-}
-
-fn text_content_command(path: &str, locator: &str, kb_dir: &Path, index_dir: &Path) -> String {
-    format!(
-        "claude-memory kb-page-index content {} {} --kb {} --index {}",
-        shell_quote(path),
-        shell_quote(locator),
-        shell_quote(&kb_dir.to_string_lossy()),
-        shell_quote(&index_dir.to_string_lossy())
-    )
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn text_index_tokens(text: &str) -> Vec<String> {
@@ -583,13 +678,24 @@ pub fn search_default_kb_context(query: &str, limit: usize) -> Result<Vec<KbSear
     )
 }
 
+pub fn search_default_kb_context_resilient(query: &str, limit: usize) -> KbContextSearch {
+    search_kb_context_resilient(
+        Path::new(DEFAULT_KB_DIR),
+        &default_index_dir(),
+        query,
+        limit,
+    )
+}
+
 pub fn search_kb(
     kb_dir: &Path,
     index_dir: &Path,
     query: &str,
     limit: usize,
 ) -> Result<Vec<KbSearchResult>> {
-    search_text_index(kb_dir, index_dir, query, limit)
+    let _lock = lock_text_index(index_dir)?;
+    ensure_text_index_locked(kb_dir, index_dir)?;
+    search_text_index_locked(index_dir, query, limit)
 }
 
 pub fn search_kb_context(
@@ -598,47 +704,115 @@ pub fn search_kb_context(
     query: &str,
     limit: usize,
 ) -> Result<Vec<KbSearchResult>> {
-    search_text_index(kb_dir, index_dir, query, limit)?
+    let _lock = lock_text_index(index_dir)?;
+    ensure_text_index_locked(kb_dir, index_dir)?;
+    let results = search_text_index_locked(index_dir, query, limit)?;
+    read_kb_result_texts(kb_dir, index_dir, results)
+}
+
+pub fn search_kb_context_resilient(
+    kb_dir: &Path,
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> KbContextSearch {
+    let _lock = match lock_text_index(index_dir) {
+        Ok(lock) => lock,
+        Err(error) => return unavailable_kb_context(error),
+    };
+    if validate_text_manifest(kb_dir, index_dir).is_ok() {
+        return search_fresh_kb_context_locked(kb_dir, index_dir, query, limit);
+    }
+
+    match build_text_index_locked(kb_dir, index_dir) {
+        Ok(_) => search_fresh_kb_context_locked(kb_dir, index_dir, query, limit),
+        Err(error) => search_stale_kb_context_locked(index_dir, query, limit, error),
+    }
+}
+
+fn ensure_text_index_locked(kb_dir: &Path, index_dir: &Path) -> Result<()> {
+    if validate_text_manifest(kb_dir, index_dir).is_ok() {
+        return Ok(());
+    }
+    build_text_index_locked(kb_dir, index_dir)
+        .with_context(|| format!("failed to rebuild KB text index at {}", index_dir.display()))?;
+    Ok(())
+}
+
+fn search_fresh_kb_context_locked(
+    kb_dir: &Path,
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> KbContextSearch {
+    let results = search_text_index_locked(index_dir, query, limit)
+        .and_then(|results| read_kb_result_texts(kb_dir, index_dir, results));
+    match results {
+        Ok(results) => KbContextSearch {
+            results,
+            warning: None,
+        },
+        Err(error) => unavailable_kb_context(error),
+    }
+}
+
+fn search_stale_kb_context_locked(
+    index_dir: &Path,
+    query: &str,
+    limit: usize,
+    rebuild_error: anyhow::Error,
+) -> KbContextSearch {
+    match search_text_index_locked(index_dir, query, limit) {
+        Ok(results) => KbContextSearch {
+            results,
+            warning: Some(format!(
+                "KB PageIndex rebuild failed; using stale index: {rebuild_error:#}"
+            )),
+        },
+        Err(_) => unavailable_kb_context(rebuild_error),
+    }
+}
+
+fn read_kb_result_texts(
+    kb_dir: &Path,
+    index_dir: &Path,
+    results: Vec<KbSearchResult>,
+) -> Result<Vec<KbSearchResult>> {
+    results
         .into_iter()
         .map(|mut result| {
-            let content = text_document_content(
+            result.text = read_indexed_source_text(
                 kb_dir,
                 index_dir,
                 Path::new(&result.doc_id),
                 &result.node_id,
             )?;
-            result.text = content.text;
             Ok(result)
         })
         .collect()
 }
 
-pub fn text_document_content(
+fn read_indexed_source_text(
     kb_dir: &Path,
     index_dir: &Path,
-    doc_selector: impl AsRef<Path>,
+    doc_selector: &Path,
     locator: &str,
-) -> Result<KbDocContent> {
-    validate_text_manifest(kb_dir, index_dir)?;
-    let source_path = resolve_text_document_path(kb_dir, index_dir, doc_selector.as_ref())?;
+) -> Result<String> {
+    let source_path = resolve_text_document_path(kb_dir, index_dir, doc_selector)?;
     let (start, end) = parse_line_range(locator)
-        .with_context(|| format!("locator must be an inclusive line range like 4-8: {locator}"))?;
-    let text = std::fs::read_to_string(kb_dir.join(&source_path))
-        .with_context(|| format!("failed to read {}", kb_dir.join(&source_path).display()))?;
+        .with_context(|| format!("invalid indexed line range: {locator}"))?;
+    let path = kb_dir.join(&source_path);
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     if start > lines.len() || end > lines.len() {
         bail!(
-            "line range {start}-{end} exceeds document length: {} has {} lines",
+            "indexed line range {start}-{end} exceeds document length: {} has {} lines",
             source_path,
             lines.len()
         );
     }
-    Ok(KbDocContent {
-        doc_id: source_path.clone(),
-        source_path,
-        locator: locator.to_string(),
-        text: lines[start - 1..end].concat(),
-    })
+    Ok(lines[start - 1..end].concat())
 }
 
 fn resolve_text_document_path(kb_dir: &Path, index_dir: &Path, selector: &Path) -> Result<String> {
@@ -647,10 +821,9 @@ fn resolve_text_document_path(kb_dir: &Path, index_dir: &Path, selector: &Path) 
         .unwrap_or(selector)
         .to_string_lossy()
         .to_string();
-    let with_extension = ensure_markdown_extension(&normalized);
     load_text_manifest(index_dir)?
         .into_iter()
-        .find(|entry| entry.path == normalized || entry.path == with_extension)
+        .find(|entry| entry.path == normalized)
         .map(|entry| entry.path)
         .with_context(|| {
             format!(
@@ -660,22 +833,18 @@ fn resolve_text_document_path(kb_dir: &Path, index_dir: &Path, selector: &Path) 
         })
 }
 
-fn ensure_markdown_extension(selector: &str) -> String {
-    if selector.ends_with(".md") {
-        selector.to_string()
-    } else {
-        format!("{selector}.md")
-    }
-}
-
 fn parse_line_range(locator: &str) -> Option<(usize, usize)> {
     let (start, end) = locator.split_once('-')?;
     let start = start.parse().ok()?;
     let end = end.parse().ok()?;
-    if start == 0 || end < start {
-        return None;
+    (start > 0 && end >= start).then_some((start, end))
+}
+
+fn unavailable_kb_context(error: anyhow::Error) -> KbContextSearch {
+    KbContextSearch {
+        results: Vec::new(),
+        warning: Some(format!("KB PageIndex unavailable: {error:#}")),
     }
-    Some((start, end))
 }
 
 fn collect_markdown_files(kb_dir: &Path) -> Vec<PathBuf> {

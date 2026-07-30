@@ -24,11 +24,10 @@ claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
 claude-memory search --limit 10 --json "query"
 
-# Build/query KB text index (build writes only nodes.tsv and manifest.tsv)
-claude-memory kb-page-index build --kb /syncthing/Sync/KB
+# Query KB text index; missing or stale indexes rebuild automatically
 claude-memory kb-page-index query "query" --kb /syncthing/Sync/KB
-# Fetch exact source lines from a fresh index
-claude-memory kb-page-index content path/to/note.md 4-8 --kb /syncthing/Sync/KB
+# Optional explicit prewarm/diagnostic build
+claude-memory kb-page-index build --kb /syncthing/Sync/KB
 
 # Build transcript PageIndex from Claude and Codex sessions
 claude-memory transcript-page-index build
@@ -52,12 +51,13 @@ existing prompt/answer and KB PageIndex context; it does not index. Transcript
 PageIndex remains a separate CLI navigation surface and is not injected by
 default.
 
-KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` reads those
-files and rejects a stale index without rebuilding; run `build` explicitly after
-source changes. KB `content` requires the KB source and an inclusive line range.
-Query results include a follow-up `content` command with explicit `--kb` and
-`--index` paths. The former KB `document`, `structure`, and agentic query
-commands are retired. Transcript PageIndex query is deterministic lexical-only;
+KB `build` writes exactly `nodes.tsv` and `manifest.tsv`. KB `query` and
+`enrich` synchronously rebuild missing or stale indexes under a lock. Completed
+indexes replace the prior index atomically. Direct query fails if rebuilding
+fails; enrich uses the prior index with an agent-context warning, or warns and
+continues without KB results when no index exists. Query prints matched excerpts
+directly. KB `document`, `structure`, `content`, and agentic query commands are
+retired. Transcript PageIndex query is deterministic lexical-only;
 its document, structure, and content commands remain explicit CLI operations.
 
 The former memory-unit and graph runtime paths are retired. The
@@ -71,6 +71,14 @@ KB representation, and migration backups exist. No runtime migration or export
 command remains. Qdrant now contains only `claude-session-history`.
 
 ## Build & Install
+
+Install the public repository:
+
+```bash
+cargo install --git https://github.com/Osso/claude-memory
+```
+
+For a local checkout:
 
 ```bash
 ./deploy.sh

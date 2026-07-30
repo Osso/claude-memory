@@ -59,10 +59,9 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ### CLI and retrieval surfaces
 
 - [x] `claude-memory kb-page-index build` writes only `nodes.tsv` and `manifest.tsv`.
-- [x] `claude-memory kb-page-index query <query>` reads the persisted TSV index and rejects stale data without rebuilding.
-- [x] `claude-memory kb-page-index content <doc-path> <start-end> --kb <dir> --index <dir>` requires the KB source and returns the exact inclusive line range.
-- [x] KB query results include a custom follow-up content command with the selected `--kb` and `--index` paths.
-- [x] Retire the KB `document`, `structure`, and agentic query commands.
+- [x] `claude-memory kb-page-index query <query>` rebuilds a missing or stale persisted TSV index before searching.
+- [x] KB query results include source path, line range, heading, score, and matched excerpt directly.
+- [x] Retire the KB `document`, `structure`, `content`, and agentic query commands.
 - [x] `claude-memory transcript-page-index build` builds the transcript PageIndex.
 - [x] `claude-memory transcript-page-index document <doc-id-or-path>` prints transcript metadata.
 - [x] `claude-memory transcript-page-index structure <doc-id-or-path>` prints transcript outline without full turn text.
@@ -74,7 +73,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ### Enrich integration
 
 - [x] `claude-memory enrich` may include KB PageIndex output alongside unified prompt/answer history when it fits hook latency and output budgets.
-- [x] `claude-memory enrich` omits KB output when the text index is missing or stale until an explicit rebuild.
+- [x] `claude-memory enrich` rebuilds missing or stale indexes and warns in agent context when it must use a stale index or continue without KB results.
 - [x] `claude-memory enrich` must label KB PageIndex context as `KB PageIndex`.
 - [x] `claude-memory enrich` must not inject Transcript PageIndex results by default.
 
@@ -88,7 +87,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ## How it works
 
-- `src/kb_search.rs` implements the KB TSV text index and exact source line-range retrieval.
+- `src/kb_search.rs` implements locking, self-healing rebuilds, atomic replacement, deterministic TSV search, and enrich fallback.
 - `src/page_index.rs` implements the Transcript PageIndex document model, Claude/Codex parsing, build, and deterministic lexical query.
 - [kb-page-index.md](kb-page-index.md) describes the current KB PageIndex implementation.
 - [friction-memory-creation.md](friction-memory-creation.md) records the retired transcript-mining boundary.
@@ -133,14 +132,14 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
     - `transcript_page_index_accepts_document_structure_content_and_query_commands`
     - `kb_page_index_accepts_build_paths`
     - `kb_page_index_accepts_query_paths_and_limit`
-    - `kb_page_index_accepts_content_command`
+    - `kb_page_index_rejects_retired_content_command`
 
 ## Known gaps (current cycle)
 
 - [x] Add tests for the shared nested PageIndex document model.
 - [x] Add tests for structure output that omits full node text.
 - [x] Add tests for exact content fetch by node id and range.
-- [x] Add tests for KB stale-index rejection when files are added, changed, or deleted.
+- [x] Add tests for automatic KB rebuild when files are added, changed, or deleted.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
 - [ ] Re-run build-time, output-size, and query-quality benchmarks for the current TSV text index; the historical PageIndex benchmark no longer measures this runtime.
@@ -149,7 +148,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ## Out of scope
 
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
-- KB document/structure commands and KB agentic query mode.
+- KB document/structure/content commands and KB agentic query mode.
 - Cloud PageIndex API compatibility.
 - Transcript PageIndex integrations beyond the CLI before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.

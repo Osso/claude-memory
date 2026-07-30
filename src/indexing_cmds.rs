@@ -108,21 +108,8 @@ fn print_kb_query_results(results: &[kb_search::KbSearchResult]) {
             result.score
         );
         println!("   reason: {}", result.reason);
-        println!("   next: {}\n", result.next_content_command);
+        println!("   text: {}\n", result.text);
     }
-}
-
-pub fn run_kb_page_index_content(
-    doc: &str,
-    locator: &str,
-    kb: Option<PathBuf>,
-    index: Option<PathBuf>,
-) -> Result<()> {
-    let kb_dir = kb.unwrap_or_else(|| PathBuf::from(kb_search::DEFAULT_KB_DIR));
-    let index_dir = index.unwrap_or_else(kb_search::default_index_dir);
-    let content = kb_search::text_document_content(&kb_dir, &index_dir, Path::new(doc), locator)?;
-    print!("{}", content.text);
-    Ok(())
 }
 
 pub async fn run_page_index(

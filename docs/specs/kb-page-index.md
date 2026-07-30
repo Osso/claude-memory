@@ -1,85 +1,73 @@
-The KB PageIndex feature provides persistent, heading-aware retrieval over the local Markdown knowledge base at `/syncthing/Sync/KB`. It is the source of KB context for prompt enrichment without requiring KB facts to be duplicated into vector memory units. It is separate from [prompt and answer history](prompt-answer-history.md), which indexes transcript chunks only.
+The KB PageIndex feature provides persistent, heading-aware retrieval over the local Markdown knowledge base at `/syncthing/Sync/KB`. It supplies KB context to prompt enrichment without duplicating KB facts into vector history. Implementation details live in [the PageIndex wiki](../wiki/systems/page-index-parity.md).
 
 ## What it must do
 
 ### Index lifecycle
 
-- [x] Build a persistent KB text index from a Markdown directory into an index directory.
-- [x] Write exactly `nodes.tsv` and `manifest.tsv` for the KB text index.
-- [x] Store enough index metadata to report indexed file and node counts.
-- [x] Preserve Markdown heading paths in search results, such as `Corrections > Process`.
-- [x] Have query read the persisted TSV files and reject a stale index without rebuilding it.
+- [x] Build a persistent KB text index from Markdown into exactly `nodes.tsv` and `manifest.tsv`.
+- [x] Preserve Markdown heading paths and source line ranges in indexed results.
+- [x] Detect missing and stale indexes when files are added, changed, or deleted.
+- [x] Rebuild missing or stale indexes synchronously when query or enrich accesses them.
+- [x] Serialize concurrent access and replace completed indexes atomically.
+- [x] Preserve the previous index when rebuilding fails.
 
 ### CLI surface
 
-- [x] Accept `claude-memory kb-page-index build --kb <dir> --output <dir>`.
-- [x] Accept `claude-memory kb-page-index query <query> --limit <n> --kb <dir> --index <dir>` without an implicit rebuild.
-- [x] Accept `claude-memory kb-page-index content <doc-path> <start-end> --kb <dir> --index <dir>` for an inclusive source line range.
+- [x] Accept `claude-memory kb-page-index build --kb <dir> --output <dir>` for explicit prewarming and diagnostics.
+- [x] Accept `claude-memory kb-page-index query <query> --limit <n> --kb <dir> --index <dir>`.
+- [x] Print source path, inclusive line range, heading path, score, and matched excerpt directly.
 - [x] Print a clear no-results message when no KB section matches.
-- [x] Print query results with source path, inclusive line range, heading path, score, and a follow-up content command.
-- [x] Make the follow-up command explicit for custom roots: `claude-memory kb-page-index content <doc-path> <start-end> --kb <dir> --index <dir>`.
-- [x] Retire the KB `document`, `structure`, and agentic query commands.
+- [x] Retire the KB `document`, `structure`, `content`, and agentic query commands.
 
 ### Retrieval behavior
 
-- [x] Query `nodes.tsv` and `manifest.tsv` without rebuilding the index.
-- [x] Reject the query when the KB source is missing or the manifest is stale.
-- [x] Return the matching source path and heading for a query that targets a persisted section.
-- [x] Require content retrieval to name the KB source and an exact inclusive line range.
-- [x] Keep only results in the best distinct query-term coverage tier up to the requested limit; do not fill remaining slots with weaker matches, and exclude archive results when nonarchive matches exist in that tier.
+- [x] Keep deterministic lexical scoring over persisted heading nodes.
+- [x] Rebuild before direct query when the persisted index is missing or stale.
+- [x] Fail direct query explicitly when rebuilding fails.
+- [x] Keep only results in the best distinct query-term coverage tier up to the requested limit.
+- [x] Exclude archive results when nonarchive matches exist in that tier.
 - [x] Keep at most one matching section per source document before applying the limit.
-- [x] Return the real KB query `frontend design skill load immediately` with two relevant results and `memory/corrections.md` first, rather than a noisy third.
-- [x] Return the real KB query `claude bash hook codex unsafe` with distinct documents.
+- [x] Preserve the real-KB quality gates for frontend-design, Claude Bash hook, and AMDGPU queries.
 
 ### Enrich integration
 
-- [x] Format KB results under a distinct `Relevant KB notes` section.
-- [x] Label enrich KB context as coming from `KB PageIndex`.
+- [x] Format KB results under a distinct `Relevant KB notes (KB PageIndex)` section.
 - [x] Include KB PageIndex results alongside unified prompt/answer history when both are relevant.
-- [x] Include KB results from an existing fresh text index only; omit the KB section when the index is missing or stale until an explicit rebuild.
+- [x] Rebuild a missing or stale index before enrichment search.
+- [x] If rebuilding fails and a prior index exists, use it and inject a warning into agent context.
+- [x] If rebuilding fails without a prior index, inject a warning and continue other enrichment without KB results.
+- [x] Do not write KB rebuild warnings to stderr.
 - [x] Cap enrich KB output to a small number of results.
+
+## How it works
+
+- [PageIndex parity and retrieval flow](../wiki/systems/page-index-parity.md)
+- [Runtime retrieval flows](../wiki/systems/retrieval-flows.md)
 
 ## Implementation inventory
 
-- `src/kb_search.rs` — builds, stores, validates, loads, scores, and queries the persistent KB text index.
-- `src/enrich_cmd.rs` — reads prompt-hook input and injects formatted unified prompt/answer history and KB PageIndex results.
-- `src/indexing_cmds.rs` — implements the `kb-page-index build`, `query`, and exact-line-range `content` command handlers.
-- `src/kb_page_index_cli.rs` — declares the `kb-page-index` CLI subcommands.
-- `src/main.rs` — dispatches the `kb-page-index` CLI subcommands.
-- `src/main_tests.rs` — covers CLI parsing for KB PageIndex commands.
-- `README.md` — lists the user-facing KB PageIndex commands.
+- `src/kb_search.rs` — validates, locks, rebuilds, atomically replaces, scores, and queries the KB index.
+- `src/enrich_cmd.rs` — injects KB results and rebuild warnings into agent context.
+- `src/indexing_cmds.rs` — implements explicit build and self-healing query handlers.
+- `src/kb_page_index_cli.rs` — declares the public KB PageIndex CLI.
+- `src/main.rs` — dispatches KB PageIndex commands.
+- `README.md` — documents installation and user-facing behavior.
 
 ## Tests asserting this spec
 
 - `tests/kb_page_index_cli.rs`
-  - `explicit_build_writes_only_text_index_files`
-  - `query_reads_explicit_text_index`
-  - `stale_query_fails_without_rebuilding`
-  - `query_rejects_added_deleted_and_missing_kb_files`
-  - `build_creates_missing_nested_output_parents`
-  - `json_only_kb_commands_are_retired`
-  - `content_fetch_preserves_exact_line_endings`
-  - `content_fetch_reads_exact_markdown_line_range`
 - `src/kb_search_tests.rs`
-  - `stale_text_search_rejects_without_automatic_rebuild`
-  - `text_search_uses_deterministic_path_order_for_ties`
-  - `multi_term_body_match_outranks_single_structural_term`
-  - `adjacent_coverage_levels_outrank_maximum_structural_frequency`
-  - `search_kb_context_fetches_exact_node_content_for_enrich`
 - `src/enrich_cmd.rs`
-  - `fresh_text_index_result_formats_for_enrich_with_explicit_content_roots`
+- `src/main_tests.rs`
 
 ## Known gaps (current cycle)
 
-- [x] Cover stale-index rejection when KB files are added, changed, or deleted.
-- [x] Add an integration-style test for `enrich` that proves KB PageIndex results are included and capped.
-- [ ] Add a CLI output test or snapshot for query result formatting and no-results behavior.
-- [ ] Decide whether KB PageIndex should index repo-local `AGENTS.md` / persistent rules as a separate source.
+None.
 
 ## Out of scope
 
-- Vector embeddings for KB sections; KB PageIndex is the deterministic TSV text retrieval path.
-- JSON document metadata, structure, node-id content fetches, and KB agentic traversal.
-- Session-history vector indexing; see [prompt-answer-history.md](prompt-answer-history.md).
-- LLM-guided PageIndex traversal is not part of the KB CLI; KB query remains deterministic lexical scoring over persisted heading nodes.
-- Replacing transcript PageIndex; session PageIndex and KB PageIndex are separate surfaces.
+- Filesystem watchers, cron jobs, and editor/write hooks.
+- New user configuration for index maintenance.
+- Stale fallback for direct CLI query.
+- Vector embeddings or LLM-guided traversal for KB sections.
+- Transcript PageIndex behavior.

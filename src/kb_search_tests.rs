@@ -664,3 +664,74 @@ fn search_kb_context_fetches_exact_node_content_for_enrich() {
         "## Frontend\nLoad the frontend design skill immediately before UI work.\n"
     );
 }
+
+#[test]
+fn resilient_context_uses_stale_index_when_rebuild_fails() {
+    let root = unique_temp_dir("kb-page-index-stale-fallback");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    std::fs::write(
+        kb_dir.join("rules.md"),
+        "# Rules\nUse the durable router procedure.\n",
+    )
+    .unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    std::fs::remove_dir_all(&kb_dir).unwrap();
+
+    let context = search_kb_context_resilient(&kb_dir, &index_dir, "router procedure", 3);
+
+    assert_eq!(context.results.len(), 1);
+    assert_eq!(context.results[0].path, "rules.md");
+    assert!(context.results[0].text.contains("durable router procedure"));
+    assert!(
+        context
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("using stale index"))
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn resilient_context_warns_without_results_when_no_index_can_be_built() {
+    let root = unique_temp_dir("kb-page-index-unavailable");
+    let kb_dir = root.join("missing-kb");
+    let index_dir = root.join("index");
+
+    let context = search_kb_context_resilient(&kb_dir, &index_dir, "router procedure", 3);
+
+    assert!(context.results.is_empty());
+    assert!(
+        context
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("KB PageIndex unavailable"))
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_rebuild_preserves_the_previous_index() {
+    let root = unique_temp_dir("kb-page-index-atomic-preservation");
+    let kb_dir = root.join("kb");
+    let index_dir = root.join("index");
+    std::fs::create_dir_all(&kb_dir).unwrap();
+    let source = kb_dir.join("rules.md");
+    std::fs::write(&source, "# Rules\nOriginal router procedure.\n").unwrap();
+    build_text_index(&kb_dir, &index_dir).unwrap();
+    let nodes_before = std::fs::read(index_dir.join("nodes.tsv")).unwrap();
+    let manifest_before = std::fs::read(index_dir.join("manifest.tsv")).unwrap();
+    std::fs::write(&source, [0xff, 0xfe, 0xfd]).unwrap();
+
+    assert!(build_text_index(&kb_dir, &index_dir).is_err());
+    assert_eq!(
+        std::fs::read(index_dir.join("nodes.tsv")).unwrap(),
+        nodes_before
+    );
+    assert_eq!(
+        std::fs::read(index_dir.join("manifest.tsv")).unwrap(),
+        manifest_before
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

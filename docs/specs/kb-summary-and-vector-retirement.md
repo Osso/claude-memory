@@ -10,8 +10,8 @@ The summary and duplicate-KB-vector retirement slice removes the obsolete KB-to-
 
 ### Preserved retrieval and history
 
-- [x] Preserve KB PageIndex build, query, and exact line-range content retrieval.
-- [x] Require an explicit rebuild when the KB text index is missing or stale; query does not rebuild it.
+- [x] Preserve KB PageIndex explicit build and deterministic query retrieval.
+- [x] Rebuild the KB text index automatically when query or enrich detects missing or stale data.
 - [x] Preserve Transcript PageIndex node summaries; `PageIndexNode.summary` remains part of the node model.
 - [x] Preserve prompt/answer history indexing and search as a separate surface.
 - [x] Preserve all legacy Qdrant data; live before/after counts remain unchanged.
@@ -43,7 +43,7 @@ No active summary producer or summary search path existed before this retirement
 ## Tests asserting this spec
 
 - `src/main_tests.rs::ingest_kb_command_is_retired`
-- Existing KB PageIndex tests in `src/kb_search_tests.rs`, including persisted search and stale-index rejection without automatic rebuild.
+- Existing KB PageIndex tests in `src/kb_search_tests.rs`, including persisted search, automatic rebuild, and stale enrich fallback.
 - `src/page_index_tests.rs::summary_separates_text_turns_from_tool_calls`
 
 ## Known gaps (current cycle)

@@ -1,52 +1,36 @@
 # PageIndex Parity
 
-This project matches the useful PageIndex retrieval architecture from
-`VectifyAI/PageIndex` commit `f50e529`, not the full Python implementation. The
-local implementation is scoped to Markdown KB notes and Claude/Codex transcript
-history.
+This project adopts the useful retrieval shape from `VectifyAI/PageIndex` without reproducing its full Python implementation. Local behavior is scoped to Markdown KB notes and Claude/Codex transcript history.
 
 ## Document Model
 
-KB PageIndex and Transcript PageIndex now have different user-facing surfaces:
+KB PageIndex and Transcript PageIndex have separate surfaces:
 
-- KB build writes only `nodes.tsv` and `manifest.tsv`
-- KB query reads those files and rejects stale indexes without rebuilding
-- KB content requires the source KB and an exact inclusive line range
-- Transcript PageIndex retains document metadata, structure, exact content fetch,
-  and traceable query references
+- KB build writes `nodes.tsv` and `manifest.tsv`.
+- KB query validates and synchronously rebuilds a missing or stale index, then prints matching excerpts directly.
+- KB `document`, `structure`, `content`, and agentic query commands are retired.
+- Transcript PageIndex retains document metadata, structure, exact content fetch, and traceable query references.
 
-The persistent KB model lives in `src/kb_search.rs`. The transcript model lives
-in `src/page_index.rs`.
+The persistent KB model lives in `src/kb_search.rs`. The transcript model lives in `src/page_index.rs`.
 
-## Retrieval Flow
+## KB Retrieval Flow
 
-KB retrieval is deterministic text search over the persisted TSV index. Its
-`document`, `structure`, and agentic query commands are retired. Rebuild the KB
-index explicitly after source changes, then query or fetch exact source lines.
+Query and enrich acquire the index lock, validate `manifest.tsv`, and rebuild when the Markdown file set or metadata changed. Rebuild writes a staging index and activates it only after both TSV files are complete. Failed rebuilding preserves the previous index.
 
-Transcript PageIndex query is deterministic lexical scoring over persisted
-transcript nodes. It returns traceable document/node hits and a follow-up
-content command. Metadata, structure, and exact content remain available as
-explicit CLI source-inspection commands; query does not perform an agentic,
-tree-walk, or LLM retrieval loop.
+Direct query fails if rebuilding fails. Enrich instead uses the previous index when available and adds a warning to agent context; without a usable index it warns and continues with other enrichment sources.
+
+The explicit `kb-page-index build` command remains for prewarming and diagnostics. Routine KB edits require no manual rebuild.
+
+## Transcript Retrieval Flow
+
+Transcript PageIndex query remains deterministic lexical scoring over persisted transcript nodes. It returns traceable document/node hits and follow-up content commands. Metadata, structure, and exact content remain explicit CLI source-inspection commands.
 
 ## Surfaces
 
-KB PageIndex is exposed through `claude-memory kb-page-index` and may be used by
-`claude-memory enrich` under tight output caps. Transcript PageIndex is exposed
-through `claude-memory transcript-page-index` and remains CLI-only.
+KB PageIndex is exposed through `claude-memory kb-page-index` and used by `claude-memory enrich` under tight output caps. Transcript PageIndex remains CLI-only.
 
-The two surfaces intentionally stay separate:
-
-- KB PageIndex is a deterministic TSV text-retrieval surface; query follow-ups use exact source line ranges and explicit `--kb`/`--index` paths.
-- Transcript PageIndex is a source-inspection surface for Claude/Codex sessions and retains its document/structure/content flow.
-- No active runtime path writes durable transcript-derived memory units;
-  legacy records are compatibility-only.
+Neither PageIndex path writes durable memory units or graph records.
 
 ## Bounded Parity
 
-The local implementation does not include PDF parsing, OCR, PageIndex cloud/API
-compatibility, FinanceBench claims, or corpus-level filesystem routing. Full
-transcript corpus indexing is still too large for routine use; the benchmark in
-`docs/benchmarks/page-index-2026-05-10.md` records the current cost and quality
-tradeoffs.
+PDF parsing, OCR, PageIndex cloud/API compatibility, FinanceBench claims, and corpus-level filesystem routing remain out of scope. The benchmark in `docs/benchmarks/page-index-2026-05-10.md` records transcript corpus cost and quality tradeoffs.
