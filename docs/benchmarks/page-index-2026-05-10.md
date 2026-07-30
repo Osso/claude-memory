@@ -11,8 +11,9 @@ baselines available on this machine:
 - legacy `claude-memory search --type prompts`
 
 The goal is not a synthetic throughput contest. The useful question is whether
-PageIndex gives traceable document structure and exact content fetches cheaply
-enough for CLI and hook use.
+PageIndex gives traceable document structure and bounded matched excerpts cheaply
+enough for CLI and hook use. Transcript PageIndex retains exact content fetch;
+the historical KB content command described below is retired.
 
 ## Corpus
 
@@ -55,7 +56,7 @@ Ten prompts were used for the query benchmark:
 | --- | --- | ---: | ---: | --- |
 | `rg -i` OR-term scan | KB Markdown | 0.07s | 0.007s | Fastest, but output was 129 KiB and noisy because every term match is returned without document structure. |
 | `claude-memory search --type prompts --limit 3` | legacy prompt/vector search | 1.24s | 0.124s | Fast, but results are transcript chunks and often not KB-specific. |
-| `kb-page-index query --mode lexical --limit 3` (historical pre-retirement syntax) | KB PageIndex | 5.43s | 0.543s | Historical result: document id, node id, score/reason, and exact `content` command. The KB JSON/agentic surface was later replaced by the TSV text index. |
+| `kb-page-index query --mode lexical --limit 3` (historical pre-retirement syntax) | KB PageIndex | 5.43s | 0.543s | Historical result: document id, node id, score/reason, and a follow-up `content` command. That KB command and JSON/agentic surface are retired; current TSV query prints matched excerpts directly. |
 | `transcript-page-index query --mode lexical --limit 3` (historical pre-removal syntax; current query omits `--mode`) | 424-session bounded transcript index | 1.46s | 0.146s | Historical deterministic lexical query; faster than KB PageIndex on this smaller index, but transcript quality is noisy on broad prompts. |
 | `claude-memory enrich` (pre-retirement) | memory units + KB PageIndex | 9.17s | 0.917s | Historical measurement only; not the current enrich source composition. |
 
@@ -81,9 +82,10 @@ fixed the benchmark path.
 ## Conclusion
 
 KB PageIndex is worth keeping for KB retrieval because it gives structured,
-traceable hits and exact content fetches that `rg` and legacy prompt search do
-not provide. It is not a raw-speed replacement for `rg`; for debugging literal
-matches, `rg` remains the baseline.
+traceable hits and matched excerpts that `rg` and legacy prompt search do not
+provide. It is not a raw-speed replacement for `rg`; for debugging literal
+matches, `rg` remains the baseline. Exact content fetch remains a Transcript
+PageIndex capability, not a current KB command.
 
 Transcript PageIndex should stay separate and should not be injected by default.
 The bounded query path is fast enough for CLI exploration, but full-corpus build

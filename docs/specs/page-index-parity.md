@@ -18,7 +18,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Preserve traceable Transcript PageIndex document, structure, and exact-content surfaces.
 - [x] Keep the reference distinction between transcript structure and transcript content: structure output must not require dumping full turn text.
 - [x] Keep stable transcript node identifiers suitable for follow-up content fetches.
-- [x] Keep KB retrieval outside that JSON/nested-document CLI contract: KB uses deterministic TSV text search and exact source line ranges.
+- [x] Keep KB retrieval outside that JSON/nested-document CLI contract: KB uses deterministic TSV text search and direct matched excerpts.
 
 ### Supported source families
 
@@ -33,7 +33,6 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 - [x] Store transcript document metadata and nested nodes with stable locators.
 - [x] Store KB heading-aware nodes in `nodes.tsv` and source freshness metadata in `manifest.tsv`.
-- [x] Provide exact KB content retrieval from the source Markdown file by an inclusive line range.
 - [x] Preserve the transcript distinction between structure without full text and exact content fetch.
 
 ### KB Markdown behavior
@@ -42,7 +41,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 - [x] Ignore Markdown headings inside fenced code blocks.
 - [x] Preserve heading source line numbers.
 - [x] Record source freshness in `manifest.tsv`.
-- [x] Reject query/content when Markdown files are added, changed, deleted, or otherwise make the manifest stale; rebuild is explicit.
+- [x] Rebuild the index before query or enrich when Markdown files are added, changed, deleted, or otherwise make the manifest stale; direct query fails if rebuilding fails, while enrich uses a prior index with an agent-context warning or continues without KB results when none exists.
 - [x] Keep only results in the best distinct query-term coverage tier up to the requested limit; do not fill remaining slots with weaker matches, and exclude archive results when nonarchive matches exist in that tier.
 - [x] Keep at most one matching section per source document before applying the limit.
 - [x] Preserve the frontend two-result, bash-hook document-diversity, AMDGPU-first, and absent-query quality gates.
@@ -94,9 +93,9 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 ## Implementation inventory
 
-- `src/kb_search.rs` — KB TSV text-index builder/search path with exact source line-range content fetch.
+- `src/kb_search.rs` — KB TSV text-index builder/search path with matched excerpts, self-healing rebuilds, and enrich fallback.
 - `src/page_index.rs` — transcript outline builder for Claude/Codex sessions using the nested PageIndex document model.
-- `src/indexing_cmds.rs` — CLI command handlers for KB build/query/content and Transcript PageIndex commands.
+- `src/indexing_cmds.rs` — CLI command handlers for KB build/query and Transcript PageIndex commands.
 - `src/enrich_cmd.rs` — prompt hook integration for KB PageIndex context.
 - `src/main.rs` — CLI declaration and dispatch for KB PageIndex and Transcript PageIndex commands.
 - `src/main_tests.rs` — CLI parsing tests for PageIndex commands.
@@ -108,13 +107,16 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
   - `tests/kb_page_index_cli.rs`
     - `explicit_build_writes_only_text_index_files`
     - `query_reads_explicit_text_index`
-    - `stale_query_fails_without_rebuilding`
-    - `content_fetch_reads_exact_markdown_line_range`
-    - `content_fetch_preserves_exact_line_endings`
-    - `json_only_kb_commands_are_retired`
+    - `query_builds_a_missing_index`
+    - `stale_query_rebuilds_changed_source`
+    - `query_rebuilds_after_added_or_deleted_kb_files`
+    - `retired_kb_commands_are_rejected`
+    - `concurrent_queries_share_one_valid_rebuild`
   - `src/kb_search.rs`
     - `text_index_files_round_trip_generated_sections`
-    - `stale_text_search_rejects_without_automatic_rebuild`
+    - `resilient_context_uses_stale_index_when_rebuild_fails`
+    - `resilient_context_warns_without_results_when_no_index_can_be_built`
+    - `failed_rebuild_preserves_the_previous_index`
     - `text_search_weights_heading_over_path_over_body`
     - `text_search_rewards_exact_phrase`
     - `frontend_quality_gate_excludes_archive_noise_from_top_three`
@@ -138,7 +140,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 
 - [x] Add tests for the shared nested PageIndex document model.
 - [x] Add tests for structure output that omits full node text.
-- [x] Add tests for exact content fetch by node id and range.
+- [x] Add tests for exact transcript content fetch by node id and range.
 - [x] Add tests for automatic KB rebuild when files are added, changed, or deleted.
 - [x] Add tests for transcript query returning traceable document/node references.
 - [x] Add tests proving Transcript PageIndex does not create memory units.
@@ -148,7 +150,7 @@ Reference implementation: `VectifyAI/PageIndex` at commit `f50e529`.
 ## Out of scope
 
 - Full PDF PageIndex parity; no PDF parser or OCR work until Markdown and transcript parity are complete.
-- KB document/structure/content commands and KB agentic query mode.
+- KB document/structure/content commands and KB agentic query mode; KB query emits matched excerpts directly.
 - Cloud PageIndex API compatibility.
 - Transcript PageIndex integrations beyond the CLI before query quality is proven.
 - Corpus-scale PageIndex file-system routing across millions of documents before single-document query quality is proven.
