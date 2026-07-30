@@ -133,6 +133,7 @@ fn lock_text_index(index_dir: &Path) -> Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("failed to open {}", lock_path.display()))?;
     lock.lock()
