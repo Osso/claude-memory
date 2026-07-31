@@ -1,5 +1,7 @@
 //! Prompt enrichment hook output.
 
+use std::io::Read;
+
 use anyhow::{Context, Result};
 
 use crate::{index, kb_search};
@@ -9,8 +11,8 @@ const MAX_KB_RESULT_CHARS: usize = 500;
 const MAX_SESSION_CHUNKS_PER_GROUP: usize = 3;
 const RAW_SESSION_SOURCES: &[&str] = &["session", "archive"];
 
-pub async fn run_enrich(limit: usize) -> Result<()> {
-    let prompt = read_prompt_from_hook()?;
+pub async fn run_enrich(prompt: Option<String>, limit: usize) -> Result<()> {
+    let prompt = read_prompt(prompt, std::io::stdin().lock())?;
     if prompt.is_empty() {
         print_hook_output("");
         return Ok(());
@@ -28,15 +30,16 @@ pub async fn run_enrich(limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn read_prompt_from_hook() -> Result<String> {
-    let input = read_hook_stdin()?;
-    Ok(input["prompt"].as_str().unwrap_or("").to_string())
-}
+fn read_prompt(prompt: Option<String>, mut hook_input: impl Read) -> Result<String> {
+    if let Some(prompt) = prompt {
+        return Ok(prompt);
+    }
 
-fn read_hook_stdin() -> Result<serde_json::Value> {
-    let mut buf = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
-    serde_json::from_str(&buf).context("failed to parse hook input")
+    let mut buffer = String::new();
+    hook_input.read_to_string(&mut buffer)?;
+    let input: serde_json::Value =
+        serde_json::from_str(&buffer).context("failed to parse hook input")?;
+    Ok(input["prompt"].as_str().unwrap_or("").to_string())
 }
 
 async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
@@ -178,6 +181,28 @@ fn preview_text(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn supplied_prompt_bypasses_hook_input() {
+        let prompt = read_prompt(Some("tauri".to_string()), Cursor::new("not json")).unwrap();
+
+        assert_eq!(prompt, "tauri");
+    }
+
+    #[test]
+    fn missing_prompt_reads_hook_json() {
+        let prompt = read_prompt(None, Cursor::new(r#"{"prompt":"tauri"}"#)).unwrap();
+
+        assert_eq!(prompt, "tauri");
+    }
+
+    #[test]
+    fn missing_prompt_rejects_invalid_hook_json() {
+        let error = read_prompt(None, Cursor::new("not json")).unwrap_err();
+
+        assert!(error.to_string().contains("failed to parse hook input"));
+    }
 
     #[test]
     fn fresh_text_index_result_formats_exact_excerpt_for_enrich() {

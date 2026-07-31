@@ -33,8 +33,9 @@ claude-memory kb-page-index build --kb /syncthing/Sync/KB
 claude-memory transcript-page-index build
 claude-memory transcript-page-index query "query"
 
-# Enrich a prompt and show collection statistics
-claude-memory enrich
+# Enrich a prompt manually, or omit it for JSON hook input on stdin
+claude-memory enrich "query"
+printf '%s\n' '{"prompt":"query"}' | claude-memory enrich
 claude-memory stats
 ```
 
@@ -46,8 +47,10 @@ active/archive, and Pi session JSONL files. Existing hashes are skipped unless
 query over the shared `claude-session-history` collection; `--type
 prompts|answers` provides optional filtering and `--limit` applies globally.
 `--json` emits stable NDJSON fields `type`, `text`, `source`, `path`,
-`session_id`, and `score`. UserPromptSubmit runs `enrich` only to retrieve
-existing prompt/answer and KB PageIndex context; it does not index. Transcript
+`session_id`, and `score`. `enrich` accepts optional prompt text for manual
+testing; when omitted, it reads UserPromptSubmit JSON from stdin. It only
+retrieves existing prompt/answer and KB PageIndex context; it does not index.
+Transcript
 PageIndex remains a separate CLI navigation surface and is not injected by
 default.
 

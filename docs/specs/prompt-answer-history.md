@@ -28,6 +28,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Auto-detect Claude, Codex, and Pi JSONL formats for `index-file`.
 - [x] Reserve manual `claude-memory index` for incremental backfill and recovery; skip existing hashes unless `--fresh` is supplied.
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
+- [x] Accept optional prompt text for manual `enrich` testing; when omitted, read UserPromptSubmit JSON from stdin.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
 ### CLI search
@@ -76,11 +77,15 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - [x] `build_search_results_empty_payload_graceful`
   - [x] `build_search_results_empty_input`
 - `src/main_tests.rs`
+  - [x] `enrich_accepts_optional_prompt_argument`
+  - [x] `enrich_without_prompt_uses_hook_input`
   - [x] `search_defaults_to_combined_prompt_and_answer_history`
   - [x] `search_accepts_prompt_type`
   - [x] `search_accepts_answer_type`
   - [x] `search_accepts_json_output`
   - [x] `search_json_output_is_stable_ndjson_in_rank_order`
+- `src/enrich_cmd.rs`
+  - [x] supplied prompt and omitted-prompt hook-input tests.
 - `src/extract.rs`
   - [x] Claude/Pi user-message and assistant-message extraction tests.
   - [x] Codex prompt/answer extraction and context-prelude filtering tests.

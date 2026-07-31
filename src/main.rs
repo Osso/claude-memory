@@ -106,8 +106,11 @@ enum Command {
         json: bool,
     },
 
-    /// Enrich a prompt with memory context (for UserPromptSubmit hook)
+    /// Enrich a prompt with memory context
     Enrich {
+        /// Prompt text; reads UserPromptSubmit JSON from stdin when omitted
+        prompt: Option<String>,
+
         /// Maximum memory results
         #[arg(short, long, default_value = "5")]
         limit: usize,
@@ -148,7 +151,9 @@ async fn run_command(command: Command) -> Result<()> {
             target,
             json,
         } => run_search(query, limit, target, json).await,
-        Command::Enrich { limit } => claude_memory::enrich_cmd::run_enrich(limit).await,
+        Command::Enrich { prompt, limit } => {
+            claude_memory::enrich_cmd::run_enrich(prompt, limit).await
+        }
         Command::Stats => index::show_stats().await,
     }
 }

@@ -1,15 +1,15 @@
 # Claude Memory: install and agent rules
 
-This file is a portable setup reference for `claude-memory` and a Markdown knowledge base. Copy the rules section into the persistent rules system used by your agent.
+This file is a setup reference for `claude-memory` and a Markdown knowledge base. The CLI is portable, but automatic prompt enrichment currently requires the fixed KB path documented below. Copy the rules section into the persistent rules system used by your agent.
 
 ## Requirements
 
 - Rust and Cargo
-- Qdrant at `http://localhost:6334`
+- Qdrant gRPC at `localhost:6334` and HTTP API at `http://localhost:6333`
 - Ollama at `http://localhost:11434`
 - Markdown knowledge base at `/syncthing/Sync/KB`
 
-`claude-memory enrich` currently uses `/syncthing/Sync/KB` as its fixed KB root. Direct KB commands accept a different path through `--kb`, but automatic prompt enrichment does not.
+`claude-memory enrich` currently uses `/syncthing/Sync/KB` as its fixed KB root; automatic prompt enrichment is not portable to another KB path. Direct KB commands accept a different path through `--kb`.
 
 ## Install
 
@@ -29,6 +29,8 @@ For a local repository checkout, use its deployment script:
 ./deploy.sh
 ```
 
+It installs the CLI with Cargo and removes the retired `~/.cargo/bin/claude-memory-mcp` executable.
+
 ## Configure embeddings
 
 Pull the embedding model and create the required context-limited variant:
@@ -44,7 +46,7 @@ Start Qdrant and Ollama through your operating system or container manager. Veri
 ```bash
 claude-memory --help
 ollama list
-curl -fsS http://localhost:6334/collections
+curl -fsS http://localhost:6333/collections
 ```
 
 ## Initialize and use
@@ -76,11 +78,19 @@ The KB PageIndex is self-healing. `query` and `enrich` synchronously build a mis
 claude-memory kb-page-index build --kb /syncthing/Sync/KB
 ```
 
-Prompt-hook integrations call `claude-memory enrich` with JSON on standard input:
+Test enrichment directly with optional prompt text:
 
-```json
-{"prompt":"current user prompt"}
+```bash
+claude-memory enrich "current user prompt"
 ```
+
+Prompt-hook integrations omit the argument and provide JSON on standard input:
+
+```bash
+printf '%s\n' '{"prompt":"current user prompt"}' | claude-memory enrich
+```
+
+A supplied prompt argument is used directly. When the argument is omitted, malformed or missing JSON input fails explicitly.
 
 Session-shutdown integrations should run:
 
@@ -98,7 +108,7 @@ claude-memory index-file <transcript_path>
 Use tracked project documentation for project-specific context. Do not create a separate project-local memory file when the project already has an appropriate tracked document.
 
 Search `claude-memory` when:
-- starting a task without relevant injected memory or KB context;
+- starting any task;
 - a recorded preference or correction may affect the action;
 - prior project decisions or sessions may resolve uncertainty.
 

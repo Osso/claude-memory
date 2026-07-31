@@ -84,6 +84,28 @@ fn search_defaults_to_combined_prompt_and_answer_history() {
 }
 
 #[test]
+fn enrich_accepts_optional_prompt_argument() {
+    let cli = Cli::parse_from(["claude-memory", "enrich", "tauri"]);
+    let Command::Enrich { prompt, limit } = cli.command else {
+        panic!("expected enrich command");
+    };
+
+    assert_eq!(prompt.as_deref(), Some("tauri"));
+    assert_eq!(limit, 5);
+}
+
+#[test]
+fn enrich_without_prompt_uses_hook_input() {
+    let cli = Cli::parse_from(["claude-memory", "enrich"]);
+    let Command::Enrich { prompt, limit } = cli.command else {
+        panic!("expected enrich command");
+    };
+
+    assert_eq!(prompt, None);
+    assert_eq!(limit, 5);
+}
+
+#[test]
 fn search_accepts_prompt_type() {
     let cli = Cli::parse_from(["claude-memory", "search", "--type", "prompts", "ollama"]);
     let Command::Search { target, .. } = cli.command else {
