@@ -90,7 +90,7 @@ Prompt-hook integrations omit the argument and provide JSON on standard input:
 printf '%s\n' '{"prompt":"current user prompt"}' | claude-memory enrich
 ```
 
-A supplied prompt argument is used directly. When the argument is omitted, malformed or missing JSON input fails explicitly.
+A supplied prompt argument is used directly. When the argument is omitted, malformed or empty stdin fails explicitly; valid JSON without a string `prompt` produces empty enrichment.
 
 Session-shutdown integrations should run:
 
