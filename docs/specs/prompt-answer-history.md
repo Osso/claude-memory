@@ -11,6 +11,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Derive persisted identity from history type, source, and content hash: identical text remains distinct across prompt/answer and session/archive views, while identical chunks within the same type/source collapse to one point.
 - [x] Do not add message, turn, or chunk ordinals solely to preserve repeated identical chunks; duplicate collapse is intentional.
 - [x] Return type, text, source, path, session id, and score without panicking on missing payload fields.
+- [x] Exclude Pi extension-origin user messages from prompt history while retaining interactive and RPC user prompts.
 
 ### Indexing lifecycle
 
@@ -83,6 +84,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - `src/extract.rs`
   - [x] Claude/Pi user-message and assistant-message extraction tests.
   - [x] Codex prompt/answer extraction and context-prelude filtering tests.
+  - [x] `user_messages_skips_pi_extension_input`
 - `/syncthing/Sync/Provisioning/tests/pi-claude-memory-extension-qdrant.py`
   - [x] Pi `session_shutdown` exact-path, failure-propagation, and Qdrant integration proof.
 
