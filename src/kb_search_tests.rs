@@ -9,6 +9,16 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
 }
 
+const JSON_OBJECT_START: char = '{';
+
+fn assert_index_files_use_tsv_format(index_dir: &Path) {
+    let nodes_text = std::fs::read_to_string(index_dir.join("nodes.tsv")).unwrap();
+    let manifest_text = std::fs::read_to_string(index_dir.join("manifest.tsv")).unwrap();
+
+    assert!(!nodes_text.starts_with(JSON_OBJECT_START));
+    assert!(!manifest_text.starts_with(JSON_OBJECT_START));
+}
+
 #[test]
 fn text_index_files_round_trip_generated_sections() {
     let root = unique_temp_dir("kb-text-index-contract");
@@ -36,11 +46,7 @@ fn text_index_files_round_trip_generated_sections() {
     assert_eq!(manifest[0].path, "state/router.md");
     assert!(manifest[0].mtime_ns > 0);
     assert!(manifest[0].size > 0);
-
-    let nodes_text = std::fs::read_to_string(index_dir.join("nodes.tsv")).unwrap();
-    let manifest_text = std::fs::read_to_string(index_dir.join("manifest.tsv")).unwrap();
-    assert!(!nodes_text.starts_with('{'));
-    assert!(!manifest_text.starts_with('{'));
+    assert_index_files_use_tsv_format(&index_dir);
 
     std::fs::remove_dir_all(root).unwrap();
 }
