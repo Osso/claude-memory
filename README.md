@@ -73,9 +73,19 @@ compatibility code was removed. Its Markdown and manifest remain the editable
 KB representation, and migration backups exist. No runtime migration or export
 command remains. Qdrant now contains only `claude-session-history`.
 
+## Claude Code plugin install
+
+Install the active setup skill in Claude Code:
+
+```bash
+claude plugin marketplace add Osso/claude-memory && claude plugin install claude-memory@claude-memory
+```
+
+Invoke the installed skill to inspect prerequisites, install the CLI, configure the embedding model, validate services, and apply KB rules. The skill does not enable or restart system services without approval.
+
 ## Build & Install
 
-Install the public repository:
+Install the public repository directly:
 
 ```bash
 cargo install --git https://github.com/Osso/claude-memory

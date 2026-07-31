@@ -1,0 +1,28 @@
+{
+  "name": "claude-memory",
+  "description": "Claude Code plugins for claude-memory setup and KB operations.",
+  "owner": {
+    "name": "Osso",
+    "url": "https://github.com/Osso"
+  },
+  "plugins": [
+    {
+      "name": "claude-memory",
+      "source": "./plugins/claude-memory",
+      "description": "Install and operate claude-memory with KB PageIndex rules.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Osso"
+      },
+      "license": "MIT",
+      "repository": "https://github.com/Osso/claude-memory",
+      "keywords": [
+        "memory",
+        "knowledge-base",
+        "qdrant",
+        "ollama",
+        "page-index"
+      ]
+    }
+  ]
+}
