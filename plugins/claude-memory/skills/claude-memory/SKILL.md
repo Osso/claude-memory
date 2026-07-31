@@ -1,6 +1,6 @@
 ---
 name: claude-memory
-description: Install, validate, and operate claude-memory with the Markdown KB PageIndex. Use when setting up claude-memory, repairing its services, querying the KB, or deciding how memory and KB rules apply.
+description: Install, validate, and operate claude-memory with the Markdown KB PageIndex. Use when setting up claude-memory, checking its service dependencies, querying the KB, or deciding how memory and KB rules apply.
 ---
 
 # Claude Memory setup and KB rules
