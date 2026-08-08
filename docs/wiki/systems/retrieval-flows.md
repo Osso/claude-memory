@@ -61,5 +61,6 @@ Qdrant now contains only `claude-session-history`.
 | Automatic prompt context | `claude-memory enrich` hook |
 | Find past user prompts/discussions | `search --type prompts` |
 | Find prior assistant solutions | `search --type answers` |
+| Find history from one session | `search --session <id-substring>` |
 | Exact KB note context | `kb-page-index` |
 | Inspect raw session history | `transcript-page-index` |

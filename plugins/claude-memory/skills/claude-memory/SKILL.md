@@ -81,6 +81,7 @@ Apply these rules when using the memory system:
 - Use `claude-memory search "query"` for combined prompt/answer history.
 - Use `claude-memory search --type prompts "query"` for prior user prompts.
 - Use `claude-memory search --type answers "query"` for prior assistant answers.
+- Use `claude-memory search --session <id-substring> "query"` to restrict results to a session ID substring.
 - Use `claude-memory kb-page-index query "query"` for Markdown KB facts.
 - If relevant enrichment is already present, do not repeat the same search merely to satisfy the search rule.
 - Treat the KB as a linked wiki, not duplicated notes.

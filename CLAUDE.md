@@ -17,6 +17,7 @@ claude-memory index
 claude-memory search "query"
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
+claude-memory search --session 019fe2f2 "query"
 claude-memory search --limit 10 --json "query"
 claude-memory kb-page-index query "query"
 claude-memory transcript-page-index build
@@ -31,12 +32,13 @@ incremental backfill and recovery across Claude active/archive, Codex
 active/archive, and Pi session JSONL files. Existing hashes are skipped unless
 `--fresh` is supplied. The default search runs one globally ranked prompt+answer
 query over `claude-session-history`; `--type prompts|answers` provides optional
-filtering and `--limit` applies globally. `--json` emits stable NDJSON fields
-`type`, `text`, `source`, `path`, `session_id`, and `score`. `enrich` accepts
-optional prompt text for manual testing; when omitted, it reads UserPromptSubmit
-JSON from stdin. It only retrieves existing prompt/answer and KB PageIndex
-context; it does not index. Transcript PageIndex remains CLI-only navigation and is not
-injected by default.
+filtering, `--session <id-substring>` restricts results to matching indexed
+session IDs, and `--limit` applies after those filters. `--json` emits stable
+NDJSON fields `type`, `text`, `source`, `path`, `session_id`, and `score`.
+`enrich` accepts optional prompt text for manual testing; when omitted, it reads
+UserPromptSubmit JSON from stdin. It only retrieves existing prompt/answer and
+KB PageIndex context; it does not index. Transcript PageIndex remains CLI-only
+navigation and is not injected by default.
 Its query command is deterministic lexical-only; document, structure, and content
 remain explicit source-inspection commands.
 

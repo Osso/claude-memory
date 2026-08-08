@@ -73,9 +73,11 @@ claude-memory search --session <id-substring> <query>
 ```
 
 The type filter matches `prompt` or `answer`; an internal source filter can
-match `session` or `archive`. Session substring matching is case-sensitive and
-applies to the persisted `session_id`. Qdrant exact-match filters do not support
-arbitrary substrings, so search first scrolls the relevant payloads to collect
+match `session` or `archive`. The optional session filter restricts results to
+persisted session IDs containing the supplied substring. Session substring
+matching is case-sensitive and applies to the persisted `session_id`. Qdrant
+exact-match filters do not support arbitrary substrings, so search first scrolls
+the relevant payloads to collect
 exact session IDs containing the substring, then applies those IDs to the
 ranked vector query. `--limit` therefore applies after session filtering rather
 than truncating a global result set first.

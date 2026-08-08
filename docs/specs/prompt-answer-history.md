@@ -1,4 +1,4 @@
-Prompt and answer history indexing stores raw user prompts and assistant responses from Claude, Codex, and Pi transcript files in one searchable session-history index. `claude-memory search <query>` runs one globally ranked prompt+answer query; `--type prompts|answers` is optional filtering. Implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
+Prompt and answer history indexing stores raw user prompts and assistant responses from Claude, Codex, and Pi transcript files in one searchable session-history index. `claude-memory search <query>` runs one globally ranked prompt+answer query; `--type prompts|answers` and `--session <id-substring>` provide optional filtering. Implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
 
 ## What it must do
 
