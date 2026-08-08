@@ -62,19 +62,28 @@ change the collection or payload model.
 
 ## Search paths
 
-CLI search requires an explicit target:
+CLI search defaults to one combined prompt-and-answer query. Optional filters
+narrow that same ranked query:
 
 ```text
+claude-memory search <query>
 claude-memory search --type prompts <query>
 claude-memory search --type answers <query>
+claude-memory search --session <id-substring> <query>
 ```
 
-The prompt and answer targets query `claude-session-history` with a required
-`type` filter. An optional source filter matches `session` or `archive`. Both
-CLI targets use hybrid dense/BM25 retrieval when `[search].enabled = true`.
-When semantic search is disabled, these history paths return no results.
-Search result formatting reads `text`, `source`, `path`, `session_id`, and
-score; absent string payloads become empty fields.
+The type filter matches `prompt` or `answer`; an internal source filter can
+match `session` or `archive`. Session substring matching is case-sensitive and
+applies to the persisted `session_id`. Qdrant exact-match filters do not support
+arbitrary substrings, so search first scrolls the relevant payloads to collect
+exact session IDs containing the substring, then applies those IDs to the
+ranked vector query. `--limit` therefore applies after session filtering rather
+than truncating a global result set first.
+
+Search uses hybrid dense/BM25 retrieval when `[search].enabled = true`. When
+semantic search is disabled, these history paths return no results. Search
+result formatting reads `text`, `source`, `path`, `session_id`, and score;
+absent string payloads become empty fields.
 
 ## Separate surfaces
 

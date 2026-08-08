@@ -71,6 +71,7 @@ fn search_defaults_to_combined_prompt_and_answer_history() {
         query,
         limit,
         target,
+        session,
         json,
     } = cli.command
     else {
@@ -80,6 +81,7 @@ fn search_defaults_to_combined_prompt_and_answer_history() {
     assert_eq!(query, "ollama");
     assert_eq!(limit, 5);
     assert_eq!(target, None);
+    assert_eq!(session, None);
     assert!(!json);
 }
 
@@ -103,6 +105,32 @@ fn enrich_without_prompt_uses_hook_input() {
 
     assert_eq!(prompt, None);
     assert_eq!(limit, 5);
+}
+
+#[test]
+fn search_session_filter_accepts_nonempty_substring() {
+    let result =
+        Cli::try_parse_from(["claude-memory", "search", "--session", "019fe2f2", "ollama"]);
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn search_session_filter_rejects_empty_or_whitespace_only_value() {
+    for session in ["", "   "] {
+        let error = match Cli::try_parse_from([
+            "claude-memory",
+            "search",
+            "--session",
+            session,
+            "ollama",
+        ]) {
+            Ok(_) => panic!("empty session filter should be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
 }
 
 #[test]

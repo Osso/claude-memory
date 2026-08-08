@@ -8,6 +8,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Persist each chunk with its text, `type` (`prompt` or `answer`), `source` (`session` or `archive`), path, session id, and persisted hash.
 - [x] Make `--type prompts` a `type=prompt` view and `--type answers` a `type=answer` view.
 - [x] Allow typed searches to restrict results by `source`.
+- [x] Restrict searches to indexed session IDs containing a nonempty `--session` substring across active and archived Claude, Codex, and Pi history.
 - [x] Derive persisted identity from history type, source, and content hash: identical text remains distinct across prompt/answer and session/archive views, while identical chunks within the same type/source collapse to one point.
 - [x] Do not add message, turn, or chunk ordinals solely to preserve repeated identical chunks; duplicate collapse is intentional.
 - [x] Return type, text, source, path, session id, and score without panicking on missing payload fields.
@@ -36,7 +37,8 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Run `claude-memory search <query>` as one globally ranked prompt+answer Qdrant query.
 - [x] Accept optional `claude-memory search --type prompts <query>` filtering.
 - [x] Accept optional `claude-memory search --type answers <query>` filtering.
-- [x] Apply `--limit` globally to the selected query, including combined prompt+answer search.
+- [x] Apply `--limit` globally to the selected query, including combined prompt+answer search and searches restricted by `--session`.
+- [x] Reject empty or whitespace-only `--session` values explicitly.
 - [x] Emit stable NDJSON with fields `type`, `text`, `source`, `path`, `session_id`, and `score` when `--json` is set.
 - [x] Keep prompt and answer search CLI-only.
 - [x] Return no session-history results when semantic search is disabled.
@@ -69,6 +71,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - [x] `identical_prompt_and_answer_text_have_distinct_history_hashes`
   - [x] `identical_prompt_text_from_session_and_archive_has_distinct_history_hashes`
   - [x] `qdrant_history_filters_isolate_type_and_source`
+  - [x] `qdrant_session_substring_filter_applies_before_global_limit`
   - [x] `get_string_returns_value_for_known_key`
   - [x] `get_string_returns_empty_for_missing_key`
   - [x] `get_string_returns_empty_for_non_string_value`
@@ -83,6 +86,8 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - [x] `search_accepts_prompt_type`
   - [x] `search_accepts_answer_type`
   - [x] `search_accepts_json_output`
+  - [x] `search_session_filter_accepts_nonempty_substring`
+  - [x] `search_session_filter_rejects_empty_or_whitespace_only_value`
   - [x] `search_json_output_is_stable_ndjson_in_rank_order`
 - `src/enrich_cmd.rs`
   - [x] supplied prompt and omitted-prompt hook-input tests.

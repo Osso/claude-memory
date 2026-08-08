@@ -101,6 +101,10 @@ enum Command {
         #[arg(long = "type", value_enum)]
         target: Option<SearchTarget>,
 
+        /// Restrict results to session IDs containing this substring
+        #[arg(long, value_parser = parse_session_filter)]
+        session: Option<String>,
+
         /// Output one JSON result object per line
         #[arg(long)]
         json: bool,
@@ -126,6 +130,13 @@ enum SearchTarget {
     Answers,
 }
 
+fn parse_session_filter(value: &str) -> std::result::Result<String, String> {
+    if value.trim().is_empty() {
+        return Err("session filter must not be empty".to_string());
+    }
+    Ok(value.to_string())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -149,8 +160,9 @@ async fn run_command(command: Command) -> Result<()> {
             query,
             limit,
             target,
+            session,
             json,
-        } => run_search(query, limit, target, json).await,
+        } => run_search(query, limit, target, session, json).await,
         Command::Enrich { prompt, limit } => {
             claude_memory::enrich_cmd::run_enrich(prompt, limit).await
         }
@@ -260,12 +272,14 @@ async fn run_search(
     query: String,
     limit: usize,
     target: Option<SearchTarget>,
+    session: Option<String>,
     json: bool,
 ) -> Result<()> {
+    let session = session.as_deref();
     let results = match target {
-        Some(SearchTarget::Prompts) => index::search_prompts(&query, limit, None).await?,
-        Some(SearchTarget::Answers) => index::search_answers(&query, limit, None).await?,
-        None => index::search_all(&query, limit, None).await?,
+        Some(SearchTarget::Prompts) => index::search_prompts(&query, limit, None, session).await?,
+        Some(SearchTarget::Answers) => index::search_answers(&query, limit, None, session).await?,
+        None => index::search_all(&query, limit, None, session).await?,
     };
 
     if json {

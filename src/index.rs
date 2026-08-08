@@ -23,6 +23,8 @@ mod index_search;
 mod index_writer;
 mod search_results;
 pub use index_search::{global_history_filter, history_filter};
+#[cfg(test)]
+pub(crate) use index_search::{history_filter_for_sessions, query_matching_session_ids};
 pub use index_search::{
     search_all, search_answer_sources, search_answers, search_prompt_sources, search_prompts,
 };

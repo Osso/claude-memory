@@ -10,9 +10,10 @@ use crate::extract::{HistoryType, IndexedChunk};
 use crate::index::{
     IndexFileFormat, IndexFileSource, IndexSources, QDRANT_URL, build_search_results,
     collect_index_files, extract_single_file_history, filter_new, get_string,
-    global_history_filter, history_filter, history_hash,
+    global_history_filter, history_filter, history_filter_for_sessions, history_hash,
+    query_matching_session_ids,
 };
-use crate::qdrant_hybrid::{build_named_vectors, ensure_hybrid_collection};
+use crate::qdrant_hybrid::{VECTOR_SIZE, build_named_vectors, ensure_hybrid_collection};
 
 fn make_chunk(hash: &str) -> IndexedChunk {
     IndexedChunk {
@@ -419,6 +420,108 @@ async fn query_history_sources(
 }
 
 // --- get_string ---
+
+#[tokio::test]
+async fn qdrant_session_substring_filter_applies_before_global_limit() {
+    let collection = format!("test-session-filter-{}", uuid::Uuid::new_v4());
+    let client = Qdrant::from_url(QDRANT_URL).build().unwrap();
+    ensure_hybrid_collection(&client, &collection)
+        .await
+        .unwrap();
+
+    let points = vec![
+        history_point_with_session(
+            1,
+            HistoryType::Prompt,
+            "session",
+            "unrelated-session",
+            dense_vector(1.0, 0.0),
+        ),
+        history_point_with_session(
+            2,
+            HistoryType::Prompt,
+            "session",
+            "prefix-019fe2f2-suffix",
+            dense_vector(0.8, 0.6),
+        ),
+        history_point_with_session(
+            3,
+            HistoryType::Answer,
+            "archive",
+            "other-e2f2-tail",
+            dense_vector(0.6, 0.8),
+        ),
+    ];
+    client
+        .upsert_points(UpsertPointsBuilder::new(&collection, points))
+        .await
+        .unwrap();
+
+    let sessions = query_matching_session_ids(&client, &collection, None, &[], "e2f2")
+        .await
+        .unwrap();
+    let results = query_session_filtered_history(&client, &collection, &sessions, 1).await;
+    client.delete_collection(&collection).await.unwrap();
+
+    assert_eq!(
+        sessions,
+        vec![
+            "other-e2f2-tail".to_string(),
+            "prefix-019fe2f2-suffix".to_string(),
+        ]
+    );
+    assert_eq!(results, vec!["prefix-019fe2f2-suffix"]);
+}
+
+fn history_point_with_session(
+    id: u64,
+    history_type: HistoryType,
+    source: &str,
+    session_id: &str,
+    embedding: Vec<f32>,
+) -> PointStruct {
+    let text = format!("{} {source} {session_id}", history_type.as_str());
+    let payload: HashMap<String, Value> = [
+        ("text".to_string(), str_value(&text)),
+        ("type".to_string(), str_value(history_type.as_str())),
+        ("source".to_string(), str_value(source)),
+        ("path".to_string(), str_value("fixture.jsonl")),
+        ("session_id".to_string(), str_value(session_id)),
+        (
+            "hash".to_string(),
+            str_value(&format!("{}:{id}", history_type.as_str())),
+        ),
+    ]
+    .into();
+    PointStruct::new(id, build_named_vectors(embedding, &text), payload)
+}
+
+fn dense_vector(first: f32, second: f32) -> Vec<f32> {
+    let mut vector = vec![0.0; VECTOR_SIZE as usize];
+    vector[0] = first;
+    vector[1] = second;
+    vector
+}
+
+async fn query_session_filtered_history(
+    client: &Qdrant,
+    collection: &str,
+    session_ids: &[String],
+    limit: u64,
+) -> Vec<String> {
+    let search = SearchPointsBuilder::new(collection, dense_vector(1.0, 0.0), limit)
+        .vector_name("dense")
+        .with_payload(true)
+        .filter(history_filter_for_sessions(None, &[], session_ids));
+    client
+        .search_points(search)
+        .await
+        .unwrap()
+        .result
+        .iter()
+        .map(|point| get_string(&point.payload, "session_id"))
+        .collect()
+}
 
 #[test]
 fn get_string_returns_value_for_known_key() {

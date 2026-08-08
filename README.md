@@ -22,6 +22,7 @@ claude-memory index
 claude-memory search "query"
 claude-memory search --type prompts "query"
 claude-memory search --type answers "query"
+claude-memory search --session 019fe2f2 "query"
 claude-memory search --limit 10 --json "query"
 
 # Query KB text index; missing or stale indexes rebuild automatically
@@ -45,8 +46,9 @@ incremental backfill and recovery across Claude active/archive, Codex
 active/archive, and Pi session JSONL files. Existing hashes are skipped unless
 `--fresh` is supplied. The default search runs one globally ranked prompt+answer
 query over the shared `claude-session-history` collection; `--type
-prompts|answers` provides optional filtering and `--limit` applies globally.
-`--json` emits stable NDJSON fields `type`, `text`, `source`, `path`,
+prompts|answers` provides optional filtering, `--session <id-substring>`
+restricts the ranked query to matching indexed session IDs, and `--limit`
+applies after those filters. `--json` emits stable NDJSON fields `type`, `text`, `source`, `path`,
 `session_id`, and `score`. `enrich` accepts optional prompt text for manual
 testing; when omitted, it reads UserPromptSubmit JSON from stdin. It only
 retrieves existing prompt/answer and KB PageIndex context; it does not index.
