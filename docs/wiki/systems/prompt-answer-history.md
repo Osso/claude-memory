@@ -82,10 +82,12 @@ exact session IDs containing the substring, then applies those IDs to the
 ranked vector query. `--limit` therefore applies after session filtering rather
 than truncating a global result set first.
 
-Search uses hybrid dense/BM25 retrieval when `[search].enabled = true`. When
-semantic search is disabled, these history paths return no results. Search
-result formatting reads `text`, `source`, `path`, `session_id`, and score;
-absent string payloads become empty fields.
+Search uses hybrid dense/BM25 retrieval when `[search].enabled = true`. The
+`enrich` path embeds its query once, then applies separate prompt and answer
+filters to Qdrant searches using that shared vector. When semantic search is
+disabled, these history paths return no results. Search result formatting reads
+`text`, `source`, `path`, `session_id`, and score; absent string payloads become
+empty fields.
 
 ## Separate surfaces
 

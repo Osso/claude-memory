@@ -1,17 +1,26 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
     PointStruct, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, Value,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 use crate::chunk::Chunk;
+use crate::embed::Embedder;
 use crate::extract::{HistoryType, IndexedChunk};
 use crate::index::{
     IndexFileFormat, IndexFileSource, IndexSources, QDRANT_URL, build_search_results,
     collect_index_files, extract_single_file_history, filter_new, get_string,
     global_history_filter, history_filter, history_filter_for_sessions, history_hash,
-    query_matching_session_ids,
+    query_matching_session_ids, search_prompt_and_answer_sources_with,
 };
 use crate::qdrant_hybrid::{VECTOR_SIZE, build_named_vectors, ensure_hybrid_collection};
 
@@ -316,6 +325,111 @@ fn identical_prompt_text_from_session_and_archive_has_distinct_history_hashes() 
     archive.source = "archive".to_string();
 
     assert_ne!(history_hash(&session), history_hash(&archive));
+}
+
+async fn start_embedding_server() -> (
+    String,
+    Arc<AtomicUsize>,
+    oneshot::Sender<()>,
+    JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let server_request_count = Arc::clone(&request_count);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let server = tokio::spawn(run_embedding_server(
+        listener,
+        server_request_count,
+        shutdown_rx,
+    ));
+    (url, request_count, shutdown_tx, server)
+}
+
+async fn run_embedding_server(
+    listener: TcpListener,
+    request_count: Arc<AtomicUsize>,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _) = accepted.unwrap();
+                request_count.fetch_add(1, Ordering::SeqCst);
+                respond_to_embedding_request(stream).await;
+            }
+            _ = &mut shutdown => break,
+        }
+    }
+}
+
+async fn respond_to_embedding_request(mut stream: TcpStream) {
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut chunk).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&chunk[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let body = serde_json::json!({
+        "embedding": vec![1.0_f32; VECTOR_SIZE as usize],
+    })
+    .to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body,
+    );
+    stream.write_all(response.as_bytes()).await.unwrap();
+    stream.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prompt_and_answer_searches_share_one_query_embedding() {
+    let collection = format!("test-paired-history-search-{}", uuid::Uuid::new_v4());
+    let client = Qdrant::from_url(QDRANT_URL).build().unwrap();
+    ensure_hybrid_collection(&client, &collection)
+        .await
+        .unwrap();
+    client
+        .upsert_points(UpsertPointsBuilder::new(
+            &collection,
+            vec![
+                history_point(1, HistoryType::Prompt, "session"),
+                history_point(2, HistoryType::Answer, "session"),
+            ],
+        ))
+        .await
+        .unwrap();
+    let (url, request_count, shutdown, server) = start_embedding_server().await;
+    let embedder = Embedder::with_url(url);
+
+    let searches = search_prompt_and_answer_sources_with(
+        &client,
+        &embedder,
+        &collection,
+        "shared query",
+        3,
+        &["session"],
+    )
+    .await;
+
+    shutdown.send(()).unwrap();
+    server.await.unwrap();
+    client.delete_collection(&collection).await.unwrap();
+    let searches = searches.unwrap();
+    let prompts = searches.prompts.unwrap();
+    let answers = searches.answers.unwrap();
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].record_type, "prompt");
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0].record_type, "answer");
 }
 
 #[tokio::test]

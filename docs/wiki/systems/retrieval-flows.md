@@ -18,11 +18,13 @@ Enrichment reads only:
 1. unified raw prompt/answer history chunks from `claude-session-history`;
 2. deterministic KB PageIndex context.
 
-The output labels the two sources separately. KB PageIndex validates and
-synchronously rebuilds a missing or stale TSV index. If rebuilding fails,
-enrichment uses the prior index with an agent-context warning, or warns and
-continues without KB results when none exists. Transcript PageIndex is CLI-only
-navigation and is not injected by default.
+The output labels the two sources separately. Prompt and answer history groups
+share one query embedding and run filtered Qdrant searches from that vector,
+avoiding duplicate embedding work during concurrent hook fan-out. KB PageIndex
+validates and synchronously rebuilds a missing or stale TSV index. If rebuilding
+fails, enrichment uses the prior index with an agent-context warning, or warns
+and continues without KB results when none exists. Transcript PageIndex is
+CLI-only navigation and is not injected by default.
 
 ### PageIndex
 

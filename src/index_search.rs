@@ -15,6 +15,83 @@ use crate::qdrant_hybrid::ensure_hybrid_collection;
 
 const SESSION_ID_PAGE_SIZE: u32 = 1000;
 
+pub(crate) struct PromptAnswerSearchResults {
+    pub prompts: Result<Vec<SearchResult>>,
+    pub answers: Result<Vec<SearchResult>>,
+}
+
+impl PromptAnswerSearchResults {
+    fn empty() -> Self {
+        Self {
+            prompts: Ok(Vec::new()),
+            answers: Ok(Vec::new()),
+        }
+    }
+}
+
+pub(crate) async fn search_prompt_and_answer_sources(
+    query: &str,
+    limit: usize,
+    sources: &[&str],
+) -> Result<PromptAnswerSearchResults> {
+    if !config::search_enabled() {
+        return Ok(PromptAnswerSearchResults::empty());
+    }
+
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
+    search_prompt_and_answer_sources_with(
+        &client,
+        &Embedder::new(),
+        COLLECTION_SESSION_HISTORY,
+        query,
+        limit,
+        sources,
+    )
+    .await
+}
+
+pub(crate) async fn search_prompt_and_answer_sources_with(
+    client: &Qdrant,
+    embedder: &Embedder,
+    collection: &str,
+    query: &str,
+    limit: usize,
+    sources: &[&str],
+) -> Result<PromptAnswerSearchResults> {
+    let query_vec = embedder.embed(query).await?;
+    let prompt_search = history_search(
+        collection,
+        query_vec.clone(),
+        limit,
+        Some(HistoryType::Prompt),
+        sources,
+        &[],
+    );
+    let answer_search = history_search(
+        collection,
+        query_vec,
+        limit,
+        Some(HistoryType::Answer),
+        sources,
+        &[],
+    );
+    let (prompts, answers) = tokio::join!(
+        client.search_points(prompt_search),
+        client.search_points(answer_search),
+    );
+    Ok(PromptAnswerSearchResults {
+        prompts: prompts
+            .context("prompt search failed")
+            .map(|response| build_search_results(response.result)),
+        answers: answers
+            .context("answer search failed")
+            .map(|response| build_search_results(response.result)),
+    })
+}
+
 /// Search prompts and answers in one globally ranked query.
 pub async fn search_all(
     query: &str,
@@ -92,26 +169,22 @@ async fn search_collection<'a>(
     ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
 
     let sources: Vec<&str> = sources.into_iter().collect();
-    let session_ids = match session {
-        Some(substring) => {
-            query_matching_session_ids(
-                &client,
-                COLLECTION_SESSION_HISTORY,
-                history_type,
-                &sources,
-                substring,
-            )
-            .await?
-        }
-        None => Vec::new(),
-    };
+    let session_ids =
+        query_session_ids_for_filter(&client, history_type, &sources, session).await?;
     if session.is_some() && session_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let embedder = Embedder::new();
     let query_vec = embedder.embed(query).await?;
-    let search = history_search(query_vec, limit, history_type, &sources, &session_ids);
+    let search = history_search(
+        COLLECTION_SESSION_HISTORY,
+        query_vec,
+        limit,
+        history_type,
+        &sources,
+        &session_ids,
+    );
     let results = client
         .search_points(search)
         .await
@@ -119,14 +192,34 @@ async fn search_collection<'a>(
     Ok(build_search_results(results.result))
 }
 
+async fn query_session_ids_for_filter(
+    client: &Qdrant,
+    history_type: Option<HistoryType>,
+    sources: &[&str],
+    session: Option<&str>,
+) -> Result<Vec<String>> {
+    let Some(substring) = session else {
+        return Ok(Vec::new());
+    };
+    query_matching_session_ids(
+        client,
+        COLLECTION_SESSION_HISTORY,
+        history_type,
+        sources,
+        substring,
+    )
+    .await
+}
+
 fn history_search(
+    collection: &str,
     query_vec: Vec<f32>,
     limit: usize,
     history_type: Option<HistoryType>,
     sources: &[&str],
     session_ids: &[String],
 ) -> SearchPointsBuilder {
-    SearchPointsBuilder::new(COLLECTION_SESSION_HISTORY, query_vec, limit as u64)
+    SearchPointsBuilder::new(collection, query_vec, limit as u64)
         .vector_name("dense")
         .with_payload(true)
         .filter(history_filter_for_sessions(

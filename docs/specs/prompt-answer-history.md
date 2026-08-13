@@ -30,6 +30,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Reserve manual `claude-memory index` for incremental backfill and recovery; skip existing hashes unless `--fresh` is supplied.
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
 - [x] Accept optional prompt text for manual `enrich` testing; when omitted, read UserPromptSubmit JSON from stdin.
+- [x] Use one session-history query embedding per `enrich` invocation while returning separate prompt and answer result groups.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
 ### CLI search
@@ -71,6 +72,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - [x] `identical_prompt_and_answer_text_have_distinct_history_hashes`
   - [x] `identical_prompt_text_from_session_and_archive_has_distinct_history_hashes`
   - [x] `qdrant_history_filters_isolate_type_and_source`
+  - [x] `prompt_and_answer_searches_share_one_query_embedding`
   - [x] `qdrant_session_substring_filter_applies_before_global_limit`
   - [x] `get_string_returns_value_for_known_key`
   - [x] `get_string_returns_empty_for_missing_key`

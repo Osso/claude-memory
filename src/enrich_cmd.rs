@@ -44,8 +44,18 @@ fn read_prompt(prompt: Option<String>, mut hook_input: impl Read) -> Result<Stri
 
 async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
     let session_limit = limit.min(MAX_SESSION_CHUNKS_PER_GROUP);
-    let prompt_chunks = search_session_chunks(prompt, session_limit, ChunkKind::Prompt).await;
-    let answer_chunks = search_session_chunks(prompt, session_limit, ChunkKind::Answer).await;
+    let searches =
+        match index::search_prompt_and_answer_sources(prompt, session_limit, RAW_SESSION_SOURCES)
+            .await
+        {
+            Ok(searches) => searches,
+            Err(error) => {
+                eprintln!("enrich: session chunk search failed: {error:#}");
+                return;
+            }
+        };
+    let prompt_chunks = collect_session_chunks(searches.prompts, ChunkKind::Prompt);
+    let answer_chunks = collect_session_chunks(searches.answers, ChunkKind::Answer);
 
     if prompt_chunks.is_empty() && answer_chunks.is_empty() {
         return;
@@ -60,16 +70,10 @@ enum ChunkKind {
     Answer,
 }
 
-async fn search_session_chunks(
-    prompt: &str,
-    limit: usize,
+fn collect_session_chunks(
+    results: Result<Vec<index::SearchResult>>,
     kind: ChunkKind,
 ) -> Vec<index::SearchResult> {
-    let results = match kind {
-        ChunkKind::Prompt => index::search_prompt_sources(prompt, limit, RAW_SESSION_SOURCES).await,
-        ChunkKind::Answer => index::search_answer_sources(prompt, limit, RAW_SESSION_SOURCES).await,
-    };
-
     match results {
         Ok(results) => results
             .into_iter()
