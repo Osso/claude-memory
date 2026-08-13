@@ -31,6 +31,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
 - [x] Accept optional prompt text for manual `enrich` testing; when omitted, read UserPromptSubmit JSON from stdin.
 - [x] Use one session-history query embedding per `enrich` invocation while returning separate prompt and answer result groups.
+- [x] After shared embedding and setup succeed, keep prompt and answer Qdrant failures isolated so the successful group still reaches enrichment output.
 - [x] Leave project summaries, KB Markdown, manual memories, and the `claude-memory`, `claude-session-prompts`, and `claude-answers` stores outside this index.
 
 ### CLI search

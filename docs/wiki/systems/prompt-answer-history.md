@@ -84,10 +84,12 @@ than truncating a global result set first.
 
 Search uses hybrid dense/BM25 retrieval when `[search].enabled = true`. The
 `enrich` path embeds its query once, then applies separate prompt and answer
-filters to Qdrant searches using that shared vector. When semantic search is
-disabled, these history paths return no results. Search result formatting reads
-`text`, `source`, `path`, `session_id`, and score; absent string payloads become
-empty fields.
+filters to Qdrant searches using that shared vector. After the shared embedding
+and collection setup succeed, prompt and answer search errors remain independent,
+so one failed group does not discard the other group's results. When semantic
+search is disabled, these history paths return no results. Search result
+formatting reads `text`, `source`, `path`, `session_id`, and score; absent string
+payloads become empty fields.
 
 ## Separate surfaces
 
