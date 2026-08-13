@@ -91,9 +91,7 @@ pub(crate) async fn index_chunks(
     for batch in chunks.chunks(batch_size) {
         wait_before_next_batch(delay, delay_ms, indexed).await;
 
-        let Some(points) = embed_batch_points(embedder, batch).await else {
-            continue;
-        };
+        let points = embed_batch_points(embedder, batch).await?;
 
         client
             .upsert_points(UpsertPointsBuilder::new(collection, points))
@@ -115,20 +113,13 @@ async fn wait_before_next_batch(delay: std::time::Duration, delay_ms: u64, index
 async fn embed_batch_points(
     embedder: &Embedder,
     batch: &[IndexedChunk],
-) -> Option<Vec<PointStruct>> {
+) -> Result<Vec<PointStruct>> {
     let texts: Vec<&str> = batch
         .iter()
         .map(|chunk| chunk.chunk.text.as_str())
         .collect();
-    let embeddings = match embedder.embed_batch(&texts).await {
-        Ok(embeddings) => embeddings,
-        Err(error) => {
-            eprintln!("\nEmbedding error: {}", error);
-            return None;
-        }
-    };
-
-    Some(build_points(batch, embeddings))
+    let embeddings = embedder.embed_batch(&texts).await?;
+    Ok(build_points(batch, embeddings))
 }
 
 fn build_points(batch: &[IndexedChunk], embeddings: Vec<Vec<f32>>) -> Vec<PointStruct> {

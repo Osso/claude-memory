@@ -7,11 +7,11 @@ use qdrant_client::qdrant::{
 use std::collections::BTreeSet;
 
 use super::search_results::build_search_results;
-use super::{COLLECTION_SESSION_HISTORY, QDRANT_URL, SearchResult};
-use crate::config;
+use super::{QDRANT_URL, SearchResult};
+use crate::config::{self, EmbeddingConfig, embedding_config};
 use crate::embed::Embedder;
 use crate::extract::HistoryType;
-use crate::qdrant_hybrid::ensure_hybrid_collection;
+use crate::qdrant_hybrid::ensure_hybrid_collection_with_vector_size;
 
 const SESSION_ID_PAGE_SIZE: u32 = 1000;
 
@@ -38,14 +38,12 @@ pub(crate) async fn search_prompt_and_answer_sources(
         return Ok(PromptAnswerSearchResults::empty());
     }
 
-    let client = Qdrant::from_url(QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
-    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
+    let (client, embedding) = connect_configured_history_collection().await?;
+    let embedder = Embedder::new()?;
     search_prompt_and_answer_sources_with(
         &client,
-        &Embedder::new(),
-        COLLECTION_SESSION_HISTORY,
+        &embedder,
+        &embedding.collection,
         query,
         limit,
         sources,
@@ -163,22 +161,24 @@ async fn search_collection<'a>(
         return Ok(Vec::new());
     }
 
-    let client = Qdrant::from_url(QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
-    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
-
+    let (client, embedding) = connect_configured_history_collection().await?;
     let sources: Vec<&str> = sources.into_iter().collect();
-    let session_ids =
-        query_session_ids_for_filter(&client, history_type, &sources, session).await?;
+    let session_ids = query_session_ids_for_filter(
+        &client,
+        &embedding.collection,
+        history_type,
+        &sources,
+        session,
+    )
+    .await?;
     if session.is_some() && session_ids.is_empty() {
         return Ok(Vec::new());
     }
 
-    let embedder = Embedder::new();
+    let embedder = Embedder::new()?;
     let query_vec = embedder.embed(query).await?;
     let search = history_search(
-        COLLECTION_SESSION_HISTORY,
+        &embedding.collection,
         query_vec,
         limit,
         history_type,
@@ -192,8 +192,23 @@ async fn search_collection<'a>(
     Ok(build_search_results(results.result))
 }
 
+async fn connect_configured_history_collection() -> Result<(Qdrant, EmbeddingConfig)> {
+    let client = Qdrant::from_url(QDRANT_URL)
+        .build()
+        .context("failed to connect to Qdrant")?;
+    let embedding = embedding_config()?;
+    ensure_hybrid_collection_with_vector_size(
+        &client,
+        &embedding.collection,
+        embedding.vector_size,
+    )
+    .await?;
+    Ok((client, embedding))
+}
+
 async fn query_session_ids_for_filter(
     client: &Qdrant,
+    collection: &str,
     history_type: Option<HistoryType>,
     sources: &[&str],
     session: Option<&str>,
@@ -201,14 +216,7 @@ async fn query_session_ids_for_filter(
     let Some(substring) = session else {
         return Ok(Vec::new());
     };
-    query_matching_session_ids(
-        client,
-        COLLECTION_SESSION_HISTORY,
-        history_type,
-        sources,
-        substring,
-    )
-    .await
+    query_matching_session_ids(client, collection, history_type, sources, substring).await
 }
 
 fn history_search(

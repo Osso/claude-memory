@@ -22,12 +22,17 @@ Required services:
 
 - Qdrant HTTP API: `http://localhost:6333`
 - Qdrant gRPC: `localhost:6334`
-- Ollama API: `http://localhost:11434`
+- Ollama API: `http://localhost:11434` for the default embedding profile
 - Markdown KB: `/syncthing/Sync/KB`
+
+OpenRouter is an optional embedding backend. When selected, its `api_key` is
+read only from `~/.config/openrouter/config.toml`.
 
 Automatic enrichment currently uses `/syncthing/Sync/KB` as its fixed KB root. Direct KB commands can use another path with `--kb`.
 
-If Qdrant or Ollama is unavailable, stop and report the missing service. Ask before proposing package installation, service enablement, or service restart.
+If Qdrant or the selected embedding backend is unavailable, stop and report the
+missing service. Ask before proposing package installation, service enablement,
+or service restart.
 
 ## 2. Install the CLI
 
@@ -45,12 +50,35 @@ For a local checkout, run its deployment script instead:
 
 ## 3. Configure embeddings
 
+The default profile remains Ollama `qwen3-embedding:0.6b-ctx2048` with 1024
+dimensions in `claude-session-history`:
+
 ```bash
 ollama pull qwen3-embedding:0.6b
 printf 'FROM qwen3-embedding:0.6b\nPARAMETER num_ctx 2048\n' \
   | ollama create qwen3-embedding:0.6b-ctx2048 -f -
 ollama list
 ```
+
+To build a parallel OpenRouter Qwen3-Embedding-8B index, select a separate
+collection and positive vector size:
+
+```bash
+export CLAUDE_MEMORY_EMBEDDING_BACKEND=openrouter
+export CLAUDE_MEMORY_EMBEDDING_MODEL=qwen/qwen3-embedding-8b
+export CLAUDE_MEMORY_VECTOR_SIZE=4096
+export CLAUDE_MEMORY_COLLECTION=claude-session-history-qwen3-8b
+# Optional; applied only to query embeddings.
+export CLAUDE_MEMORY_QUERY_INSTRUCTION='Represent this query for retrieval'
+claude-memory index --fresh
+```
+
+Supported embedding variables are `CLAUDE_MEMORY_EMBEDDING_BACKEND`,
+`CLAUDE_MEMORY_EMBEDDING_MODEL`, `CLAUDE_MEMORY_VECTOR_SIZE`,
+`CLAUDE_MEMORY_COLLECTION`, and `CLAUDE_MEMORY_QUERY_INSTRUCTION`.
+OpenRouter document requests are batched and transient failures are retried.
+Dense-vector dimension mismatches fail without replacing a collection, and an
+embedding failure stops indexing.
 
 ## 4. Initialize and validate
 

@@ -5,13 +5,32 @@ CLI session-history search exposes two typed views:
 - `claude-memory search --type prompts`: what the user asked or discussed
 - `claude-memory search --type answers`: how the assistant responded or solved a problem
 
-Both views read one Qdrant collection. The search surface selects the history
-kind with payload filters.
+Both views use the configured Qdrant collection. The search surface selects the
+history kind with payload filters.
+
+## Embedding profiles
+
+The default profile is Ollama `qwen3-embedding:0.6b-ctx2048` at 1024 dense
+dimensions in `claude-session-history`. The backend, model, vector size,
+collection, and optional query instruction are selected with:
+
+- `CLAUDE_MEMORY_EMBEDDING_BACKEND` (`ollama` or `openrouter`)
+- `CLAUDE_MEMORY_EMBEDDING_MODEL`
+- `CLAUDE_MEMORY_VECTOR_SIZE` (positive integer)
+- `CLAUDE_MEMORY_COLLECTION`
+- `CLAUDE_MEMORY_QUERY_INSTRUCTION`
+
+The query instruction is added only to query embeddings, not document text.
+OpenRouter uses `qwen/qwen3-embedding-8b` when selected and reads `api_key`
+only from `~/.config/openrouter/config.toml`. Document requests are batched and
+transient failures are retried. A dense-vector dimension mismatch fails without
+replacing the collection. An embedding failure stops indexing rather than
+continuing with a partial write.
 
 ## Collection and payload
 
-The collection is `claude-session-history`, using the project hybrid dense and
-BM25 vector layout. Each point stores:
+The configured collection uses the project hybrid dense and BM25 vector layout.
+Each point stores:
 
 - `text` — embedded transcript chunk
 - `type` — `prompt` or `answer`
@@ -52,10 +71,12 @@ retired. KB PageIndex and transcript PageIndex remain separate features.
 
 ## Deduplication and writes
 
-Index startup scrolls existing `hash` payloads from `claude-session-history`.
+Index startup scrolls existing `hash` payloads from the configured collection.
 Each input is filtered against those hashes and against hashes already seen in
 the same input. New chunks are embedded in batches and upserted with their
-payload metadata.
+payload metadata. A separate collection is required when the selected model or
+vector size differs from an existing collection; the mismatch check never
+replaces that collection.
 
 The `--fresh` flag ignores loaded hashes for a complete re-index. It does not
 change the collection or payload model.
@@ -82,14 +103,11 @@ exact session IDs containing the substring, then applies those IDs to the
 ranked vector query. `--limit` therefore applies after session filtering rather
 than truncating a global result set first.
 
-Search uses hybrid dense/BM25 retrieval when `[search].enabled = true`. The
-`enrich` path embeds its query once, then applies separate prompt and answer
-filters to Qdrant searches using that shared vector. After the shared embedding
-and collection setup succeed, prompt and answer search errors remain independent,
-so one failed group does not discard the other group's results. When semantic
-search is disabled, these history paths return no results. Search result
-formatting reads `text`, `source`, `path`, `session_id`, and score; absent string
-payloads become empty fields.
+Search uses the named dense vector when `[search].enabled = true`; the collection also stores Qdrant BM25 sparse vectors, but this search path does not fuse them. The `enrich` path embeds its query once, applying the optional query instruction there, then applies separate prompt and answer filters to Qdrant searches using that shared vector. After the shared embedding and collection setup succeed,
+prompt and answer search errors remain independent, so one failed group does
+not discard the other group's results. When semantic search is disabled, these
+history paths return no results. Search result formatting reads `text`, `source`,
+`path`, `session_id`, and score; absent string payloads become empty fields.
 
 ## Separate surfaces
 

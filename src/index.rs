@@ -10,12 +10,13 @@ use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 use walkdir::WalkDir;
 
+use crate::config::embedding_config;
 use crate::embed::Embedder;
 use crate::extract::{
     HistoryType, IndexedChunk, extract_codex_jsonl, extract_codex_jsonl_answers, extract_jsonl,
     extract_jsonl_answers, extract_zst, extract_zst_answers,
 };
-use crate::qdrant_hybrid::ensure_hybrid_collection;
+use crate::qdrant_hybrid::ensure_hybrid_collection_with_vector_size;
 
 #[path = "index_search.rs"]
 mod index_search;
@@ -39,7 +40,6 @@ use index_writer::{get_existing_hashes, index_chunks};
 pub(crate) use search_results::{build_search_results, get_string};
 
 pub const QDRANT_URL: &str = "http://localhost:6334";
-pub const COLLECTION_SESSION_HISTORY: &str = "claude-session-history";
 
 #[derive(Serialize)]
 pub struct SearchResult {
@@ -87,6 +87,7 @@ struct IndexState {
     hashes: Mutex<HashSet<String>>,
     batch_size: usize,
     delay_ms: u64,
+    collection: String,
 }
 
 /// Run the indexing process with streaming (low memory).
@@ -234,34 +235,51 @@ async fn init_index_state(batch_size: usize, fresh: bool, delay_ms: u64) -> Resu
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
+    let embedding = embedding_config()?;
 
-    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
-    let hashes = load_hashes(&client, fresh).await?;
-    eprintln!("Found {} session-history chunks", hashes.len());
-    Ok(build_index_state(client, hashes, batch_size, delay_ms))
+    ensure_hybrid_collection_with_vector_size(
+        &client,
+        &embedding.collection,
+        embedding.vector_size,
+    )
+    .await?;
+    let hashes = load_hashes(&client, &embedding.collection, fresh).await?;
+    let embedder = Embedder::new()?;
+    eprintln!("Found {} chunks in {}", hashes.len(), embedding.collection);
+    Ok(build_index_state(
+        client,
+        embedder,
+        hashes,
+        batch_size,
+        delay_ms,
+        embedding.collection,
+    ))
 }
 
-async fn load_hashes(client: &Qdrant, fresh: bool) -> Result<HashSet<String>> {
+async fn load_hashes(client: &Qdrant, collection: &str, fresh: bool) -> Result<HashSet<String>> {
     if fresh {
         eprintln!("Fresh index requested, ignoring existing data");
         return Ok(HashSet::new());
     }
     eprintln!("Loading existing hashes for resume...");
-    get_existing_hashes(client, COLLECTION_SESSION_HISTORY).await
+    get_existing_hashes(client, collection).await
 }
 
 fn build_index_state(
     client: Qdrant,
+    embedder: Embedder,
     hashes: HashSet<String>,
     batch_size: usize,
     delay_ms: u64,
+    collection: String,
 ) -> IndexState {
     IndexState {
         client,
-        embedder: Embedder::new(),
+        embedder,
         hashes: Mutex::new(hashes),
         batch_size,
         delay_ms,
+        collection,
     }
 }
 
@@ -500,7 +518,7 @@ async fn index_new_chunks(state: &IndexState, chunks: &[IndexedChunk]) -> Result
         &state.embedder,
         &new_chunks,
         state.batch_size,
-        COLLECTION_SESSION_HISTORY,
+        &state.collection,
         state.delay_ms,
     )
     .await?;
@@ -565,69 +583,13 @@ fn is_archive_session_path(path: &Path) -> bool {
 
 /// Index a single conversation file (both prompts and answers).
 pub async fn index_file(path: &Path, batch_size: usize) -> Result<usize> {
-    let client = Qdrant::from_url(QDRANT_URL)
-        .build()
-        .context("failed to connect to Qdrant")?;
+    let state = init_index_state(batch_size, false, 0).await?;
+    let prompts = extract_single_file_history(path, HistoryType::Prompt)?;
+    let answers = extract_single_file_history(path, HistoryType::Answer)?;
 
-    ensure_hybrid_collection(&client, COLLECTION_SESSION_HISTORY).await?;
-
-    let hashes = get_existing_hashes(&client, COLLECTION_SESSION_HISTORY).await?;
-
-    let embedder = Embedder::new();
-    let mut total = 0;
-
-    total += index_file_prompts(path, &client, &embedder, batch_size, &hashes).await?;
-    total += index_file_answers(path, &client, &embedder, batch_size, &hashes).await?;
-
-    Ok(total)
-}
-
-async fn index_file_prompts(
-    path: &Path,
-    client: &Qdrant,
-    embedder: &Embedder,
-    batch_size: usize,
-    hashes: &HashSet<String>,
-) -> Result<usize> {
-    let chunks = extract_single_file_history(path, HistoryType::Prompt)?;
-
-    let new_chunks = filter_new(&chunks, hashes);
-    if new_chunks.is_empty() {
-        return Ok(0);
-    }
-    index_chunks(
-        client,
-        embedder,
-        &new_chunks,
-        batch_size,
-        COLLECTION_SESSION_HISTORY,
-        0,
-    )
-    .await
-}
-
-async fn index_file_answers(
-    path: &Path,
-    client: &Qdrant,
-    embedder: &Embedder,
-    batch_size: usize,
-    hashes: &HashSet<String>,
-) -> Result<usize> {
-    let chunks = extract_single_file_history(path, HistoryType::Answer)?;
-
-    let new_chunks = filter_new(&chunks, hashes);
-    if new_chunks.is_empty() {
-        return Ok(0);
-    }
-    index_chunks(
-        client,
-        embedder,
-        &new_chunks,
-        batch_size,
-        COLLECTION_SESSION_HISTORY,
-        0,
-    )
-    .await
+    let prompt_count = index_new_chunks(&state, &prompts).await?;
+    let answer_count = index_new_chunks(&state, &answers).await?;
+    Ok(prompt_count + answer_count)
 }
 
 /// Show collection statistics.
@@ -635,26 +597,27 @@ pub async fn show_stats() -> Result<()> {
     let client = Qdrant::from_url(QDRANT_URL)
         .build()
         .context("failed to connect to Qdrant")?;
+    let embedding = embedding_config()?;
 
-    if let Ok(info) = client.collection_info(COLLECTION_SESSION_HISTORY).await {
+    if let Ok(info) = client.collection_info(&embedding.collection).await {
         let points = info
             .result
             .and_then(|result| result.points_count)
             .unwrap_or(0);
         println!(
             "Session history ({}): {} points",
-            COLLECTION_SESSION_HISTORY, points
+            embedding.collection, points
         );
     } else {
-        println!(
-            "Session history ({}): not found",
-            COLLECTION_SESSION_HISTORY
-        );
+        println!("Session history ({}): not found", embedding.collection);
     }
 
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "index_profile_tests.rs"]
+mod index_profile_tests;
 #[cfg(test)]
 #[path = "index_tests.rs"]
 mod index_tests;

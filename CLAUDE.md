@@ -5,10 +5,10 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 ## Architecture
 
 - **Unified session-history store**: Qdrant collection `claude-session-history` (localhost:6334)
-- **Embeddings**: Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions)
+- **Embeddings**: default Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions); OpenRouter is an optional alternate profile
 - **Interface**: the `claude-memory` CLI binary
 - **KB retrieval**: persistent KB PageIndex over Markdown
-- **Qdrant state**: only `claude-session-history` remains
+- **Qdrant state**: the default collection is `claude-session-history`; alternate profiles use their configured collection
 
 ## Usage
 
@@ -50,7 +50,7 @@ The memory-unit and graph runtime paths are retired. `deduplicate`,
 The canonical durable-memory KB Markdown export completed before the
 compatibility code was removed. Its Markdown and manifest remain the editable
 KB representation, and migration backups exist. No runtime migration or export
-command remains. Qdrant now contains only `claude-session-history`.
+command remains. The default runtime uses only `claude-session-history`; explicitly configured alternate embedding profiles use their own collection.
 
 ## Build & Install
 
@@ -63,11 +63,30 @@ command remains. Qdrant now contains only `claude-session-history`.
 
 The installed interface is the `claude-memory` CLI binary.
 
+## Embedding profiles
+
+The default profile remains Ollama `qwen3-embedding:0.6b-ctx2048` with 1024
+dimensions in `claude-session-history`. An OpenRouter profile can select
+`qwen/qwen3-embedding-8b`, a positive vector size, a separate collection, and
+an optional query instruction using:
+
+- `CLAUDE_MEMORY_EMBEDDING_BACKEND`
+- `CLAUDE_MEMORY_EMBEDDING_MODEL`
+- `CLAUDE_MEMORY_VECTOR_SIZE`
+- `CLAUDE_MEMORY_COLLECTION`
+- `CLAUDE_MEMORY_QUERY_INSTRUCTION`
+
+The query instruction applies only to query embeddings. OpenRouter reads
+`api_key` only from `~/.config/openrouter/config.toml`. Its document requests
+are batched and transient failures are retried. Dense-vector dimension
+mismatches fail without replacing a collection; embedding failures stop
+indexing.
+
 ## Dependencies
 
 Requires running services:
 - Qdrant: `authsudo arch install /syncthing/Sync/Projects/system/arch-pkgbuilds/qdrant-bin` then `authsudo systemctl enable --now qdrant.service`
-- Ollama: `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
+- Ollama (default profile): `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
   ```bash
   echo -e 'FROM qwen3-embedding:0.6b\nPARAMETER num_ctx 2048' | ollama create qwen3-embedding:0.6b-ctx2048 -f -
   ```

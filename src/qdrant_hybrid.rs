@@ -3,8 +3,9 @@
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, Distance, Document, SparseVectorParamsBuilder,
-    SparseVectorsConfigBuilder, Vector, VectorParamsBuilder, VectorsConfigBuilder,
+    CreateCollectionBuilder, Distance, Document, GetCollectionInfoResponse,
+    SparseVectorParamsBuilder, SparseVectorsConfigBuilder, Vector, VectorParamsBuilder,
+    VectorsConfigBuilder, vectors_config,
 };
 use std::collections::HashMap;
 
@@ -25,10 +26,18 @@ pub async fn collection_has_sparse(client: &Qdrant, name: &str) -> Result<bool> 
 
 /// Create a new hybrid collection with named dense + BM25 sparse vectors.
 pub async fn create_hybrid_collection(client: &Qdrant, name: &str) -> Result<()> {
+    create_hybrid_collection_with_vector_size(client, name, VECTOR_SIZE).await
+}
+
+async fn create_hybrid_collection_with_vector_size(
+    client: &Qdrant,
+    name: &str,
+    vector_size: u64,
+) -> Result<()> {
     let mut vectors_config = VectorsConfigBuilder::default();
     vectors_config.add_named_vector_params(
         "dense",
-        VectorParamsBuilder::new(VECTOR_SIZE, Distance::Cosine),
+        VectorParamsBuilder::new(vector_size, Distance::Cosine),
     );
     let mut sparse_config = SparseVectorsConfigBuilder::default();
     sparse_config.add_named_vector_params("bm25", SparseVectorParamsBuilder::default());
@@ -43,18 +52,67 @@ pub async fn create_hybrid_collection(client: &Qdrant, name: &str) -> Result<()>
     Ok(())
 }
 
-/// Ensure a collection exists with the hybrid format, migrating (delete+recreate) if needed.
+/// Ensure a collection exists with the default hybrid vector size.
 pub async fn ensure_hybrid_collection(client: &Qdrant, name: &str) -> Result<()> {
+    ensure_hybrid_collection_with_vector_size(client, name, VECTOR_SIZE).await
+}
+
+pub async fn ensure_hybrid_collection_with_vector_size(
+    client: &Qdrant,
+    name: &str,
+    vector_size: u64,
+) -> Result<()> {
     let collections = client.list_collections().await?;
-    let exists = collections.collections.iter().any(|c| c.name == name);
-    if exists {
-        if !collection_has_sparse(client, name).await? {
-            client.delete_collection(name).await?;
-            create_hybrid_collection(client, name).await?;
-        }
-        return Ok(());
+    let exists = collections
+        .collections
+        .iter()
+        .any(|collection| collection.name == name);
+    if !exists {
+        return create_hybrid_collection_with_vector_size(client, name, vector_size).await;
     }
-    create_hybrid_collection(client, name).await
+
+    let info = client.collection_info(name).await?;
+    validate_dense_vector_size(&info, name, vector_size)?;
+    if !collection_has_sparse(client, name).await? {
+        client.delete_collection(name).await?;
+        create_hybrid_collection_with_vector_size(client, name, vector_size).await?;
+    }
+    Ok(())
+}
+
+fn validate_dense_vector_size(
+    info: &GetCollectionInfoResponse,
+    collection: &str,
+    expected_size: u64,
+) -> Result<()> {
+    let actual_size = dense_vector_size(info)
+        .with_context(|| format!("collection `{collection}` has no named `dense` vector"))?;
+    if actual_size != expected_size {
+        anyhow::bail!(
+            "collection `{collection}` dense vector size is {actual_size}, expected {expected_size}"
+        );
+    }
+    Ok(())
+}
+
+fn dense_vector_size(info: &GetCollectionInfoResponse) -> Option<u64> {
+    let config = info
+        .result
+        .as_ref()?
+        .config
+        .as_ref()?
+        .params
+        .as_ref()?
+        .vectors_config
+        .as_ref()?
+        .config
+        .as_ref()?;
+    match config {
+        vectors_config::Config::Params(params) => Some(params.size),
+        vectors_config::Config::ParamsMap(params) => {
+            params.map.get("dense").map(|dense| dense.size)
+        }
+    }
 }
 
 /// Build named vectors map: dense (pre-computed embedding) + BM25 (server-side tokenization).
