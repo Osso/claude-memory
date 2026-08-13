@@ -77,8 +77,9 @@ an optional query instruction using:
 - `CLAUDE_MEMORY_QUERY_INSTRUCTION`
 
 The query instruction applies only to query embeddings. OpenRouter reads
-`api_key` only from `~/.config/openrouter/config.toml`. Its document requests
-are batched and transient failures are retried. Dense-vector dimension
+`api_key` only from `~/.config/openrouter/config.toml` and enforces zero data
+retention on every request. Its document requests are batched and transient
+failures are retried. Dense-vector dimension
 mismatches fail without replacing a collection; embedding failures stop
 indexing.
 

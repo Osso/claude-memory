@@ -21,9 +21,10 @@ collection, and optional query instruction are selected with:
 - `CLAUDE_MEMORY_QUERY_INSTRUCTION`
 
 The query instruction is added only to query embeddings, not document text.
-OpenRouter uses `qwen/qwen3-embedding-8b` when selected and reads `api_key`
-only from `~/.config/openrouter/config.toml`. Document requests are batched and
-transient failures are retried. A dense-vector dimension mismatch fails without
+OpenRouter uses `qwen/qwen3-embedding-8b` when selected, reads `api_key` only
+from `~/.config/openrouter/config.toml`, and requires zero-data-retention
+provider routing on every request. Document requests are batched and transient
+failures are retried. A dense-vector dimension mismatch fails without
 replacing the collection. An embedding failure stops indexing rather than
 continuing with a partial write.
 

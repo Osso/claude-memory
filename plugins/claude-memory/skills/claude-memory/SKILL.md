@@ -76,8 +76,9 @@ claude-memory index --fresh
 Supported embedding variables are `CLAUDE_MEMORY_EMBEDDING_BACKEND`,
 `CLAUDE_MEMORY_EMBEDDING_MODEL`, `CLAUDE_MEMORY_VECTOR_SIZE`,
 `CLAUDE_MEMORY_COLLECTION`, and `CLAUDE_MEMORY_QUERY_INSTRUCTION`.
-OpenRouter document requests are batched and transient failures are retried.
-Dense-vector dimension mismatches fail without replacing a collection, and an
+OpenRouter requests enforce zero data retention; document requests are batched
+and transient failures are retried. Dense-vector dimension mismatches fail
+without replacing a collection, and an
 embedding failure stops indexing.
 
 ## 4. Initialize and validate

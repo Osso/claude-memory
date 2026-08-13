@@ -35,6 +35,12 @@ struct OpenRouterEmbedRequest<'a> {
     dimensions: u64,
     encoding_format: &'static str,
     input_type: &'static str,
+    provider: OpenRouterProviderPreferences,
+}
+
+#[derive(Serialize)]
+struct OpenRouterProviderPreferences {
+    zdr: bool,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +202,7 @@ impl Embedder {
             dimensions: self.config.vector_size,
             encoding_format: "float",
             input_type,
+            provider: OpenRouterProviderPreferences { zdr: true },
         };
         let response = self.send_openrouter_request(api_key, &request).await?;
         let response: OpenRouterEmbedResponse = response
@@ -512,6 +519,7 @@ mod tests {
         );
         assert_eq!(requests[0].body["dimensions"], 4);
         assert_eq!(requests[0].body["input_type"], "search_document");
+        assert_eq!(requests[0].body["provider"]["zdr"], true);
     }
 
     #[tokio::test]

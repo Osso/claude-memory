@@ -33,6 +33,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Preserve the default Ollama model, 1024-dimensional vectors, and `claude-session-history` collection; `src/config.rs` tests cover the defaults.
 - [x] Select backend, model, positive vector size, collection, and optional query instruction from the named embedding environment variables; `src/config.rs` tests cover these overrides and validation.
 - [x] Read the OpenRouter `api_key` only from `~/.config/openrouter/config.toml`.
+- [x] Require zero-data-retention provider routing on every OpenRouter request.
 - [x] Apply the optional query instruction only to query embeddings.
 - [x] Batch OpenRouter document embeddings and retry transient failures.
 - [x] Reject dense-vector dimension mismatches without replacing the existing collection.
@@ -112,7 +113,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
   - [x] default embedding profile, environment overrides, and invalid-value tests.
 - `src/embed.rs`
   - [x] standard OpenRouter credential path and config parsing tests.
-  - [x] batched document request, response ordering, and query-instruction tests.
+  - [x] batched document request, response ordering, mandatory ZDR, and query-instruction tests.
   - [x] transient retry and `Retry-After` tests.
 - `src/extract.rs`
   - [x] Claude/Pi user-message and assistant-message extraction tests.

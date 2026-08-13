@@ -122,8 +122,9 @@ Set these variables to select an alternate profile:
 - `CLAUDE_MEMORY_QUERY_INSTRUCTION` — optional instruction applied only to query embeddings
 
 OpenRouter reads `api_key` only from `~/.config/openrouter/config.toml`; do not
-copy it into environment variables or project files. OpenRouter document
-requests are batched and transient failures are retried. A dense-vector
+copy it into environment variables or project files. Every OpenRouter request
+enforces zero data retention. Document requests are batched and transient
+failures are retried. A dense-vector
 dimension mismatch fails without replacing the existing collection, and an
 embedding failure stops indexing.
 
