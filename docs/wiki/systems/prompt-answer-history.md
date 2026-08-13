@@ -6,27 +6,37 @@ CLI session-history search exposes two typed views:
 - `claude-memory search --type answers`: how the assistant responded or solved a problem
 
 Both views use the configured Qdrant collection. The search surface selects the
-history kind with payload filters.
+history kind with payload filters. Production uses OpenRouter
+`qwen/qwen3-embedding-8b`, 4096 dense dimensions, and
+`claude-session-history-qwen3-8b`; `claude-session-history` remains intact as
+rollback state.
 
 ## Embedding profiles
 
-The default profile is Ollama `qwen3-embedding:0.6b-ctx2048` at 1024 dense
-dimensions in `claude-session-history`. The backend, model, vector size,
-collection, and optional query instruction are selected with:
+The persistent profile is read from `~/.config/claude-memory/config.toml`:
 
-- `CLAUDE_MEMORY_EMBEDDING_BACKEND` (`ollama` or `openrouter`)
-- `CLAUDE_MEMORY_EMBEDDING_MODEL`
-- `CLAUDE_MEMORY_VECTOR_SIZE` (positive integer)
-- `CLAUDE_MEMORY_COLLECTION`
-- `CLAUDE_MEMORY_QUERY_INSTRUCTION`
+```toml
+[embedding]
+backend = "openrouter"
+model = "qwen/qwen3-embedding-8b"
+vector_size = 4096
+collection = "claude-session-history-qwen3-8b"
+query_instruction = "Represent this query for retrieval"
+```
+
+The fields are `backend` (`ollama` or `openrouter`), `model`, positive integer
+`vector_size`, `collection`, and optional `query_instruction`. The matching
+`CLAUDE_MEMORY_*` environment variables override file values. Built-in local
+Ollama defaults apply only when neither the file profile nor embedding
+environment variables are configured: `qwen3-embedding:0.6b-ctx2048`, 1024
+dimensions, and `claude-session-history`.
 
 The query instruction is added only to query embeddings, not document text.
-OpenRouter uses `qwen/qwen3-embedding-8b` when selected, reads `api_key` only
-from `~/.config/openrouter/config.toml`, and requires zero-data-retention
-provider routing on every request. Document requests are batched and transient
-failures are retried. A dense-vector dimension mismatch fails without
-replacing the collection. An embedding failure stops indexing rather than
-continuing with a partial write.
+OpenRouter reads `api_key` only from `~/.config/openrouter/config.toml` and
+requires zero-data-retention provider routing on every request. Document
+requests are batched and transient failures are retried. A dense-vector
+dimension mismatch fails without replacing the collection. An embedding
+failure stops indexing rather than continuing with a partial write.
 
 ## Collection and payload
 
@@ -77,7 +87,9 @@ Each input is filtered against those hashes and against hashes already seen in
 the same input. New chunks are embedded in batches and upserted with their
 payload metadata. A separate collection is required when the selected model or
 vector size differs from an existing collection; the mismatch check never
-replaces that collection.
+replaces that collection. Production uses
+`claude-session-history-qwen3-8b`; `claude-session-history` remains available
+for rollback.
 
 The `--fresh` flag ignores loaded hashes for a complete re-index. It does not
 change the collection or payload model.

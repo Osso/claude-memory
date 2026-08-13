@@ -1,13 +1,13 @@
 # Embedding Profile Benchmark — 2026-08-13
 
-Parallel comparison of the default local profile and an optional hosted profile. Configuration and runtime behavior are specified in [prompt-answer-history](../specs/prompt-answer-history.md); implementation details are in the [session-history wiki](../wiki/systems/prompt-answer-history.md).
+Comparison of the local rollback profile and the hosted production profile. Configuration and runtime behavior are specified in [prompt-answer-history](../specs/prompt-answer-history.md); implementation details are in the [session-history wiki](../wiki/systems/prompt-answer-history.md).
 
 ## Profiles and corpus
 
 | Profile | Collection | Provider/model | Dense dimensions | Points |
 | --- | --- | --- | ---: | ---: |
-| Default | `claude-session-history` | Ollama `qwen3-embedding:0.6b-ctx2048` | 1024 | 142,715 |
-| Target | `claude-session-history-qwen3-8b` | OpenRouter `qwen/qwen3-embedding-8b` | 4096 | 142,715 |
+| Rollback | `claude-session-history` | Ollama `qwen3-embedding:0.6b-ctx2048` | 1024 | 142,715 |
+| Production | `claude-session-history-qwen3-8b` | OpenRouter `qwen/qwen3-embedding-8b` | 4096 | 142,715 |
 
 Both collections were `green` with `optimizer_status=ok` at final verification.
 
@@ -34,14 +34,14 @@ Eight representative technical queries produced this qualitative result:
 
 Latency:
 
-- Local 0.6B median: 0.134 s
-- Hosted 8B median: 0.602 s
-- Hosted 8B mean: 1.686 s
-- Hosted 8B maximum: 8.916 s
+- Rollback 0.6B median: 0.134 s
+- Production 8B median: 0.602 s
+- Production 8B mean: 1.686 s
+- Production 8B maximum: 8.916 s
 
 ## Conclusion
 
-Retain the 0.6B Ollama profile as the private, low-latency default. Keep the 8B OpenRouter profile as an optional hosted profile for more precise technical retrieval. No production cutover was made.
+The eight-query qualitative comparison favored 8B (5 wins, 1 loss, 2 ties), but is not sufficient alone to establish a general retrieval-quality advantage. The later OpenRouter 8B cutover was approved and performed after the comparison and operational validation. The 0.6B Ollama collection remains intact as the private, low-latency rollback profile.
 
 ## Limitations
 

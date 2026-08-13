@@ -37,53 +37,120 @@ impl Default for EmbeddingConfig {
 }
 
 pub fn embedding_config() -> Result<EmbeddingConfig> {
-    resolve_embedding_config(|key| std::env::var(key).ok())
+    resolve_embedding_config_for_config(load(), |key| std::env::var(key).ok())
 }
 
 pub fn resolve_embedding_config<F>(get: F) -> Result<EmbeddingConfig>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let mut config = EmbeddingConfig::default();
+    resolve_embedding_config_for_config(&Config::default(), get)
+}
+
+fn resolve_embedding_config_for_config<F>(config: &Config, get: F) -> Result<EmbeddingConfig>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(error) = &config.embedding_error {
+        bail!("{error}");
+    }
+
+    let mut embedding = config.embedding.clone().unwrap_or_default();
 
     if let Some(value) = get(EMBEDDING_BACKEND_ENV) {
-        config.backend = parse_backend(&value)?;
+        embedding.backend = parse_backend(&value, EMBEDDING_BACKEND_ENV)?;
     }
     if let Some(value) = get(EMBEDDING_MODEL_ENV) {
         validate_nonblank(EMBEDDING_MODEL_ENV, &value)?;
-        config.model = value;
+        embedding.model = value;
     }
     if let Some(value) = get(VECTOR_SIZE_ENV) {
-        config.vector_size = parse_vector_size(&value)?;
+        embedding.vector_size = parse_vector_size(&value, VECTOR_SIZE_ENV)?;
     }
     if let Some(value) = get(COLLECTION_ENV) {
         validate_nonblank(COLLECTION_ENV, &value)?;
-        config.collection = value;
+        embedding.collection = value;
     }
     if let Some(value) = get(QUERY_INSTRUCTION_ENV) {
         validate_nonblank(QUERY_INSTRUCTION_ENV, &value)?;
-        config.query_instruction = Some(value);
+        embedding.query_instruction = Some(value);
     }
 
-    Ok(config)
+    Ok(embedding)
 }
 
-fn parse_backend(value: &str) -> Result<EmbeddingBackend> {
+fn parse_embedding_config(table: &toml::Table) -> Result<Option<EmbeddingConfig>> {
+    let Some(value) = table.get("embedding") else {
+        return Ok(None);
+    };
+    let section = value
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("invalid [embedding]: expected a table"))?;
+
+    let backend_value = required_file_string(section, "backend")?;
+    let model = required_file_string(section, "model")?;
+    let vector_size = required_file_vector_size(section, "vector_size")?;
+    let collection = required_file_string(section, "collection")?;
+    let query_instruction = optional_file_string(section, "query_instruction")?;
+
+    Ok(Some(EmbeddingConfig {
+        backend: parse_backend(&backend_value, "embedding.backend")?,
+        model,
+        vector_size,
+        collection,
+        query_instruction,
+    }))
+}
+
+fn required_file_string(table: &toml::Table, key: &str) -> Result<String> {
+    let value = table
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("invalid embedding.{key}: value is required"))?;
+    parse_file_string(value, &format!("embedding.{key}"))
+}
+
+fn optional_file_string(table: &toml::Table, key: &str) -> Result<Option<String>> {
+    table
+        .get(key)
+        .map(|value| parse_file_string(value, &format!("embedding.{key}")))
+        .transpose()
+}
+
+fn parse_file_string(value: &toml::Value, key: &str) -> Result<String> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("invalid {key}: expected a string"))?;
+    validate_nonblank(key, value)?;
+    Ok(value.to_string())
+}
+
+fn required_file_vector_size(table: &toml::Table, key: &str) -> Result<u64> {
+    let value = table
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("invalid embedding.{key}: value is required"))?;
+    let value = value
+        .as_integer()
+        .ok_or_else(|| anyhow::anyhow!("invalid embedding.{key}: expected a positive integer"))?;
+    if value <= 0 {
+        bail!("invalid embedding.{key}: expected a positive integer");
+    }
+    Ok(value as u64)
+}
+
+fn parse_backend(value: &str, key: &str) -> Result<EmbeddingBackend> {
     match value {
         "ollama" => Ok(EmbeddingBackend::Ollama),
         "openrouter" => Ok(EmbeddingBackend::OpenRouter),
-        _ => bail!(
-            "invalid {EMBEDDING_BACKEND_ENV}: expected `ollama` or `openrouter`, got `{value}`"
-        ),
+        _ => bail!("invalid {key}: expected `ollama` or `openrouter`, got `{value}`"),
     }
 }
 
-fn parse_vector_size(value: &str) -> Result<u64> {
+fn parse_vector_size(value: &str, key: &str) -> Result<u64> {
     let vector_size = value
         .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("invalid {VECTOR_SIZE_ENV}: expected a positive integer"))?;
+        .map_err(|_| anyhow::anyhow!("invalid {key}: expected a positive integer"))?;
     if vector_size == 0 {
-        bail!("invalid {VECTOR_SIZE_ENV}: expected a positive integer");
+        bail!("invalid {key}: expected a positive integer");
     }
     Ok(vector_size)
 }
@@ -98,6 +165,8 @@ fn validate_nonblank(key: &str, value: &str) -> Result<()> {
 #[derive(Debug)]
 pub struct Config {
     pub search: SearchConfig,
+    embedding: Option<EmbeddingConfig>,
+    embedding_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -109,6 +178,8 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             search: SearchConfig { enabled: false },
+            embedding: None,
+            embedding_error: None,
         }
     }
 }
@@ -139,9 +210,20 @@ fn load_inner() -> Config {
 
 fn parse_config(raw: &str) -> Config {
     match toml::from_str::<toml::Table>(raw) {
-        Ok(table) => Config {
-            search: SearchConfig {
-                enabled: table_enabled(&table, "search"),
+        Ok(table) => match parse_embedding_config(&table) {
+            Ok(embedding) => Config {
+                search: SearchConfig {
+                    enabled: table_enabled(&table, "search"),
+                },
+                embedding,
+                embedding_error: None,
+            },
+            Err(error) => Config {
+                search: SearchConfig {
+                    enabled: table_enabled(&table, "search"),
+                },
+                embedding: None,
+                embedding_error: Some(format!("{error:#}")),
             },
         },
         Err(e) => {
@@ -204,6 +286,60 @@ mod tests {
         assert_eq!(cfg.vector_size, 1024);
         assert_eq!(cfg.collection, "claude-session-history");
         assert_eq!(cfg.query_instruction, None);
+    }
+
+    #[test]
+    fn embedding_config_uses_file_profile() {
+        let config = parse_config(
+            "[embedding]\nbackend = \"openrouter\"\nmodel = \"qwen/qwen3-embedding-8b\"\nvector_size = 4096\ncollection = \"claude-session-history-8b\"\nquery_instruction = \"Represent this query for retrieval\"",
+        );
+
+        let cfg = resolve_embedding_config_for_config(&config, |_| None).unwrap();
+
+        assert_eq!(cfg.backend, EmbeddingBackend::OpenRouter);
+        assert_eq!(cfg.model, "qwen/qwen3-embedding-8b");
+        assert_eq!(cfg.vector_size, 4096);
+        assert_eq!(cfg.collection, "claude-session-history-8b");
+        assert_eq!(
+            cfg.query_instruction.as_deref(),
+            Some("Represent this query for retrieval")
+        );
+    }
+
+    #[test]
+    fn embedding_config_environment_overrides_file_profile() {
+        let config = parse_config(
+            "[embedding]\nbackend = \"ollama\"\nmodel = \"file-model\"\nvector_size = 1024\ncollection = \"file-collection\"\nquery_instruction = \"file instruction\"",
+        );
+        let values = std::collections::HashMap::from([
+            ("CLAUDE_MEMORY_EMBEDDING_BACKEND", "openrouter"),
+            ("CLAUDE_MEMORY_EMBEDDING_MODEL", "env-model"),
+            ("CLAUDE_MEMORY_VECTOR_SIZE", "4096"),
+            ("CLAUDE_MEMORY_COLLECTION", "env-collection"),
+            ("CLAUDE_MEMORY_QUERY_INSTRUCTION", "env instruction"),
+        ]);
+
+        let cfg = resolve_embedding_config_for_config(&config, |key| {
+            values.get(key).map(|value| (*value).to_string())
+        })
+        .unwrap();
+
+        assert_eq!(cfg.backend, EmbeddingBackend::OpenRouter);
+        assert_eq!(cfg.model, "env-model");
+        assert_eq!(cfg.vector_size, 4096);
+        assert_eq!(cfg.collection, "env-collection");
+        assert_eq!(cfg.query_instruction.as_deref(), Some("env instruction"));
+    }
+
+    #[test]
+    fn embedding_config_rejects_invalid_file_backend() {
+        let config = parse_config(
+            "[embedding]\nbackend = \"unsupported\"\nmodel = \"model\"\nvector_size = 1024\ncollection = \"collection\"",
+        );
+
+        let error = resolve_embedding_config_for_config(&config, |_| None).unwrap_err();
+
+        assert!(format!("{error:#}").contains("embedding.backend"));
     }
 
     #[test]

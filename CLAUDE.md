@@ -5,10 +5,10 @@ Semantic memory search for Claude Code sessions and the knowledge base.
 ## Architecture
 
 - **Unified session-history store**: Qdrant collection `claude-session-history` (localhost:6334)
-- **Embeddings**: default Ollama `qwen3-embedding:0.6b-ctx2048` (localhost:11434, 1024 dimensions); OpenRouter is an optional alternate profile
+- **Embeddings**: production OpenRouter `qwen/qwen3-embedding-8b` (4096 dimensions) in `claude-session-history-qwen3-8b`; the intact Ollama `claude-session-history` collection remains the rollback profile
 - **Interface**: the `claude-memory` CLI binary
 - **KB retrieval**: persistent KB PageIndex over Markdown
-- **Qdrant state**: the default collection is `claude-session-history`; alternate profiles use their configured collection
+- **Qdrant state**: production uses `claude-session-history-qwen3-8b`; `claude-session-history` remains intact for rollback
 
 ## Usage
 
@@ -30,8 +30,8 @@ Claude Code, Codex, and Pi session shutdown integrations automatically run
 `claude-memory index-file <transcript_path>`. Manual `claude-memory index` is
 incremental backfill and recovery across Claude active/archive, Codex
 active/archive, and Pi session JSONL files. Existing hashes are skipped unless
-`--fresh` is supplied. The default search runs one globally ranked prompt+answer
-query over `claude-session-history`; `--type prompts|answers` provides optional
+`--fresh` is supplied. Search runs one globally ranked prompt+answer
+query over the configured session-history collection; `--type prompts|answers` provides optional
 filtering, `--session <id-substring>` restricts results to matching indexed
 session IDs, and `--limit` applies after those filters. `--json` emits stable
 NDJSON fields `type`, `text`, `source`, `path`, `session_id`, and `score`.
@@ -50,7 +50,7 @@ The memory-unit and graph runtime paths are retired. `deduplicate`,
 The canonical durable-memory KB Markdown export completed before the
 compatibility code was removed. Its Markdown and manifest remain the editable
 KB representation, and migration backups exist. No runtime migration or export
-command remains. The default runtime uses only `claude-session-history`; explicitly configured alternate embedding profiles use their own collection.
+command remains. The runtime uses the configured embedding collection; production uses `claude-session-history-qwen3-8b`, while `claude-session-history` remains intact for rollback.
 
 ## Build & Install
 
@@ -65,29 +65,36 @@ The installed interface is the `claude-memory` CLI binary.
 
 ## Embedding profiles
 
-The default profile remains Ollama `qwen3-embedding:0.6b-ctx2048` with 1024
-dimensions in `claude-session-history`. An OpenRouter profile can select
-`qwen/qwen3-embedding-8b`, a positive vector size, a separate collection, and
-an optional query instruction using:
+The persistent production profile lives in `~/.config/claude-memory/config.toml`:
 
-- `CLAUDE_MEMORY_EMBEDDING_BACKEND`
-- `CLAUDE_MEMORY_EMBEDDING_MODEL`
-- `CLAUDE_MEMORY_VECTOR_SIZE`
-- `CLAUDE_MEMORY_COLLECTION`
-- `CLAUDE_MEMORY_QUERY_INSTRUCTION`
+```toml
+[embedding]
+backend = "openrouter"
+model = "qwen/qwen3-embedding-8b"
+vector_size = 4096
+collection = "claude-session-history-qwen3-8b"
+query_instruction = "Represent this query for retrieval"
+```
+
+Supported fields are `backend` (`ollama` or `openrouter`), `model`, positive
+integer `vector_size`, `collection`, and optional `query_instruction`.
+`CLAUDE_MEMORY_*` environment variables override file values. Built-in local
+Ollama defaults apply only when neither the file profile nor embedding
+environment variables are configured: model
+`qwen3-embedding:0.6b-ctx2048`, 1024 dimensions, and collection
+`claude-session-history`. That collection remains intact for rollback.
 
 The query instruction applies only to query embeddings. OpenRouter reads
 `api_key` only from `~/.config/openrouter/config.toml` and enforces zero data
 retention on every request. Its document requests are batched and transient
-failures are retried. Dense-vector dimension
-mismatches fail without replacing a collection; embedding failures stop
-indexing.
+failures are retried. Dense-vector dimension mismatches fail without
+replacing a collection; embedding failures stop indexing.
 
 ## Dependencies
 
 Requires running services:
 - Qdrant: `authsudo arch install /syncthing/Sync/Projects/system/arch-pkgbuilds/qdrant-bin` then `authsudo systemctl enable --now qdrant.service`
-- Ollama (default profile): `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
+- Ollama (rollback profile): `ollama serve` with `ollama pull qwen3-embedding:0.6b` then create ctx-limited variant:
   ```bash
   echo -e 'FROM qwen3-embedding:0.6b\nPARAMETER num_ctx 2048' | ollama create qwen3-embedding:0.6b-ctx2048 -f -
   ```

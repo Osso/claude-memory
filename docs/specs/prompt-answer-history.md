@@ -1,10 +1,10 @@
-Prompt and answer history indexing stores raw user prompts and assistant responses from Claude, Codex, and Pi transcript files in one searchable, configurable session-history index. The default profile uses Ollama `qwen3-embedding:0.6b-ctx2048`, 1024 dimensions, and `claude-session-history`; alternate profiles can use OpenRouter and a separate collection. `claude-memory search <query>` runs one globally ranked prompt+answer query; `--type prompts|answers` and `--session <id-substring>` provide optional filtering. Implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
+Prompt and answer history indexing stores raw user prompts and assistant responses from Claude, Codex, and Pi transcript files in one searchable, configurable session-history index. Production uses OpenRouter `qwen/qwen3-embedding-8b`, 4096 dimensions, and `claude-session-history-qwen3-8b`; the intact `claude-session-history` Ollama collection remains rollback state. `claude-memory search <query>` runs one globally ranked prompt+answer query; `--type prompts|answers` and `--session <id-substring>` provide optional filtering. Implementation details belong in [docs/wiki/systems/prompt-answer-history.md](../wiki/systems/prompt-answer-history.md).
 
 ## What it must do
 
 ### Storage and filtering
 
-- [x] Store prompt and answer chunks in the configured session-history collection; the default is `claude-session-history`.
+- [x] Store prompt and answer chunks in the configured session-history collection; production uses `claude-session-history-qwen3-8b`, with `claude-session-history` retained for rollback.
 - [x] Persist each chunk with its text, `type` (`prompt` or `answer`), `source` (`session` or `archive`), path, session id, and persisted hash.
 - [x] Make `--type prompts` a `type=prompt` view and `--type answers` a `type=answer` view.
 - [x] Allow typed searches to restrict results by `source`.
@@ -30,8 +30,10 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Reserve manual `claude-memory index` for incremental backfill and recovery; skip existing hashes unless `--fresh` is supplied.
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
 - [x] Accept optional prompt text for manual `enrich` testing; when omitted, read UserPromptSubmit JSON from stdin.
-- [x] Preserve the default Ollama model, 1024-dimensional vectors, and `claude-session-history` collection; `src/config.rs` tests cover the defaults.
-- [x] Select backend, model, positive vector size, collection, and optional query instruction from the named embedding environment variables; `src/config.rs` tests cover these overrides and validation.
+- [x] Resolve a persistent `[embedding]` profile from `~/.config/claude-memory/config.toml` with `backend`, `model`, `vector_size`, `collection`, and optional `query_instruction`.
+- [x] Let the named embedding environment variables override corresponding file values.
+- [x] Use built-in local Ollama defaults only when neither a file profile nor embedding environment variables are configured: model `qwen3-embedding:0.6b-ctx2048`, 1024-dimensional vectors, and `claude-session-history`.
+- [x] Keep the local Ollama collection available when a configured OpenRouter profile selects the separate 4096-dimensional collection.
 - [x] Read the OpenRouter `api_key` only from `~/.config/openrouter/config.toml`.
 - [x] Require zero-data-retention provider routing on every OpenRouter request.
 - [x] Apply the optional query instruction only to query embeddings.
@@ -66,7 +68,7 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - `src/index_search.rs` — applies optional history-type and source filters for CLI search.
 - `src/main.rs` — declares and dispatches global or typed session-history search and NDJSON output.
 - `src/indexing_cmds.rs` — dispatches index and single-file commands.
-- `src/config.rs` — resolves the default and environment-selected embedding profile.
+- `src/config.rs` — resolves persistent, environment-selected, and built-in embedding profiles.
 - `src/embed.rs` — sends document and query embedding requests.
 - `src/qdrant_hybrid.rs` — creates and validates the configured dense+sparse collection and query vectors.
 
@@ -110,7 +112,11 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - `src/enrich_cmd.rs`
   - [x] supplied prompt and omitted-prompt hook-input tests.
 - `src/config.rs`
-  - [x] default embedding profile, environment overrides, and invalid-value tests.
+  - [x] `embedding_config_uses_current_defaults`
+  - [x] `embedding_config_uses_file_profile`
+  - [x] `embedding_config_environment_overrides_file_profile`
+  - [x] `embedding_config_rejects_invalid_file_backend`
+  - [x] environment override and invalid-value tests.
 - `src/embed.rs`
   - [x] standard OpenRouter credential path and config parsing tests.
   - [x] batched document request, response ordering, mandatory ZDR, and query-instruction tests.
