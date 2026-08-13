@@ -549,6 +549,7 @@ mod tests {
             ])
         );
         assert_eq!(requests[0].body["input_type"], "search_query");
+        assert_eq!(requests[0].body["provider"]["zdr"], true);
     }
 
     #[test]
