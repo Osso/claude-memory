@@ -29,8 +29,9 @@ Prompt and answer history indexing stores raw user prompts and assistant respons
 - [x] Auto-detect Claude, Codex, and Pi JSONL formats for `index-file`.
 - [x] Reserve manual `claude-memory index` for incremental backfill and recovery; skip existing hashes unless `--fresh` is supplied.
 - [x] Keep UserPromptSubmit `enrich` retrieval-only; it does not index transcripts.
+- [x] Abandon `enrich` session search after 12s so KB PageIndex output still returns inside the 15s hook timeout.
 - [x] Accept optional prompt text for manual `enrich` testing; when omitted, read UserPromptSubmit JSON from stdin.
-- [x] Resolve a persistent `[embedding]` profile from `~/.config/claude-memory/config.toml` with `backend`, `model`, `vector_size`, `collection`, and optional `query_instruction`.
+- [x] Resolve a persistent `[embedding]` profile from `~/.config/claude-memory/config.toml` with `backend`, `model`, `vector_size`, `collection`, optional `query_instruction`, and optional non-empty `providers` restricting OpenRouter routing via `provider.only`.
 - [x] Let the named embedding environment variables override corresponding file values.
 - [x] Use built-in local Ollama defaults only when neither a file profile nor embedding environment variables are configured: model `qwen3-embedding:0.6b-ctx2048`, 1024-dimensional vectors, and `claude-session-history`.
 - [x] Keep the local Ollama collection available when a configured OpenRouter profile selects the separate 4096-dimensional collection.

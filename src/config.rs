@@ -22,6 +22,8 @@ pub struct EmbeddingConfig {
     pub vector_size: u64,
     pub collection: String,
     pub query_instruction: Option<String>,
+    /// OpenRouter provider slugs a request may route to; empty allows any provider.
+    pub providers: Vec<String>,
 }
 
 impl Default for EmbeddingConfig {
@@ -32,6 +34,7 @@ impl Default for EmbeddingConfig {
             vector_size: 1024,
             collection: "claude-session-history".to_string(),
             query_instruction: None,
+            providers: Vec::new(),
         }
     }
 }
@@ -92,6 +95,7 @@ fn parse_embedding_config(table: &toml::Table) -> Result<Option<EmbeddingConfig>
     let vector_size = required_file_vector_size(section, "vector_size")?;
     let collection = required_file_string(section, "collection")?;
     let query_instruction = optional_file_string(section, "query_instruction")?;
+    let providers = optional_file_string_list(section, "providers")?;
 
     Ok(Some(EmbeddingConfig {
         backend: parse_backend(&backend_value, "embedding.backend")?,
@@ -99,6 +103,7 @@ fn parse_embedding_config(table: &toml::Table) -> Result<Option<EmbeddingConfig>
         vector_size,
         collection,
         query_instruction,
+        providers,
     }))
 }
 
@@ -114,6 +119,23 @@ fn optional_file_string(table: &toml::Table, key: &str) -> Result<Option<String>
         .get(key)
         .map(|value| parse_file_string(value, &format!("embedding.{key}")))
         .transpose()
+}
+
+fn optional_file_string_list(table: &toml::Table, key: &str) -> Result<Vec<String>> {
+    let Some(value) = table.get(key) else {
+        return Ok(Vec::new());
+    };
+    let key = format!("embedding.{key}");
+    let values = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("invalid {key}: expected an array of strings"))?;
+    if values.is_empty() {
+        bail!("invalid {key}: expected at least one value");
+    }
+    values
+        .iter()
+        .map(|value| parse_file_string(value, &key))
+        .collect()
 }
 
 fn parse_file_string(value: &toml::Value, key: &str) -> Result<String> {
@@ -286,6 +308,7 @@ mod tests {
         assert_eq!(cfg.vector_size, 1024);
         assert_eq!(cfg.collection, "claude-session-history");
         assert_eq!(cfg.query_instruction, None);
+        assert!(cfg.providers.is_empty());
     }
 
     #[test]
@@ -304,6 +327,33 @@ mod tests {
             cfg.query_instruction.as_deref(),
             Some("Represent this query for retrieval")
         );
+    }
+
+    #[test]
+    fn embedding_config_reads_file_provider_allowlist() {
+        let config = parse_config(
+            "[embedding]\nbackend = \"openrouter\"\nmodel = \"qwen/qwen3-embedding-8b\"\nvector_size = 4096\ncollection = \"c\"\nproviders = [\"nebius\", \"deepinfra\"]",
+        );
+
+        let cfg = resolve_embedding_config_for_config(&config, |_| None).unwrap();
+
+        assert_eq!(cfg.providers, vec!["nebius", "deepinfra"]);
+    }
+
+    #[test]
+    fn embedding_config_rejects_empty_or_blank_providers() {
+        for providers in ["[]", "[\"nebius\", \" \"]", "\"nebius\""] {
+            let config = parse_config(&format!(
+                "[embedding]\nbackend = \"openrouter\"\nmodel = \"m\"\nvector_size = 4\ncollection = \"c\"\nproviders = {providers}"
+            ));
+
+            let error = resolve_embedding_config_for_config(&config, |_| None).unwrap_err();
+
+            assert!(
+                format!("{error:#}").contains("embedding.providers"),
+                "{providers}"
+            );
+        }
     }
 
     #[test]

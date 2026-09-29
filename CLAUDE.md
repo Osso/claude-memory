@@ -74,10 +74,13 @@ model = "qwen/qwen3-embedding-8b"
 vector_size = 4096
 collection = "claude-session-history-qwen3-8b"
 query_instruction = "Represent this query for retrieval"
+providers = ["nebius", "deepinfra"]
 ```
 
 Supported fields are `backend` (`ollama` or `openrouter`), `model`, positive
-integer `vector_size`, `collection`, and optional `query_instruction`.
+integer `vector_size`, `collection`, optional `query_instruction`, and optional non-empty
+`providers` (OpenRouter provider slugs sent as `provider.only`; file-only, no
+environment override).
 `CLAUDE_MEMORY_*` environment variables override file values. Built-in local
 Ollama defaults apply only when neither the file profile nor embedding
 environment variables are configured: model

@@ -1,6 +1,8 @@
 //! Prompt enrichment hook output.
 
+use std::future::Future;
 use std::io::Read;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 
@@ -10,6 +12,9 @@ const MAX_KB_RESULTS: usize = 3;
 const MAX_KB_RESULT_CHARS: usize = 500;
 const MAX_SESSION_CHUNKS_PER_GROUP: usize = 3;
 const RAW_SESSION_SOURCES: &[&str] = &["session", "archive"];
+/// Session search budget inside the 15s UserPromptSubmit hook timeout; hosted
+/// query embeddings have multi-second tails, and KB PageIndex still needs time.
+const SESSION_SEARCH_DEADLINE: Duration = Duration::from_secs(12);
 
 pub async fn run_enrich(prompt: Option<String>, limit: usize) -> Result<()> {
     let prompt = read_prompt(prompt, std::io::stdin().lock())?;
@@ -44,16 +49,15 @@ fn read_prompt(prompt: Option<String>, mut hook_input: impl Read) -> Result<Stri
 
 async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Vec<String>) {
     let session_limit = limit.min(MAX_SESSION_CHUNKS_PER_GROUP);
-    let searches =
-        match index::search_prompt_and_answer_sources(prompt, session_limit, RAW_SESSION_SOURCES)
-            .await
-        {
-            Ok(searches) => searches,
-            Err(error) => {
-                eprintln!("enrich: session chunk search failed: {error:#}");
-                return;
-            }
-        };
+    let search =
+        index::search_prompt_and_answer_sources(prompt, session_limit, RAW_SESSION_SOURCES);
+    let searches = match within_deadline(search, SESSION_SEARCH_DEADLINE).await {
+        Ok(searches) => searches,
+        Err(error) => {
+            eprintln!("enrich: session chunk search failed: {error:#}");
+            return;
+        }
+    };
     let prompt_chunks = collect_session_chunks(searches.prompts, ChunkKind::Prompt);
     let answer_chunks = collect_session_chunks(searches.answers, ChunkKind::Answer);
 
@@ -62,6 +66,15 @@ async fn add_session_chunk_section(prompt: &str, limit: usize, sections: &mut Ve
     }
 
     sections.push(format_session_chunk_results(&prompt_chunks, &answer_chunks));
+}
+
+async fn within_deadline<T>(
+    future: impl Future<Output = Result<T>>,
+    deadline: Duration,
+) -> Result<T> {
+    tokio::time::timeout(deadline, future)
+        .await
+        .map_err(|_| anyhow::anyhow!("exceeded {}ms deadline", deadline.as_millis()))?
 }
 
 #[derive(Clone, Copy)]
@@ -199,6 +212,24 @@ mod tests {
         let prompt = read_prompt(None, Cursor::new(r#"{"prompt":"tauri"}"#)).unwrap();
 
         assert_eq!(prompt, "tauri");
+    }
+
+    #[tokio::test]
+    async fn deadline_abandons_search_that_never_finishes() {
+        let search = std::future::pending::<Result<()>>();
+
+        let error = within_deadline(search, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "exceeded 20ms deadline");
+    }
+
+    #[tokio::test]
+    async fn deadline_returns_search_result_that_finishes_in_time() {
+        let result = within_deadline(async { Ok(7) }, Duration::from_secs(1)).await;
+
+        assert_eq!(result.unwrap(), 7);
     }
 
     #[test]

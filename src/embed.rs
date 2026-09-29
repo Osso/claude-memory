@@ -35,12 +35,14 @@ struct OpenRouterEmbedRequest<'a> {
     dimensions: u64,
     encoding_format: &'static str,
     input_type: &'static str,
-    provider: OpenRouterProviderPreferences,
+    provider: OpenRouterProviderPreferences<'a>,
 }
 
 #[derive(Serialize)]
-struct OpenRouterProviderPreferences {
+struct OpenRouterProviderPreferences<'a> {
     zdr: bool,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    only: &'a [String],
 }
 
 #[derive(Deserialize)]
@@ -202,7 +204,10 @@ impl Embedder {
             dimensions: self.config.vector_size,
             encoding_format: "float",
             input_type,
-            provider: OpenRouterProviderPreferences { zdr: true },
+            provider: OpenRouterProviderPreferences {
+                zdr: true,
+                only: &self.config.providers,
+            },
         };
         let response = self.send_openrouter_request(api_key, &request).await?;
         let response: OpenRouterEmbedResponse = response
@@ -434,6 +439,7 @@ mod tests {
             vector_size,
             collection: "test-openrouter".to_string(),
             query_instruction: Some("Retrieve relevant conversation passages".to_string()),
+            providers: vec!["nebius".to_string(), "deepinfra".to_string()],
         }
     }
 
@@ -550,6 +556,36 @@ mod tests {
         );
         assert_eq!(requests[0].body["input_type"], "search_query");
         assert_eq!(requests[0].body["provider"]["zdr"], true);
+        assert_eq!(
+            requests[0].body["provider"]["only"],
+            serde_json::json!(["nebius", "deepinfra"])
+        );
+    }
+
+    #[tokio::test]
+    async fn openrouter_without_provider_allowlist_omits_only() {
+        let responses = vec![TestResponse {
+            status: "200 OK",
+            headers: Vec::new(),
+            body: serde_json::json!({
+                "data": [{"index": 0, "embedding": [1.0, 0.0, 0.0, 0.0]}]
+            }),
+        }];
+        let (url, requests, server) = start_test_server(responses).await;
+        let config = EmbeddingConfig {
+            providers: Vec::new(),
+            ..openrouter_config(4)
+        };
+        let embedder = Embedder::with_config(config, url, Some("test-openrouter-key".to_string()));
+
+        embedder.embed("any provider").await.unwrap();
+        let requests = requests.await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(
+            requests[0].body["provider"],
+            serde_json::json!({"zdr": true})
+        );
     }
 
     #[test]

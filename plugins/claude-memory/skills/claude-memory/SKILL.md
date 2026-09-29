@@ -60,6 +60,7 @@ model = "qwen/qwen3-embedding-8b"
 vector_size = 4096
 collection = "claude-session-history-qwen3-8b"
 query_instruction = "Represent this query for retrieval"
+providers = ["nebius", "deepinfra"]
 ```
 
 `CLAUDE_MEMORY_EMBEDDING_BACKEND`, `CLAUDE_MEMORY_EMBEDDING_MODEL`,
